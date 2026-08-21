@@ -168,20 +168,25 @@ func (s *Server) authenticate(sess *session) (peer *session, ok bool) {
 		return nil, false
 	}
 	s.mu.Lock()
+	if s.closed {
+		// 服务关闭后拒绝新注册，避免 Close 快照之外的连接滞留至超时
+		s.mu.Unlock()
+		return nil, false
+	}
 	occupied := s.roles[req.Role] != nil
 	if !occupied {
 		sess.role = req.Role
 		s.roles[req.Role] = sess
+		peer = s.roles[otherRole(req.Role)]
+		ok = true
 	}
-	s.cfg.Logger.Printf("authenticated role=%s", sess.role)
-	peer = s.roles[otherRole(req.Role)]
-	ok = true
 	s.mu.Unlock()
 	if occupied {
 		// 拒绝帧的写在锁外：避免持全局锁做网络 IO
 		sess.reject("role in use")
 		return nil, false
 	}
+	s.cfg.Logger.Printf("authenticated role=%s", sess.role)
 	return peer, ok
 }
 
