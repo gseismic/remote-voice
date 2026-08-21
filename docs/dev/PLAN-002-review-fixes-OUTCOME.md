@@ -51,3 +51,9 @@ python3 -m py_compile mac-receiver/receiver.py    # 通过
 ## 5. 遗留
 
 - Android 端 L-3 修复无法本机编译验证（无 SDK），与 PLAN-001 遗留项一并待真机验收
+
+## 6. 验证来源记录（重要）
+
+- Oracle 通道在本环境不可用：6 次尝试 = 30 分钟超时×5 + `Insufficient balance` 报错×1，从未产生任何审查结论（计费欠费所致，非任务问题）
+- 独立怀疑式复核改由 general 代理完成（会话 ses_fd98f0899ffex2fioXEthfB5sL）：**VERIFIED**——6 项声明全部确认，并静态追溯 3 个回归测试在修复前代码（7a75c95）上必然失败；其提出的 2 个残留项（authenticate 缺 closed 检查、拒绝路径误导日志）已在 340594e 修复
+- 复核指出的良性残留（已评估，不处理）：Python 心跳换连窗口的极端时序（自愈）；`-race` 结论以本环境实际执行记录为准（复核环境无 Go 工具链，为静态分析）
