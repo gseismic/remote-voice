@@ -66,7 +66,8 @@ Python `ssl.SSLContext(verify_mode=CERT_NONE)` 下 `getpeercert(binary_form=True
    `gradle wrapper && ./gradlew assembleDebug` 后真机验收。
 2. **听感验收未执行**（本机无声卡）。链路正确性以 50 帧/秒稳定计数证明；
    最终听感需用户按 README §部署步骤 2–4 验收。
-3. git 远端仓库未配置，push 待用户补充 remote 后执行。
+3. ~~git 远端仓库未配置~~ 更正：远端 `github.com:gseismic/remote-voice` 已存在，
+   本次提交 7a75c95 已成功推送至 origin/main。
 
 ## 5. 安全说明
 
