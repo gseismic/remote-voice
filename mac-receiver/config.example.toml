@@ -1,0 +1,7 @@
+# remote-voice Mac 接收器配置示例
+# 复制为 config.toml 并填写；命令行参数优先级高于本文件。
+
+server = "203.0.113.10:9432"
+token = "把-relay-启动时用的-token-填这里"
+fingerprint = "relay-首次启动打印的-64-位-hex-指纹"
+device = "BlackHole"

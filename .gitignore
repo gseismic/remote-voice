@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+
+# relay 运行数据（含 TLS 私钥，严禁入库）
+relay/data/
+
+# Android / Gradle
+android-app/.gradle/
+android-app/build/
+android-app/app/build/
+android-app/local.properties
+*.apk

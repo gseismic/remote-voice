@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">远程麦克风</string>
+    <string name="label_server">服务器地址</string>
+    <string name="hint_server">例如 203.0.113.10:9432</string>
+    <string name="label_token">Token（与 relay 启动参数一致）</string>
+    <string name="hint_token">预共享 token</string>
+    <string name="label_fingerprint">服务端证书指纹（SHA-256 hex）</string>
+    <string name="hint_fingerprint">relay 首次启动时打印的 64 位指纹</string>
+    <string name="label_aec">回声消除（Mac 外放时建议开启）</string>
+    <string name="btn_start">开始推流</string>
+    <string name="btn_stop">停止</string>
+    <string name="status_default">未启动</string>
+    <string name="err_incomplete">请完整填写服务器地址、Token 和证书指纹</string>
+    <string name="err_no_mic_perm">未授予麦克风权限，无法推流</string>
+    <string name="service_started">服务已启动</string>
+</resources>
