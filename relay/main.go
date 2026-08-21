@@ -14,6 +14,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"remote-voice/relay/internal/selfcert"
@@ -86,20 +87,10 @@ func resolveToken(tokenFile, tokenFlag string) string {
 		if err != nil {
 			log.Fatalf("读取 tokenfile 失败: %v", err)
 		}
-		return trimAll(string(b))
+		return strings.TrimSpace(string(b))
 	}
 	if env := os.Getenv("RELAY_TOKEN"); env != "" {
-		return trimAll(env)
+		return strings.TrimSpace(env)
 	}
 	return tokenFlag
-}
-
-func trimAll(s string) string {
-	for len(s) > 0 && (s[0] == '\n' || s[0] == '\r' || s[0] == ' ' || s[0] == '\t') {
-		s = s[1:]
-	}
-	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r' || s[len(s)-1] == ' ' || s[len(s)-1] == '\t') {
-		s = s[:len(s)-1]
-	}
-	return s
 }

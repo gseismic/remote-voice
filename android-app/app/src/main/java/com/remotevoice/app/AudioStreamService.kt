@@ -26,7 +26,7 @@ class AudioStreamService : Service(), RelayClient.Listener {
 
     private var client: RelayClient? = null
     private var clientThread: Thread? = null
-    private var captureThread: Thread? = null
+    @Volatile private var captureThread: Thread? = null
     @Volatile private var audioRecord: AudioRecord? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -100,9 +100,14 @@ class AudioStreamService : Service(), RelayClient.Listener {
         mainHandler.post { updateNotification(text) }
     }
 
-    override fun onPeerOnline() = startCapture()
+    override fun onPeerOnline() {
+        // 回调来自网络线程：采音生命周期变更统一归到主线程，消除跨线程竞态（Review L-3）
+        mainHandler.post { startCapture() }
+    }
 
-    override fun onPeerOffline() = stopCapture()
+    override fun onPeerOffline() {
+        mainHandler.post { stopCapture() }
+    }
 
     override fun onFatal(message: String) {
         Status.text = "错误：$message"

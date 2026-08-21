@@ -1,16 +1,124 @@
 package server
 
 import (
+	"crypto/tls"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"log"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"remote-voice/relay/internal/protocol"
 )
+
+// fakeTCP 包装 net.Pipe 并记录 SetNoDelay 调用，用于 H-2 回归断言。
+type fakeTCP struct {
+	net.Conn
+	noDelay atomic.Bool
+}
+
+func (f *fakeTCP) SetNoDelay(v bool) error {
+	f.noDelay.Store(v)
+	return nil
+}
+
+// 回归(H-2)：setNoDelay 必须经 NetConn() 解包 TLS 层，否则对 *tls.Conn 静默失效。
+func TestSetNoDelayUnwrapsTLS(t *testing.T) {
+	pipeA, pipeB := net.Pipe()
+	defer pipeA.Close()
+	defer pipeB.Close()
+	inner := &fakeTCP{Conn: pipeA}
+	wrapped := tls.Client(inner, &tls.Config{})
+	setNoDelay(wrapped)
+	if !inner.noDelay.Load() {
+		t.Fatal("setNoDelay did not reach underlying conn through TLS wrapper")
+	}
+}
+
+// 回归(H-1)：authenticate 必须在认证通过时原子占位——同 role 的第二次认证
+// 立即被拒，且首次会话保持占用（旧缺陷：检查与写入分离导致双双通过）。
+func TestAuthenticateReservesRoleAtomically(t *testing.T) {
+	srv := New(Config{
+		Token:       "secret",
+		ReadTimeout: 5 * time.Second,
+		AuthTimeout: 2 * time.Second,
+		Logger:      log.New(io.Discard, "", 0),
+	})
+
+	authPayload, _ := json.Marshal(protocol.AuthRequest{
+		Role: protocol.RolePhone, Token: "secret", Proto: protocol.ProtoVersion,
+	})
+	// 按线路协议加帧头后写入（authenticate 读的是帧而非裸 JSON）
+	authFrame := make([]byte, 5+len(authPayload))
+	authFrame[0] = protocol.FrameAuth
+	binary.BigEndian.PutUint32(authFrame[1:], uint32(len(authPayload)))
+	copy(authFrame[5:], authPayload)
+
+	mkSession := func() (*session, net.Conn) {
+		serverEnd, clientEnd := net.Pipe()
+		t.Cleanup(func() { serverEnd.Close(); clientEnd.Close() })
+		return &session{srv: srv, conn: serverEnd}, clientEnd
+	}
+
+	sess1, client1 := mkSession()
+	go func() { // net.Pipe 同步管道：写端需独立 goroutine，避免阻塞
+		client1.Write(authFrame) //nolint:errcheck // 测试辅助
+	}()
+	peer1, ok := srv.authenticate(sess1)
+	if !ok || sess1.role != protocol.RolePhone || peer1 != nil {
+		t.Fatalf("first auth should succeed and reserve: ok=%v role=%q peer=%v", ok, sess1.role, peer1)
+	}
+
+	sess2, client2 := mkSession()
+	rejected := make(chan []byte, 1)
+	go func() {
+		client2.Write(authFrame) //nolint:errcheck // 测试辅助
+		buf := make([]byte, 64)
+		n, _ := client2.Read(buf) // 读取 AUTH_ERR 文本
+		rejected <- buf[:n]
+	}()
+	if _, ok := srv.authenticate(sess2); ok {
+		t.Fatal("second auth for same role must be rejected")
+	}
+	select {
+	case msg := <-rejected:
+		if !strings.Contains(string(msg), "role in use") {
+			t.Fatalf("want 'role in use', got %q", msg)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no AUTH_ERR reached client")
+	}
+	if srv.roles[protocol.RolePhone] != sess1 {
+		t.Fatal("first session must keep the reserved slot")
+	}
+}
+
+// 回归(H-1 配套)：陈旧会话注销时不通知对端，防止虚假掉线。
+func TestUnregisterStaleSessionSkipsNotify(t *testing.T) {
+	srv := New(Config{Token: "x"})
+	c := func() *tls.Conn {
+		a, b := net.Pipe()
+		t.Cleanup(func() { a.Close(); b.Close() })
+		return tls.Client(a, &tls.Config{})
+	}
+	stale := &session{srv: srv, conn: c(), role: protocol.RolePhone}
+	current := &session{srv: srv, conn: c(), role: protocol.RolePhone}
+
+	srv.mu.Lock()
+	srv.roles[protocol.RolePhone] = current // 槽位已被新连接占据
+	srv.mu.Unlock()
+
+	if got := srv.unregister(stale); got != nil {
+		t.Fatal("stale session unregister must not trigger offline notify")
+	}
+	if srv.roles[protocol.RolePhone] != current {
+		t.Fatal("current session must stay registered")
+	}
+}
 
 // startTestServer 在 127.0.0.1 随机端口起一个纯 TCP 测试服务器（单元测试不涉 TLS）。
 func startTestServer(t *testing.T, token string, readTimeout, authTimeout time.Duration) string {

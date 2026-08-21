@@ -164,7 +164,14 @@ class Receiver:
         self.sink = sink
         self.peer_online = threading.Event()
         self._sock_lock = threading.Lock()
+        self._send_lock = threading.Lock()
         self._sock: socket.socket | None = None
+
+    def _send(self, sock: socket.socket, ftype: int, payload: bytes = b"") -> None:
+        # 心跳线程与读循环可能并发发送（PING/PONG），sendall 部分写不保证原子，
+        # 统一经锁串行以防帧交错撕裂（Review M-1）
+        with self._send_lock:
+            write_frame(sock, ftype, payload)
 
     def _connect_tls(self) -> ssl.SSLSocket:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -193,7 +200,7 @@ class Receiver:
         auth = json.dumps(
             {"role": "mac", "token": self.token, "proto": 1}
         ).encode()
-        write_frame(sock, FRAME_AUTH, auth)
+        self._send(sock, FRAME_AUTH, auth)
 
         ftype, payload = read_frame(sock)
         if ftype == FRAME_AUTH_ERR:
@@ -219,7 +226,7 @@ class Receiver:
                     self.peer_online.clear()
                     self.sink.stop()
             elif ftype == FRAME_PING:
-                write_frame(sock, FRAME_PONG)
+                self._send(sock, FRAME_PONG)
             # 其余类型丢弃（向前兼容）
 
     def _heartbeat_loop(self, sock: ssl.SSLSocket) -> None:
@@ -229,7 +236,7 @@ class Receiver:
                 if self._sock is not sock:
                     return  # 连接已被主循环更换/关闭
                 try:
-                    write_frame(sock, FRAME_PING)
+                    self._send(sock, FRAME_PING)
                 except OSError:
                     return
 
