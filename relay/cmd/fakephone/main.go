@@ -137,7 +137,7 @@ func main() {
 func dialTLS(addr, fingerprintHex string) *tls.Conn {
 	cfg := &tls.Config{
 		// 信任根来自指纹而非 CA：跳过系统校验，由 VerifyPeerCertificate 执行 pinning
-		InsecureSkipVerify:    true,
+		InsecureSkipVerify: true,
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 			return selfcert.VerifyRawCerts(rawCerts, fingerprintHex)
 		},
