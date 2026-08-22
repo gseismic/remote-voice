@@ -29,6 +29,13 @@ Android 手机(任意网络)       Linux 服务器(公网IP)        Mac(任意�
 
 ### 1. 服务器（Linux，有公网 IP）
 
+> 要求 Go **≥ 1.22**（`go version` 确认）。若不想在服务器装 Go，
+> 可在任意机器交叉编译静态二进制后 scp 上去：
+> ```bash
+> CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o relay-linux .
+> # x86_64 服务器用 amd64；ARM 服务器换 arm64
+> ```
+
 ```bash
 cd relay && go build -o relay .
 ./relay -addr :9432 -data ./data -tokenfile ./token.txt
@@ -72,8 +79,14 @@ App 内填入：服务器地址、Token、证书指纹 → 开始推流。
 ## 开发验证
 
 ```bash
+# Go 侧：构建 + 竞态检测测试
 cd relay
-go build ./... && go vet ./... && go test ./... -count=1
+go build ./... && go vet ./... && go test ./... -count=1 -race
+
+# Python 侧：协议层单元测试（无需声卡）
+python3 -m pip install pytest   # 如未安装
+python3 -m pytest mac-receiver/test_receiver.py -q
+
 # 全链路回环测试（无需声卡与真机）：
 go build -o /tmp/relay-bin . && go build -o /tmp/fakephone ./cmd/fakephone
 /tmp/relay-bin -addr 127.0.0.1:19432 -data /tmp/rv-data -token t1 &

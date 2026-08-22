@@ -32,6 +32,12 @@ MVP 已实现并通过本机验证（go test 12 用例全绿 + 回环集成测�
 2. **服务器部署**：relay 交叉编译后部署到用户公网服务器，配置 systemd 常驻
 3. v2 演进（可选）：UDP+Opus+FEC 降延迟降带宽、反向声道、多会话——见设计文档 §9
 
+## 本机环境备忘（开发机）
+
+- Go 工具链：`~/go-sdk/go`（go1.22.10），PATH 已写入 `~/.bashrc`，兜底软链 `~/.local/bin/go`
+- Python：miniconda 3.12（`python3`/`pip3` 直用）；pytest 已装
+- 预编译产物（易失，重启后需重编）：曾输出至 `/tmp/opencode/relay-linux-amd64-static`（静态）等
+
 ## 关键技术决策速查
 
 - 协议：`[1B type][4B len BE][payload]`，音频 48kHz/mono/s16le/20ms(1920B) 裸 PCM；
