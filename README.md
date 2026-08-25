@@ -29,6 +29,8 @@ Android 手机(任意网络)       Linux 服务器(公网IP)        Mac(任意�
 
 ### 1. 服务器（Linux，有公网 IP）
 
+> 逐命令详解、`relay` 与 `relay-linux` 的关系、systemd 托管与故障排查见 **`relay/DEPLOY.md`**。
+
 > 要求 Go **≥ 1.22**（`go version` 确认）。若不想在服务器装 Go，
 > 可在任意机器交叉编译静态二进制后 scp 上去：
 > ```bash

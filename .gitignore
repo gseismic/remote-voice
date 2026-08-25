@@ -15,3 +15,6 @@ android-app/local.properties
 # 本地工具状态
 .sisyphus/
 relay/relay
+
+# 交叉编译产物（同 relay/relay，不入库）
+relay/relay-linux
