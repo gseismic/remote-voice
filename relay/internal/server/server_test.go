@@ -2,9 +2,10 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log"
@@ -43,96 +44,39 @@ func TestSetNoDelayUnwrapsTLS(t *testing.T) {
 	}
 }
 
-// 回归(H-1)：authenticate 必须在认证通过时原子占位——同 role 的第二次认证
-// 立即被拒，且首次会话保持占用（旧缺陷：检查与写入分离导致双双通过）。
-func TestAuthenticateReservesRoleAtomically(t *testing.T) {
-	srv := New(Config{
-		Token:       "secret",
-		ReadTimeout: 5 * time.Second,
-		AuthTimeout: 2 * time.Second,
-		Logger:      log.New(io.Discard, "", 0),
-	})
+// ===== 测试辅助 =====
 
-	authPayload, _ := json.Marshal(protocol.AuthRequest{
-		Role: protocol.RolePhone, Token: "secret", Proto: protocol.ProtoVersion,
-	})
-	// 按线路协议加帧头后写入（authenticate 读的是帧而非裸 JSON）
-	authFrame := make([]byte, 5+len(authPayload))
-	authFrame[0] = protocol.FrameAuth
-	binary.BigEndian.PutUint32(authFrame[1:], uint32(len(authPayload)))
-	copy(authFrame[5:], authPayload)
+const (
+	testRegKey = "test-regkey-0123456789abcdef"
+)
 
-	mkSession := func() (*session, net.Conn) {
-		serverEnd, clientEnd := net.Pipe()
-		t.Cleanup(func() { serverEnd.Close(); clientEnd.Close() })
-		return &session{srv: srv, conn: serverEnd}, clientEnd
-	}
-
-	sess1, client1 := mkSession()
-	go func() { // net.Pipe 同步管道：写端需独立 goroutine，避免阻塞
-		client1.Write(authFrame) //nolint:errcheck // 测试辅助
-	}()
-	peer1, ok := srv.authenticate(sess1)
-	if !ok || sess1.role != protocol.RolePhone || peer1 != nil {
-		t.Fatalf("first auth should succeed and reserve: ok=%v role=%q peer=%v", ok, sess1.role, peer1)
-	}
-
-	sess2, client2 := mkSession()
-	rejected := make(chan []byte, 1)
-	go func() {
-		client2.Write(authFrame) //nolint:errcheck // 测试辅助
-		buf := make([]byte, 64)
-		n, _ := client2.Read(buf) // 读取 AUTH_ERR 文本
-		rejected <- buf[:n]
-	}()
-	if _, ok := srv.authenticate(sess2); ok {
-		t.Fatal("second auth for same role must be rejected")
-	}
-	select {
-	case msg := <-rejected:
-		if !strings.Contains(string(msg), "role in use") {
-			t.Fatalf("want 'role in use', got %q", msg)
+// hashSecret 测试内复刻客户端规范化+SHA-256（与 fakephone 同规格）。
+func hashSecret(t *testing.T, raw string) string {
+	t.Helper()
+	norm := ""
+	for _, c := range raw {
+		switch {
+		case c == ' ' || c == '-':
+			continue
+		case c >= 'a' && c <= 'z':
+			norm += string(c - 32)
+		default:
+			norm += string(c)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("no AUTH_ERR reached client")
 	}
-	if srv.roles[protocol.RolePhone] != sess1 {
-		t.Fatal("first session must keep the reserved slot")
-	}
-}
-
-// 回归(H-1 配套)：陈旧会话注销时不通知对端，防止虚假掉线。
-func TestUnregisterStaleSessionSkipsNotify(t *testing.T) {
-	srv := New(Config{Token: "x"})
-	c := func() *tls.Conn {
-		a, b := net.Pipe()
-		t.Cleanup(func() { a.Close(); b.Close() })
-		return tls.Client(a, &tls.Config{})
-	}
-	stale := &session{srv: srv, conn: c(), role: protocol.RolePhone}
-	current := &session{srv: srv, conn: c(), role: protocol.RolePhone}
-
-	srv.mu.Lock()
-	srv.roles[protocol.RolePhone] = current // 槽位已被新连接占据
-	srv.mu.Unlock()
-
-	if got := srv.unregister(stale); got != nil {
-		t.Fatal("stale session unregister must not trigger offline notify")
-	}
-	if srv.roles[protocol.RolePhone] != current {
-		t.Fatal("current session must stay registered")
-	}
+	sum := sha256.Sum256([]byte(norm))
+	return hex.EncodeToString(sum[:])
 }
 
 // startTestServer 在 127.0.0.1 随机端口起一个纯 TCP 测试服务器（单元测试不涉 TLS）。
-func startTestServer(t *testing.T, token string, readTimeout, authTimeout time.Duration) string {
+func startTestServer(t *testing.T, readTimeout, authTimeout time.Duration) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
 	srv := New(Config{
-		Token:       token,
+		RegKey:      testRegKey,
 		ReadTimeout: readTimeout,
 		AuthTimeout: authTimeout,
 		Logger:      log.New(io.Discard, "", 0),
@@ -155,11 +99,34 @@ func dial(t *testing.T, addr string) net.Conn {
 	return conn
 }
 
-func authReq(t *testing.T, conn net.Conn, role, token string) {
+func authPhoneReq(t *testing.T, conn net.Conn, secret string) {
 	t.Helper()
-	payload, _ := json.Marshal(protocol.AuthRequest{Role: role, Token: token, Proto: protocol.ProtoVersion})
+	payload, _ := json.Marshal(protocol.AuthRequest{
+		Role: protocol.RolePhone, Proto: protocol.ProtoVersion,
+		Secret: hashSecret(t, secret),
+	})
 	if err := protocol.WriteFrame(conn, protocol.FrameAuth, payload); err != nil {
-		t.Fatalf("write AUTH: %v", err)
+		t.Fatalf("write AUTH(phone): %v", err)
+	}
+}
+
+func authMacReq(t *testing.T, conn net.Conn, regkey string) {
+	t.Helper()
+	payload, _ := json.Marshal(protocol.AuthRequest{
+		Role: protocol.RoleMac, Proto: protocol.ProtoVersion, Key: regkey,
+	})
+	if err := protocol.WriteFrame(conn, protocol.FrameAuth, payload); err != nil {
+		t.Fatalf("write AUTH(mac): %v", err)
+	}
+}
+
+func registerReq(t *testing.T, conn net.Conn, name, perm, temp string, tempExp int64) {
+	t.Helper()
+	payload, _ := json.Marshal(protocol.RegisterRequest{
+		Name: name, Perm: perm, Temp: temp, TempExp: tempExp,
+	})
+	if err := protocol.WriteFrame(conn, protocol.FrameRegister, payload); err != nil {
+		t.Fatalf("write REGISTER: %v", err)
 	}
 }
 
@@ -181,7 +148,7 @@ func expectFrame(t *testing.T, conn net.Conn, want byte, timeout time.Duration) 
 	}
 }
 
-// expectAuthErr 读取并校验 AUTH_ERR 帧，返回原因 payload。
+// expectAuthErr 读取并校验 AUTH_ERR 帧，返回原因码 payload。
 func expectAuthErr(t *testing.T, conn net.Conn) []byte {
 	t.Helper()
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -195,21 +162,44 @@ func expectAuthErr(t *testing.T, conn net.Conn) []byte {
 	return payload
 }
 
-func mustAuth(t *testing.T, addr, role, token string) net.Conn {
+// mustRegMac 连接并完成 Mac 认证+REGISTER（永久秘密 + 有效临时秘密）。
+// 返回 Mac 连接与两份注册内容，供手机侧引用。
+func mustRegMac(t *testing.T, addr, name, perm, temp string, tempExp int64) (net.Conn, string, string) {
 	t.Helper()
-	conn := dial(t, addr)
-	authReq(t, conn, role, token)
-	expectFrame(t, conn, protocol.FrameAuthOK, 2*time.Second)
-	return conn
+	mac := dial(t, addr)
+	authMacReq(t, mac, testRegKey)
+	expectFrame(t, mac, protocol.FrameAuthOK, 2*time.Second)
+	ph, th := "", ""
+	if perm != "" {
+		ph = hashSecret(t, perm)
+	}
+	if temp != "" {
+		th = hashSecret(t, temp)
+	}
+	registerReq(t, mac, name, ph, th, tempExp)
+	return mac, ph, th
 }
 
-func TestAuthWrongTokenRejected(t *testing.T) {
-	addr := startTestServer(t, "secret", 5*time.Second, 2*time.Second)
+// mustAuthPhone 手机认证成功（携带与已在线的 Mac 匹配的秘密）。
+// 返回手机连接与 AUTH_OK payload。
+func mustAuthPhone(t *testing.T, addr, secret string) (net.Conn, []byte) {
+	t.Helper()
+	phone := dial(t, addr)
+	authPhoneReq(t, phone, secret)
+	okPayload := expectFrame(t, phone, protocol.FrameAuthOK, 3*time.Second)
+	expectFrame(t, phone, protocol.FramePeerState, 3*time.Second)
+	return phone, okPayload
+}
+
+// ===== 认证 =====
+
+func TestMacBadRegkeyRejected(t *testing.T) {
+	addr := startTestServer(t, 5*time.Second, 2*time.Second)
 	conn := dial(t, addr)
-	authReq(t, conn, protocol.RolePhone, "wrong")
+	authMacReq(t, conn, "wrong-key")
 	payload := expectAuthErr(t, conn)
-	if len(payload) == 0 {
-		t.Fatal("AUTH_ERR payload should carry reason")
+	if !strings.Contains(string(payload), protocol.ReasonInvalidKey) {
+		t.Fatalf("want %q in error, got %q", protocol.ReasonInvalidKey, payload)
 	}
 	// 服务器随后关闭连接
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -218,43 +208,76 @@ func TestAuthWrongTokenRejected(t *testing.T) {
 	}
 }
 
-func TestAuthTimeoutClosesConnection(t *testing.T) {
-	addr := startTestServer(t, "secret", 5*time.Second, 150*time.Millisecond)
-	conn := dial(t, addr) // 连上但不发 AUTH
-	start := time.Now()
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	if _, _, err := protocol.ReadFrame(conn); err == nil {
-		t.Fatal("expect close on auth timeout")
-	} else if elapsed := time.Since(start); elapsed > 2500*time.Millisecond {
-		t.Fatalf("auth timeout too late: %v", elapsed)
+func TestPhoneWrongSecretRejected(t *testing.T) {
+	addr := startTestServer(t, 5*time.Second, 2*time.Second)
+	conn := dial(t, addr)
+	authPhoneReq(t, conn, "wrong-secret")
+	payload := expectAuthErr(t, conn)
+	if !strings.Contains(string(payload), protocol.ReasonInvalidSecret) {
+		t.Fatalf("want %q in error, got %q", protocol.ReasonInvalidSecret, payload)
 	}
 }
 
-func TestRoleOccupiedRejected(t *testing.T) {
-	addr := startTestServer(t, "secret", 5*time.Second, 2*time.Second)
-	mustAuth(t, addr, protocol.RolePhone, "secret")
-	second := dial(t, addr)
-	authReq(t, second, protocol.RolePhone, "secret")
-	payload := expectAuthErr(t, second)
-	if !strings.Contains(string(payload), "role in use") {
-		t.Fatalf("want %q in error, got %q", "role in use", payload)
+func TestPhoneBadHashFormatRejected(t *testing.T) {
+	addr := startTestServer(t, 5*time.Second, 2*time.Second)
+	mac, _, _ := mustRegMac(t, addr, "MacBook", "", "ABC-123", 0)
+	_ = mac
+	conn := dial(t, addr)
+	payload, _ := json.Marshal(protocol.AuthRequest{
+		Role: protocol.RolePhone, Proto: protocol.ProtoVersion, Secret: "not-a-valid-hash",
+	})
+	if err := protocol.WriteFrame(conn, protocol.FrameAuth, payload); err != nil {
+		t.Fatalf("write AUTH: %v", err)
+	}
+	reason := expectAuthErr(t, conn)
+	if !strings.Contains(string(reason), protocol.ReasonInvalidSecret) {
+		t.Fatalf("want %q, got %q", protocol.ReasonInvalidSecret, reason)
 	}
 }
 
-func TestPairingAndBidirectionalForwarding(t *testing.T) {
-	addr := startTestServer(t, "secret", 5*time.Second, 2*time.Second)
-	phone := mustAuth(t, addr, protocol.RolePhone, "secret")
-	mac := mustAuth(t, addr, protocol.RoleMac, "secret")
+func TestPhoneExpiredSecretRejected(t *testing.T) {
+	addr := startTestServer(t, 5*time.Second, 2*time.Second)
+	// 注册一个 500ms 后过期的临时秘密，然后等待其过期再认证
+	mac, _, _ := mustRegMac(t, addr, "MacBook", "", "EXP-90", time.Now().Add(500*time.Millisecond).Unix())
+	_ = mac
+	time.Sleep(700 * time.Millisecond)
+	conn := dial(t, addr)
+	authPhoneReq(t, conn, "EXP-90")
+	payload := expectAuthErr(t, conn)
+	if !strings.Contains(string(payload), protocol.ReasonSecretExpired) {
+		t.Fatalf("want %q in error, got %q", protocol.ReasonSecretExpired, payload)
+	}
+}
 
-	// 后注册的 mac 触发桥接：两端都应收到 PEER_STATE(online)
-	online := expectFrame(t, mac, protocol.FramePeerState, 2*time.Second)
-	if len(online) != 1 || online[0] != protocol.PeerOnline {
-		t.Fatalf("mac want PeerOnline, got %v", online)
+func TestPhoneAuthWhenMacOfflineRejected(t *testing.T) {
+	addr := startTestServer(t, 5*time.Second, 2*time.Second)
+	mac, _, _ := mustRegMac(t, addr, "MacBook", "", "OFF-11", time.Now().Add(time.Hour).Unix())
+	mac.Close() // Mac 断开 → 注册表应被清理
+	time.Sleep(150 * time.Millisecond)
+
+	conn := dial(t, addr)
+	authPhoneReq(t, conn, "OFF-11")
+	payload := expectAuthErr(t, conn)
+	if !strings.Contains(string(payload), protocol.ReasonInvalidSecret) {
+		t.Fatalf("after mac offline want %q, got %q", protocol.ReasonInvalidSecret, payload)
 	}
-	online = expectFrame(t, phone, protocol.FramePeerState, 2*time.Second)
-	if len(online) != 1 || online[0] != protocol.PeerOnline {
-		t.Fatalf("phone want PeerOnline, got %v", online)
+}
+
+// ===== 桥接 =====
+
+func TestBridgeFullDuplex(t *testing.T) {
+	addr := startTestServer(t, 5*time.Second, 2*time.Second)
+	mac, _, _ := mustRegMac(t, addr, "MacBook-Pro", "PERM-42", "TEMP-17",
+		time.Now().Add(time.Hour).Unix())
+
+	// 用临时秘密认证：AUTH_OK 应回传设备名
+	phone, okPayload := mustAuthPhone(t, addr, "TEMP-17")
+	var ok protocol.AuthOKPayload
+	if err := json.Unmarshal(okPayload, &ok); err != nil || ok.Mac != "MacBook-Pro" {
+		t.Fatalf("want mac name in AUTH_OK, got %q err=%v", ok.Mac, err)
 	}
+	// Mac 侧收到 PEER_STATE(online)
+	expectFrame(t, mac, protocol.FramePeerState, 2*time.Second)
 
 	// phone → mac 透传
 	frameA := make([]byte, 1920)
@@ -276,50 +299,221 @@ func TestPairingAndBidirectionalForwarding(t *testing.T) {
 	if string(gotB) != string(frameB) {
 		t.Fatal("mac→phone payload mismatch")
 	}
+
+	// 用永久秘密认证另一台手机 → 另一台 Mac 设备也能建立桥接（多 Mac 并存）
+	mac2, permHash2, _ := mustRegMac(t, addr, "Studio-Mac", "PERM-99", "", 0)
+	_ = permHash2
+	phone2, ok2 := mustAuthPhone(t, addr, "PERM-99")
+	var ok2v protocol.AuthOKPayload
+	_ = json.Unmarshal(ok2, &ok2v)
+	if ok2v.Mac != "Studio-Mac" {
+		t.Fatalf("second mac name wrong: %q", ok2v.Mac)
+	}
+	expectFrame(t, mac2, protocol.FramePeerState, 2*time.Second)
+	if err := protocol.WriteFrame(phone2, protocol.FrameAudio, []byte{0x7f}); err != nil {
+		t.Fatalf("phone2 send: %v", err)
+	}
+	if got := expectFrame(t, mac2, protocol.FrameAudio, 2*time.Second); got[0] != 0x7f {
+		t.Fatal("phone2→mac2 mismatch")
+	}
 }
 
-func TestPeerOfflineNotifyAndReconnect(t *testing.T) {
-	addr := startTestServer(t, "secret", 5*time.Second, 2*time.Second)
-	phone := mustAuth(t, addr, protocol.RolePhone, "secret")
-	mac := mustAuth(t, addr, protocol.RoleMac, "secret")
+func TestPeerBusyRejected(t *testing.T) {
+	addr := startTestServer(t, 5*time.Second, 2*time.Second)
+	mac, _, _ := mustRegMac(t, addr, "MacBook", "", "BUSY-1", time.Now().Add(time.Hour).Unix())
+	_ = mac
+	phone1, _ := mustAuthPhone(t, addr, "BUSY-1")
 	expectFrame(t, mac, protocol.FramePeerState, 2*time.Second)
-	expectFrame(t, phone, protocol.FramePeerState, 2*time.Second)
 
-	// phone 掉线 → mac 收 PEER_STATE(offline)
+	// 第二台手机携带同一秘密 → peer-busy
+	phone2 := dial(t, addr)
+	authPhoneReq(t, phone2, "BUSY-1")
+	payload := expectAuthErr(t, phone2)
+	if !strings.Contains(string(payload), protocol.ReasonPeerBusy) {
+		t.Fatalf("want %q, got %q", protocol.ReasonPeerBusy, payload)
+	}
+	// 既有桥接不受影响
+	if err := protocol.WriteFrame(phone1, protocol.FrameAudio, []byte{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	expectFrame(t, mac, protocol.FrameAudio, 2*time.Second)
+}
+
+func TestBridgeDissolutionOnDisconnect(t *testing.T) {
+	addr := startTestServer(t, 5*time.Second, 2*time.Second)
+	mac, _, th := mustRegMac(t, addr, "MacBook", "", "DRAW-1", time.Now().Add(time.Hour).Unix())
+	phone, _ := mustAuthPhone(t, addr, "DRAW-1")
+	expectFrame(t, mac, protocol.FramePeerState, 2*time.Second)
+
+	// phone 掉线 → mac 收 offline
 	phone.Close()
 	offline := expectFrame(t, mac, protocol.FramePeerState, 3*time.Second)
 	if len(offline) != 1 || offline[0] != protocol.PeerOffline {
 		t.Fatalf("want PeerOffline, got %v", offline)
 	}
+	// mac 还能重振：新手机再次连接成功
+	phone2, _ := mustAuthPhone(t, addr, "DRAW-1")
+	expectFrame(t, mac, protocol.FramePeerState, 2*time.Second)
+	_ = th
+	phone2.Close()
+	time.Sleep(100 * time.Millisecond)
+}
 
-	// phone 重连（新连接重新认证）→ mac 收 PEER_STATE(online)，转发恢复
-	phone2 := mustAuth(t, addr, protocol.RolePhone, "secret")
-	online := expectFrame(t, mac, protocol.FramePeerState, 3*time.Second)
-	if len(online) != 1 || online[0] != protocol.PeerOnline {
-		t.Fatalf("want PeerOnline after reconnect, got %v", online)
+func TestRegistersLiveUpdate(t *testing.T) {
+	addr := startTestServer(t, 5*time.Second, 2*time.Second)
+	mac := dial(t, addr)
+	authMacReq(t, mac, testRegKey)
+	expectFrame(t, mac, protocol.FrameAuthOK, 2*time.Second)
+
+	// 初始注册临时秘密 V1
+	registerReq(t, mac, "MacBook", "", hashSecret(t, "V1-AAAA"), time.Now().Add(time.Hour).Unix())
+	ph1, _ := mustAuthPhone(t, addr, "V1-AAAA")
+	expectFrame(t, mac, protocol.FramePeerState, 2*time.Second)
+	ph1.Close()
+	expectFrame(t, mac, protocol.FramePeerState, 3*time.Second)
+
+	// 热更替换为 V2：旧秘密立即失效
+	registerReq(t, mac, "MacBook", "", hashSecret(t, "V2-BBBB"), time.Now().Add(time.Hour).Unix())
+	conn := dial(t, addr)
+	authPhoneReq(t, conn, "V1-AAAA")
+	payload := expectAuthErr(t, conn)
+	if !strings.Contains(string(payload), protocol.ReasonInvalidSecret) {
+		t.Fatalf("old secret should be invalid after live update, got %q", payload)
 	}
-	payload := []byte{0x01, 0x02, 0x03}
-	if err := protocol.WriteFrame(phone2, protocol.FrameAudio, payload); err != nil {
-		t.Fatalf("send audio: %v", err)
+	ph2, _ := mustAuthPhone(t, addr, "V2-BBBB")
+	expectFrame(t, mac, protocol.FramePeerState, 2*time.Second)
+	ph2.Close()
+}
+
+func TestAuthOKEventDeliveredToMac(t *testing.T) {
+	addr := startTestServer(t, 5*time.Second, 2*time.Second)
+	mac, _, _ := mustRegMac(t, addr, "MacBook", "", "EVT-1", time.Now().Add(time.Hour).Unix())
+	phone, _ := mustAuthPhone(t, addr, "EVT-1")
+	_ = phone
+	ev := expectFrame(t, mac, protocol.FrameEvent, 2*time.Second)
+	var n protocol.EventNotify
+	if err := json.Unmarshal(ev, &n); err != nil {
+		t.Fatalf("EVENT unmarshal: %v", err)
 	}
-	got := expectFrame(t, mac, protocol.FrameAudio, 2*time.Second)
-	if string(got) != string(payload) {
-		t.Fatal("forwarding broken after reconnect")
+	if n.Event != protocol.EventAuthOK || n.Kind != protocol.SecretKindTemp {
+		t.Fatalf("want auth-ok/temp, got %+v", n)
+	}
+	if !strings.Contains(n.IP, "127.0.0.1") {
+		t.Fatalf("want client ip, got %q", n.IP)
+	}
+	// ph 掉线以解除桥，避免后续清理竞态
+	phone.Close()
+}
+
+func TestExpiredAttemptEventDeliveredToMac(t *testing.T) {
+	addr := startTestServer(t, 5*time.Second, 2*time.Second)
+	mac, _, _ := mustRegMac(t, addr, "MacBook", "", "EXP-EE", time.Now().Add(500*time.Millisecond).Unix())
+	time.Sleep(700 * time.Millisecond)
+	conn := dial(t, addr)
+	authPhoneReq(t, conn, "EXP-EE")
+	expectAuthErr(t, conn)
+	ev := expectFrame(t, mac, protocol.FrameEvent, 2*time.Second)
+	var n protocol.EventNotify
+	if err := json.Unmarshal(ev, &n); err != nil {
+		t.Fatalf("EVENT unmarshal: %v", err)
+	}
+	if n.Event != protocol.EventAuthFail || n.Reason != protocol.ReasonSecretExpired {
+		t.Fatalf("want auth-fail/secret-expired, got %+v", n)
 	}
 }
 
-func TestHeartbeatPingPongKeepsAlive(t *testing.T) {
-	// 读超时 300ms；每 100ms 发一次 PING 应能存活远超 300ms
-	addr := startTestServer(t, "secret", 300*time.Millisecond, 2*time.Second)
-	conn := mustAuth(t, addr, protocol.RolePhone, "secret")
+// ===== 防爆破限速 =====
 
+func TestRateLimitLocksIP(t *testing.T) {
+	addr := startTestServer(t, 5*time.Second, 2*time.Second)
+	// 连续 5 次错误秘密：第 5 次触发锁定（依旧是 invalid-secret 应答）
+	for i := 0; i < 5; i++ {
+		conn := dial(t, addr)
+		authPhoneReq(t, conn, "WRONG-X")
+		payload := expectAuthErr(t, conn)
+		if !strings.Contains(string(payload), protocol.ReasonInvalidSecret) {
+			t.Fatalf("attempt %d want %q, got %q", i+1, protocol.ReasonInvalidSecret, payload)
+		}
+		conn.Close()
+	}
+	// 第 6 次：立即 rate-limited（无需再等滑窗）
+	conn6 := dial(t, addr)
+	authPhoneReq(t, conn6, "WRONG-X")
+	payload6 := expectAuthErr(t, conn6)
+	if !strings.Contains(string(payload6), protocol.ReasonRateLimited) {
+		t.Fatalf("want %q after lock, got %q", protocol.ReasonRateLimited, payload6)
+	}
+	// 锁定期间即使正确秘密也被拒绝（恒定排除）
+	mac, _, _ := mustRegMac(t, addr, "MacBook", "", "GOOD-1", time.Now().Add(time.Hour).Unix())
+	_ = mac
+	conn7 := dial(t, addr)
+	authPhoneReq(t, conn7, "GOOD-1")
+	payload7 := expectAuthErr(t, conn7)
+	if !strings.Contains(string(payload7), protocol.ReasonRateLimited) {
+		t.Fatalf("locked IP must reject valid secret, got %q", payload7)
+	}
+}
+
+func TestRateLimitEscalatesAndClearsOnSuccess(t *testing.T) {
+	// 纯单元测试：锁定后过期复位、逐级递增（1m→5m→30m）、成功清零。
+	rl := newRateLimiter()
+	now := time.Now()
+	ip := "10.0.0.9"
+
+	for i := 0; i < 5; i++ {
+		rl.fail(ip, now)
+	}
+	if !rl.locked(ip, now) {
+		t.Fatal("after 5 fails within window, ip should be locked")
+	}
+	// 第一次锁定 1m：+30s 仍锁，+90s 应已过期复位
+	if !rl.locked(ip, now.Add(30*time.Second)) {
+		t.Fatal("1m 锁内 must stay locked")
+	}
+	if rl.locked(ip, now.Add(90*time.Second)) {
+		t.Fatal("lock expired should clear")
+	}
+	// 二级：锁复位后再次窗口失败 5 次 → 新锁由 level(1)→2，即 5m 锁
+	base := now.Add(90 * time.Second)
+	for i := 0; i < 5; i++ {
+		rl.fail(ip, base)
+	}
+	if !rl.locked(ip, base.Add(3 * time.Minute)) {
+		t.Fatal("2nd lock should be 5m, still locked at +3m")
+	}
+	if rl.locked(ip, base.Add(6 * time.Minute)) {
+		t.Fatal("2nd lock expired at +5m")
+	}
+	// 三级（封顶 30m）：再一轮窗口失败
+	base2 := base.Add(6 * time.Minute)
+	for i := 0; i < 5; i++ {
+		rl.fail(ip, base2)
+	}
+	if !rl.locked(ip, base2.Add(10 * time.Minute)) {
+		t.Fatal("3rd lock should be 30m, still locked at +10m")
+	}
+	if rl.locked(ip, base2.Add(31 * time.Minute)) {
+		t.Fatal("3rd lock max 30m")
+	}
+	// 成功后清零
+	rl.clear(ip)
+	if rl.locked(ip, base2) {
+		t.Fatal("success clear should reset")
+	}
+}
+
+// ===== 心跳 / 通用 =====
+
+func TestHeartbeatPingPongKeepsAlive(t *testing.T) {
+	addr := startTestServer(t, 300*time.Millisecond, 2*time.Second)
+	phone := mustAuthPhoneOK(t, addr)
 	deadline := time.Now().Add(1500 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if err := protocol.WriteFrame(conn, protocol.FramePing, nil); err != nil {
+		if err := protocol.WriteFrame(phone, protocol.FramePing, nil); err != nil {
 			t.Fatalf("ping write: %v", err)
 		}
-		conn.SetReadDeadline(time.Now().Add(time.Second))
-		typ, _, err := protocol.ReadFrame(conn)
+		phone.SetReadDeadline(time.Now().Add(time.Second))
+		typ, _, err := protocol.ReadFrame(phone)
 		if err != nil {
 			t.Fatalf("connection died despite pings: %v", err)
 		}
@@ -330,13 +524,40 @@ func TestHeartbeatPingPongKeepsAlive(t *testing.T) {
 	}
 }
 
+// mustAuthPhoneOK 造一台在线的 Mac（注册临时秘密 KEEP-1）后以手机认证成功，
+// 并消费掉 PEER_STATE(online)，返回可直接操作的手机连接。
+// Mac 连接由后台 goroutine 持续 PING 保活，防止短读超时下 Mac 会话先死
+// 导致手机误收 offline 通知。
+func mustAuthPhoneOK(t *testing.T, addr string) net.Conn {
+	t.Helper()
+	mac := dial(t, addr)
+	authMacReq(t, mac, testRegKey)
+	expectFrame(t, mac, protocol.FrameAuthOK, 2*time.Second)
+	registerReq(t, mac, "K", "", hashSecret(t, "KEEP-1"), time.Now().Add(time.Hour).Unix())
+	go func() {
+		for {
+			if err := protocol.WriteFrame(mac, protocol.FramePing, nil); err != nil {
+				return // 连接已结束
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+	phone := dial(t, addr)
+	authPhoneReq(t, phone, "KEEP-1")
+	ok := expectFrame(t, phone, protocol.FrameAuthOK, 3*time.Second)
+	if len(ok) == 0 {
+		t.Fatal("AUTH_OK payload should carry mac")
+	}
+	expectFrame(t, phone, protocol.FramePeerState, 3*time.Second)
+	return phone
+}
+
 func TestHeartbeatTimeoutDisconnects(t *testing.T) {
-	addr := startTestServer(t, "secret", 300*time.Millisecond, 2*time.Second)
-	conn := mustAuth(t, addr, protocol.RolePhone, "secret")
-	// 不发任何心跳：应在 ~300ms 内被断开
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	addr := startTestServer(t, 300*time.Millisecond, 2*time.Second)
+	phone := mustAuthPhoneOK(t, addr)
+	phone.SetReadDeadline(time.Now().Add(3 * time.Second))
 	start := time.Now()
-	if _, _, err := protocol.ReadFrame(conn); err == nil {
+	if _, _, err := protocol.ReadFrame(phone); err == nil {
 		t.Fatal("expect disconnect on heartbeat timeout")
 	}
 	if elapsed := time.Since(start); elapsed > 2500*time.Millisecond {
@@ -344,22 +565,36 @@ func TestHeartbeatTimeoutDisconnects(t *testing.T) {
 	}
 }
 
+func TestAuthTimeoutClosesConnection(t *testing.T) {
+	addr := startTestServer(t, 5*time.Second, 150*time.Millisecond)
+	conn := dial(t, addr) // 连上但不发 AUTH
+	start := time.Now()
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, _, err := protocol.ReadFrame(conn); err == nil {
+		t.Fatal("expect close on auth timeout")
+	} else if elapsed := time.Since(start); elapsed > 2500*time.Millisecond {
+		t.Fatalf("auth timeout too late: %v", elapsed)
+	}
+}
+
 func TestUnknownFrameTypeDropped(t *testing.T) {
-	addr := startTestServer(t, "secret", 5*time.Second, 2*time.Second)
-	conn := mustAuth(t, addr, protocol.RolePhone, "secret")
+	addr := startTestServer(t, 5*time.Second, 2*time.Second)
+	phone := mustAuthPhoneOK(t, addr)
 	// 发送未知类型帧，连接应继续工作（向前兼容）
-	if err := protocol.WriteFrame(conn, 0x7F, []byte("whatever")); err != nil {
+	if err := protocol.WriteFrame(phone, 0x7F, []byte("whatever")); err != nil {
 		t.Fatalf("write unknown frame: %v", err)
 	}
-	if err := protocol.WriteFrame(conn, protocol.FramePing, nil); err != nil {
+	if err := protocol.WriteFrame(phone, protocol.FramePing, nil); err != nil {
 		t.Fatalf("write ping: %v", err)
 	}
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	typ, _, err := protocol.ReadFrame(conn)
+	phone.SetReadDeadline(time.Now().Add(2 * time.Second))
+	typ, _, err := protocol.ReadFrame(phone)
 	if err != nil || typ != protocol.FramePong {
 		t.Fatalf("conn should survive unknown frame and reply PONG, got typ=0x%02x err=%v", typ, err)
 	}
 }
+
+// ===== TLS 集成 =====
 
 // syncBuf 并发安全的日志缓冲：服务器 goroutine 写、测试主线程读。
 type syncBuf struct {
@@ -390,7 +625,7 @@ func TestTLSHandshakeFailureDoesNotKillServer(t *testing.T) {
 	}
 	var logBuf syncBuf
 	srv := New(Config{
-		Token:     "secret",
+		RegKey:    testRegKey,
 		TlsConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
 		Logger:    log.New(&logBuf, "", 0),
 	})
@@ -429,15 +664,14 @@ func TestTLSHandshakeFailureDoesNotKillServer(t *testing.T) {
 		t.Cleanup(func() { c.Close() })
 		return c
 	}
-	phone := dialTLS()
-	authReq(t, phone, protocol.RolePhone, "secret")
-	expectFrame(t, phone, protocol.FrameAuthOK, 2*time.Second)
-
 	mac := dialTLS()
-	authReq(t, mac, protocol.RoleMac, "secret")
+	authMacReq(t, mac, testRegKey)
 	expectFrame(t, mac, protocol.FrameAuthOK, 2*time.Second)
+	registerReq(t, mac, "MacBook", "", hashSecret(t, "TLS-1"), time.Now().Add(time.Hour).Unix())
 
-	// 桥接建立：mac 作为后到者，两端都应收到 PEER_STATE(online)
+	phone := dialTLS()
+	authPhoneReq(t, phone, "TLS-1")
+	expectFrame(t, phone, protocol.FrameAuthOK, 2*time.Second)
 	expectFrame(t, phone, protocol.FramePeerState, 2*time.Second)
 	expectFrame(t, mac, protocol.FramePeerState, 2*time.Second)
 }

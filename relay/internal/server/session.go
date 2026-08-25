@@ -15,10 +15,11 @@ import (
 type session struct {
 	srv     *Server
 	conn    net.Conn
-	role    string
+	role    string // AUTH 通过后才有值；mac 或 phone
 	peer    string // 远端地址字符串，仅用于日志展示
 	writeMu sync.Mutex // 串行化全部帧写
 	closed  atomic.Bool
+	bridge  *bridge // 已通过认证的手机/Mac 持有其桥接；由 Server.mu 读写，读取在锁内
 	// 音频接收计数（readLoop 单线程累加，statsLoop 原子读取）
 	audioFrames atomic.Int64
 	audioBytes  atomic.Int64
@@ -36,10 +37,10 @@ func (s *session) writeFrame(typ byte, payload []byte) {
 	}
 }
 
-// reject 发送 AUTH_ERR 并记录拒绝原因；调用方随后关闭连接。
-func (s *session) reject(msg string) {
+// reject 发送 AUTH_ERR（带原因码，供客户端分支处理）并记录拒绝原因；调用方随后关闭连接。
+func (s *session) reject(code, msg string) {
 	s.srv.cfg.Logger.Printf("rejected peer=%s reason=%q", s.peer, msg)
-	s.writeFrame(protocol.FrameAuthErr, []byte(msg))
+	s.writeFrame(protocol.FrameAuthErr, []byte(code))
 }
 
 // close 幂等关闭底层连接。
@@ -49,7 +50,9 @@ func (s *session) close() {
 	}
 }
 
-// readLoop 逐帧读取并分发：PING→PONG、AUDIO→转发对端、其余丢弃（向前兼容）。
+// readLoop 逐帧读取并分发：
+// PING→PONG；AUDIO→经桥接转发对端（未架桥时丢弃但计数）；
+// REGISTER→Mac 注册/热更；未知类型丢弃（向前兼容）。
 // 读超时（心跳判定）由每次读取前的 SetReadDeadline 实现。
 func (s *Server) readLoop(sess *session) {
 	for {
@@ -64,18 +67,34 @@ func (s *Server) readLoop(sess *session) {
 		case protocol.FramePong:
 			// 收到即证明对端活性，读超时已在读取时刷新
 		case protocol.FrameAudio:
-			s.mu.Lock()
-			peer := s.roles[otherRole(sess.role)]
-			s.mu.Unlock()
-			if peer != nil && peer != sess {
-				peer.writeFrame(protocol.FrameAudio, payload)
-			}
-			// 计数含未桥接时被丢弃的帧：反映的是"对端发来了什么"
 			sess.audioFrames.Add(1)
 			sess.audioBytes.Add(int64(len(payload)))
-			// 未桥接时到达的 AUDIO 直接丢弃（设计文档 §4.1）
+			// 计数含未桥接时被丢弃的帧：反映的是"对端发来了什么"
+			if target := s.audioTarget(sess); target != nil {
+				target.writeFrame(protocol.FrameAudio, payload)
+			}
+		case protocol.FrameRegister:
+			if sess.role == protocol.RoleMac {
+				s.handleRegister(sess, payload)
+			}
+			// 手机发 REGISTER 非法：丢弃不拒绝（向前兼容）
 		default:
 			// 未知类型：payload 已被 ReadFrame 消费，继续运行（向前兼容）
 		}
 	}
+}
+
+// audioTarget 返回某会话 AUDIO 帧应转发到的对端；无桥接时返回 nil。
+// 在锁内解引用桥接的读操作，避免与 authPhone/detach 的原子解桥竞态。
+func (s *Server) audioTarget(sess *session) *session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b := sess.bridge
+	if b == nil {
+		return nil
+	}
+	if b.mac == sess {
+		return b.phone
+	}
+	return b.mac
 }

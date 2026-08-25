@@ -1,6 +1,7 @@
-// Package protocol 定义 remote-voice v1 线路协议：
+// Package protocol 定义 remote-voice 线路协议：
 // 所有帧统一为 [1B type][4B length BigEndian][payload(length 字节)]。
-// 本包只负责帧的编解码与常量定义，不包含任何会话语义。
+// v2（注册制）：手机只带秘密哈希认证，Mac 以 regkey 认证后注册/热更秘密，
+// relay 按秘密哈希路由、按 IP 限速防爆破。本包只负责帧的编解码与常量定义。
 package protocol
 
 import (
@@ -10,15 +11,17 @@ import (
 	"io"
 )
 
-// 帧类型常量（设计文档 §4.1）
+// 帧类型常量（设计文档 §4.1 + v2 扩展）
 const (
 	FrameAuth      byte = 0x01 // C→S 认证请求，payload 为 JSON
-	FrameAuthOK    byte = 0x02 // S→C 认证成功
+	FrameAuthOK    byte = 0x02 // S→C 认证成功，payload 为 JSON（手机侧含 mac 设备名）
 	FrameAuthErr   byte = 0x03 // S→C 认证失败，payload 为 UTF-8 错误描述，随后关闭连接
 	FrameAudio     byte = 0x04 // 桥接后双向透传的音频帧（服务器不解析内容）
 	FramePing      byte = 0x05 // 心跳请求（双向）
 	FramePong      byte = 0x06 // 心跳应答（双向）
 	FramePeerState byte = 0x07 // S→C 对端状态通知，payload 1 字节：0x01 上线 / 0x00 掉线
+	FrameRegister  byte = 0x08 // Mac→S 注册/热更秘密（可随时重发实现热更）
+	FrameEvent     byte = 0x09 // S→Mac 事件通知（认证成功/对秘密试探失败），仅元数据
 )
 
 // 对端状态字节值（FramePeerState 的 payload）
@@ -35,16 +38,65 @@ const HeaderLen = 5
 
 // 协议版本与角色取值（AUTH payload）
 const (
-	ProtoVersion = 1
+	ProtoVersion = 2
 	RolePhone    = "phone"
 	RoleMac      = "mac"
 )
 
-// AuthRequest AUTH 帧 payload 结构
+// AUTH_ERR 原因枚举（ReasonAuthErr 的取值，客户端按此分支处理）
+const (
+	ReasonInvalidKey      = "invalid-key"    // Mac regkey 错误
+	ReasonInvalidSecret   = "invalid-secret" // 秘密哈希查无此条目
+	ReasonSecretExpired   = "secret-expired" // 临时秘密已过期
+	ReasonPeerBusy        = "peer-busy"      // 目标 Mac 已有桥接
+	ReasonRateLimited     = "rate-limited"   // IP 处于防爆破锁定，恒定排除进一步探测
+	ReasonBadRequest      = "bad-request"    // 请求格式/语义非法
+	ReasonUnsupportedVer  = "unsupported-proto"
+)
+
+// Event 事件类型（FrameEvent 的 event 字段取值）
+const (
+	EventAuthOK   = "auth-ok"   // 手机携带本 Mac 的秘密认证成功并建立桥接
+	EventAuthFail = "auth-fail" // 针对本 Mac 秘密的失败试探（原因见 reason）
+)
+
+// 秘密类型（EventNotify.Kind 的取值）
+const (
+	SecretKindPerm = "perm" // 永久秘密
+	SecretKindTemp = "temp" // 临时秘密
+)
+
+// AuthRequest AUTH 帧 payload 结构（proto=2）
+// Mac 用 Key（regkey）认证；手机用 Secret（规范化后 SHA-256 hex）认证。
 type AuthRequest struct {
-	Role  string `json:"role"`
-	Token string `json:"token"`
-	Proto int    `json:"proto"`
+	Role   string `json:"role"`
+	Proto  int    `json:"proto"`
+	Key    string `json:"key,omitempty"`    // role=mac：注册密钥
+	Secret string `json:"secret,omitempty"` // role=phone：秘密哈希（hex）
+}
+
+// AuthOKPayload 认证成功应答（FrameAuthOK）。手机侧通过 mac 字段获得对端设备名。
+type AuthOKPayload struct {
+	Mac string `json:"mac,omitempty"`
+}
+
+// RegisterRequest REGISTER 帧 payload 结构（Mac→S）。
+// perm / temp 均为规范化秘密的 SHA-256 hex；不注册的字段传空串即可，
+// 同一 Mac 重复发送即热更（改名/换秘密/延长有效期）。
+type RegisterRequest struct {
+	Name    string `json:"name"`
+	Perm    string `json:"perm"`
+	Temp    string `json:"temp"`
+	TempExp int64  `json:"temp_exp"` // unix 秒；temp 非空时必填
+}
+
+// EventNotify 事件通知（FrameEvent，方向 S→Mac）：
+// auth-ok（ip/kind）与 auth-fail（ip/reason）两类，不含秘密原文。
+type EventNotify struct {
+	Event  string `json:"event"`
+	IP     string `json:"ip"`
+	Kind   string `json:"kind,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // ErrFrameTooLarge 表示对端发送了超过上限的帧，调用方必须断开连接
