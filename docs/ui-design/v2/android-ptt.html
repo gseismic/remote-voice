@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>remote-voice · Android 按住说话 · 高保真稿</title>
+<style>
+:root{
+  --bg:#0e1116; --panel:#161b22; --card:#1a212b; --line:#2a313c;
+  --tx:#e6e9ee; --tx2:#8b949e; --amber:#f5b83d; --green:#3fb950; --red:#f85149;
+  --mono:"IBM Plex Mono","JetBrains Mono",ui-monospace,SFMono-Regular,Consolas,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  min-height:100vh;background:var(--bg);
+  background-image:radial-gradient(circle,#1c232e 1px,transparent 1px);
+  background-size:24px 24px;
+  color:var(--tx);font-family:"Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+  display:flex;flex-direction:column;align-items:center;padding:30px 20px 40px;
+}
+
+/* ===== 页面级说明（非 App UI，仅一行导航） ===== */
+.pghead{width:min(860px,100%);display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}
+.pghead .mark{font:12px var(--mono);letter-spacing:2px;color:var(--tx2)}
+.pghead .mark em{font-style:normal;color:var(--amber)}
+.pghead a{font:12px var(--mono);color:var(--tx2);text-decoration:none}
+.pghead a:hover{color:var(--amber)}
+.pgfoot{margin-top:24px;font-size:11.5px;color:var(--tx2)}
+.pgfoot b{color:var(--tx)}
+
+/* ===== 舞台与手机外框 ===== */
+.stage{position:relative;display:flex;justify-content:center}
+.halo{position:absolute;top:50%;left:50%;width:560px;height:560px;transform:translate(-50%,-50%);
+  background:radial-gradient(closest-side,rgba(245,184,61,.07),transparent 72%);pointer-events:none}
+.phone{position:relative;width:372px;height:764px;border-radius:48px;background:#05070a;
+  border:1px solid #3a4452;
+  box-shadow:0 30px 80px rgba(0,0,0,.65),0 4px 14px rgba(0,0,0,.5),
+    inset 0 1px 1px rgba(255,255,255,.10),inset 0 -1px 1px rgba(0,0,0,.6);
+  padding:11px}
+/* 实体侧键 */
+.side{position:absolute;right:-3px;width:3px;background:#39434f;border-radius:0 3px 3px 0;box-shadow:1px 0 2px rgba(0,0,0,.5)}
+.side.pwr{top:196px;height:66px}.side.vol{top:118px;height:96px}
+.screen{position:relative;width:100%;height:100%;border-radius:38px;overflow:hidden;
+  background:linear-gradient(168deg,#12171f 0%,#0c1016 46%,#090c11 100%);
+  display:flex;flex-direction:column}
+/* 屏幕噪点与左上反光，增加玻璃质感 */
+.grain{position:absolute;inset:0;z-index:9;pointer-events:none;opacity:.05;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E")}
+.sheen{position:absolute;inset:0;z-index:8;pointer-events:none;
+  background:linear-gradient(115deg,rgba(255,255,255,.05) 0%,rgba(255,255,255,.015) 26%,transparent 42%)}
+/* 挖孔前摄 */
+.punch{position:absolute;top:13px;left:50%;transform:translateX(-50%);width:15px;height:15px;border-radius:50%;
+  background:radial-gradient(circle at 36% 32%,#1d2530,#000 62%);border:1px solid #161c25;z-index:7;
+  box-shadow:inset 0 0 3px rgba(88,166,255,.25)}
+
+/* ===== 状态栏（拟真绘制） ===== */
+.sbar{flex:none;height:44px;display:flex;align-items:center;justify-content:space-between;padding:6px 26px 0}
+.sbar .time{font-size:13.5px;font-weight:600;letter-spacing:.4px}
+.sicons{display:flex;align-items:center;gap:7px}
+.sicons svg{display:block}
+.batt{position:relative;width:24px;height:12px;border:1px solid rgba(230,233,238,.55);border-radius:3.5px;padding:1.5px}
+.batt i{display:block;height:100%;width:68%;background:var(--tx);border-radius:1.5px}
+.batt::after{content:"";position:absolute;right:-3.5px;top:3px;width:2px;height:4.5px;border-radius:0 2px 2px 0;background:rgba(230,233,238,.55)}
+
+/* ===== 连接状态（说话前置必要信息） ===== */
+.conn{flex:none;margin:16px 22px 0;display:flex;align-items:center;gap:9px;
+  background:rgba(20,26,35,.82);border:1px solid var(--line);border-radius:999px;padding:10px 17px;font-size:13.5px}
+.led{width:8px;height:8px;border-radius:50%;flex:none;transition:.2s}
+.led.g{background:var(--green);box-shadow:0 0 8px var(--green);animation:breath 2.6s ease-in-out infinite}
+.led.red{background:var(--red);box-shadow:0 0 10px var(--red);animation:none}
+@keyframes breath{50%{opacity:.55}}
+
+/* ===== 中央波形 + 计时 ===== */
+.wavezone{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;min-height:0}
+.wave{display:flex;align-items:center;gap:7px;height:96px}
+.wave i{width:4px;height:4px;border-radius:2px;background:#27303d;transition:background .25s}
+.wave.live i{background:var(--green);animation:wv ease-in-out infinite alternate;
+  box-shadow:0 0 6px rgba(63,185,80,.45)}
+@keyframes wv{from{height:4px}to{height:var(--h)}}
+.tmr{font:15px var(--mono);letter-spacing:3px;color:var(--green);
+  opacity:0;transform:translateY(6px);transition:.25s}
+.tmr.show{opacity:1;transform:none}
+
+/* ===== PTT 主钮：锚定底部拇指热区 ===== */
+.pttdock{flex:none;display:flex;justify-content:center;padding-bottom:28px}
+.ptt{position:relative;width:172px;height:172px;border-radius:50%;flex:none;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;
+  cursor:pointer;user-select:none;-webkit-user-select:none;touch-action:none;
+  background:radial-gradient(circle at 50% 32%,#28313f,#151b24 70%);
+  border:1px solid #3d475666;color:var(--tx);
+  box-shadow:0 16px 38px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.05);
+  transition:transform .08s,box-shadow .18s,border-color .18s}
+.ptt::before{content:"";position:absolute;inset:15px;border-radius:50%;
+  border:1px solid rgba(255,255,255,.055);pointer-events:none} /* 机加工同心刻环 */
+.ptt svg{color:var(--tx2);transition:color .18s}
+.ptt .zh{font-size:19px;font-weight:bold;letter-spacing:5px;text-indent:5px}
+.ptt .en{font:9px var(--mono);letter-spacing:3px;color:var(--tx2);transition:color .18s}
+.ptt.hold{transform:scale(.958);border-color:var(--green);
+  box-shadow:0 0 0 9px rgba(63,185,80,.10),0 0 64px rgba(63,185,80,.30),0 16px 38px rgba(0,0,0,.5)}
+.ptt.hold svg,.ptt.hold .en{color:var(--green)}
+.ptt.hold .zh{color:var(--green)}
+.ring{position:absolute;inset:-10px;border-radius:50%;border:1.5px solid rgba(63,185,80,.55);opacity:0;pointer-events:none}
+.ptt.hold .ring{animation:ripple 1.5s ease-out infinite}
+.ptt.hold .ring.r2{animation-delay:.75s}
+@keyframes ripple{0%{transform:scale(.94);opacity:.85}100%{transform:scale(1.34);opacity:0}}
+
+/* ===== 手势条 ===== */
+.gest{flex:none;display:flex;justify-content:center;padding:0 0 9px}
+.gest i{width:108px;height:4px;border-radius:2px;background:rgba(230,233,238,.32)}
+
+@media (prefers-reduced-motion:reduce){
+  .wave.live i{animation:none;height:40px}
+  .ptt.hold .ring,.led.g{animation:none}
+}
+</style>
+</head>
+<body>
+
+<header class="pghead">
+  <span class="mark">remote-voice <em>·</em> ANDROID HI-FI · 按住说话</span>
+  <a href="./index.html">← 返回 v2 总览</a>
+</header>
+
+<div class="stage">
+  <div class="halo"></div>
+  <div class="phone">
+    <span class="side vol"></span><span class="side pwr"></span>
+    <div class="screen">
+      <div class="grain"></div><div class="sheen"></div>
+      <div class="punch"></div>
+
+      <!-- 状态栏 -->
+      <div class="sbar">
+        <span class="time">9:41</span>
+        <span class="sicons">
+          <svg width="17" height="12" viewBox="0 0 17 12" fill="#e6e9ee"><rect x="0" y="7.5" width="3" height="4" rx="1"/><rect x="4.5" y="5.5" width="3" height="6" rx="1"/><rect x="9" y="3" width="3" height="8.5" rx="1"/><rect x="13.5" y="0.5" width="3" height="11" rx="1"/></svg>
+          <svg width="16" height="12" viewBox="0 0 16 12" fill="none" stroke="#e6e9ee" stroke-width="1.6" stroke-linecap="round"><path d="M1.5 4.2a9.4 9.4 0 0 1 13 0"/><path d="M4 7a5.8 5.8 0 0 1 8 0"/><circle cx="8" cy="10" r="1.3" fill="#e6e9ee" stroke="none"/></svg>
+          <span class="batt"><i></i></span>
+        </span>
+      </div>
+
+      <!-- 连接状态 -->
+      <div class="conn"><span class="led g" id="led"></span><span id="connTxt">已连接 · MacBook-Pro</span></div>
+
+      <!-- 波形反馈 + 计时 -->
+      <div class="wavezone">
+        <div class="wave" id="wave"></div>
+        <div class="tmr" id="tmr">00:00</div>
+      </div>
+
+      <!-- PTT：按下即传，松开即停 -->
+      <div class="pttdock">
+        <div class="ptt" id="ptt">
+          <span class="ring r1"></span><span class="ring r2"></span>
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><rect x="9" y="2.5" width="6" height="11.5" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><path d="M12 18v3.5"/><path d="M8.5 21.5h7"/></svg>
+          <span class="zh">按住 说话</span>
+          <span class="en">HOLD TO TALK</span>
+        </div>
+      </div>
+
+      <!-- 手势条 -->
+      <div class="gest"><i></i></div>
+    </div>
+  </div>
+</div>
+
+<footer class="pgfoot">本页为<b>可交互高保真原型</b>：直接在按钮上试按 —— 按下即传、松开即停；仅保留说话相关元素。</footer>
+
+<script>
+/* 生成波形刻度：每根自带目标高度/时长/相位，待机时静止 */
+const wave=document.getElementById('wave');
+for(let i=0;i<17;i++){
+  const b=document.createElement('i');
+  b.style.setProperty('--h',(16+Math.round(Math.random()*58))+'px');
+  b.style.animationDuration=(0.62+Math.random()*0.5).toFixed(2)+'s';
+  b.style.animationDelay=(-Math.random()*0.9).toFixed(2)+'s';
+  wave.appendChild(b);
+}
+/* 按住说话：按下即传（红=ON AIR），松开即停 */
+const ptt=document.getElementById('ptt'),led=document.getElementById('led'),
+      connTxt=document.getElementById('connTxt'),tmr=document.getElementById('tmr');
+let iv=null,t0=0;
+const fmt=s=>String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
+function hold(on){
+  ptt.classList.toggle('hold',on);
+  wave.classList.toggle('live',on);
+  led.className='led '+(on?'red':'g');
+  connTxt.textContent=(on?'正在传输 · ':'已连接 · ')+'MacBook-Pro';
+  if(on){
+    t0=Date.now();tmr.classList.add('show');
+    iv=setInterval(()=>tmr.textContent=fmt(Math.floor((Date.now()-t0)/1000)),250);
+  }else{
+    clearInterval(iv);
+    setTimeout(()=>{if(!ptt.classList.contains('hold')){tmr.classList.remove('show');tmr.textContent='00:00'}},280);
+  }
+}
+ptt.addEventListener('pointerdown',e=>{e.preventDefault();try{ptt.setPointerCapture(e.pointerId)}catch(_){};hold(true)});
+['pointerup','pointercancel'].forEach(ev=>ptt.addEventListener(ev,()=>hold(false)));
+ptt.addEventListener('contextmenu',e=>e.preventDefault());
+</script>
+</body>
+</html>
