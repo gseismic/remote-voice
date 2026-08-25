@@ -185,7 +185,8 @@ App 内依次填入（三项均来自服务器/Mac 侧部署，详见 `../README
 | `Could not find com.android.application:com.android.application.gradle.plugin:8.5.2` 或依赖下载超时 | 网络：需能访问 `dl.google.com`、`repo.maven.apache.org`；wrapper 下载慢可改 `gradle/wrapper/gradle-wrapper.properties` 中 URL 为腾讯镜像 `https://mirrors.cloud.tencent.com/gradle/gradle-8.9-bin.zip` |
 | `You have not accepted the license agreements` | 执行 `yes | sdkmanager --licenses` |
 | `Failed to find target with hash string 'android-35'` | 未装 Platform 35：`sdkmanager "platforms;android-35"` |
-| `adb: no devices` | 手机未开 USB 调试或数据线仅充电模式；`lsusb` 确认识别，Linux 下必要时补 udev 规则 |
+| `adb: no devices` | 先 `lsusb` 定位：① 看不到手机 → 数据线是纯充电线或 USB 口/模式问题；② 能看到但标注 `(MTP)` → 手机未开「USB 调试」，ADB 接口未暴露（实测案例：Xiaomi 2717:ff40 MTP），到开发者选项开启后重插并在手机上确认授权弹窗 |
+| `adb devices` 显示 `no permissions` | Linux 缺 udev 规则：`sudo apt install android-sdk-platform-tools-common` 后重插；另建议用 SDK 内新版 adb（`~/Android/Sdk/platform-tools/adb`），Ubuntu 自带版本过旧 |
 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | 签名不一致的历史安装残留：`adb uninstall com.remotevoice.app` 后重装 |
 | 手机提示禁止安装 USB 来源应用 | 开发者选项中允许「USB 安装」/「USB 调试（安全设置）」 |
 
