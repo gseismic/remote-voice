@@ -125,18 +125,43 @@ cd android-app
 | Debug | `app/build/outputs/apk/debug/app-debug.apk` |
 | Release | `app/build/outputs/apk/release/app-release-unsigned.apk` |
 
-### 3.6 安装到手机
+### 3.6 安装到手机（含手机端交互，逐步执行）
+
+前置（均在手机上完成）：开发者选项已解锁，「USB 调试」已开；
+小米/红米还需打开「USB 安装」。然后数据线连接电脑。
+
+**第 1 步：确认设备可见**
 
 ```bash
-# 手机开启「开发者选项 → USB 调试」后插线，确认设备可见
-adb devices
-
-adb install app/build/outputs/apk/debug/app-debug.apk
-# 覆盖升级加 -r：adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb devices    # 建议 ~/Android/Sdk/platform-tools/adb（新版）
 ```
 
-无线调试（Android 11+，可选）：开发者选项 → 无线调试 → 配对后
-`adb pair <ip:port>` 再 `adb connect <ip:port>`。
+预期输出（首次连接时手机会先弹「允许 USB 调试吗？」→ 勾选一律允许 → 确定）：
+
+```text
+List of devices attached
+5LFAJ7TWUGUCCERO	device      ← 有序列号且状态为 device 才算连上
+```
+
+**第 2 步：执行安装 —— 发令后眼睛盯着手机屏幕**
+
+```bash
+adb install app/build/outputs/apk/debug/app-debug.apk
+```
+
+⚠️ 命令发出后**几秒内手机会弹出安装确认框**（厂商各异），必须人工在超时前
+点「允许/安装」。不点或点慢了都会失败报错——这不是 APK 或命令的问题：
+
+| 报错 | 实际含义 |
+|---|---|
+| `Success` | 安装成功，桌面出现 **remote-voice** 图标 |
+| `INSTALL_FAILED_USER_RESTRICTED` | 厂商安全开关未放行（小米需「USB 安装」），见 §5 |
+| 长时间无响应后 canceled | 确认框超时被系统自动取消，重跑并及时点掉 |
+
+覆盖升级加 `-r`：`adb install -r app/build/outputs/apk/debug/app-debug.apk`
+
+**无线调试（Android 11+，可选）**：开发者选项 → 无线调试 → 配对后
+`adb pair <ip:port>` 再 `adb connect <ip:port>`，之后同上安装。
 
 > **Release 包为何不能直接装**：`app/build.gradle.kts:18-22` 未配置签名
 > （`isMinifyEnabled = false`，无 signingConfig），产出的是 unsigned APK，
