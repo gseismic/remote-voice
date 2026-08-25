@@ -164,6 +164,24 @@ aabbccdd...共64个字符...
   导致打印的指纹与实际生效证书不符；
 - 服务器重启/换机器不影响指纹，只要 `data/` 目录还在。
 
+### 运行日志速查（2026-08-26 起生效）
+
+relay 对**每一次连接尝试与数据流动**都有日志，排查"是否连上"以此为准：
+
+| 日志行 | 含义 |
+|---|---|
+| `accepted peer=<IP:端口>` | 收到 TCP 连接（任何来源，含扫描器） |
+| `tls handshake ok / failed peer=..` | TLS 握手成功/失败；失败常见于客户端指纹填错或非 TLS 探测，**仅断开该连接，服务不受影响** |
+| `authenticated role=.. peer=..` | 认证成功 |
+| `rejected peer=.. reason=..` | 拒绝（token 错/协议版本不符/role 占用等） |
+| `auth failed peer=.. role=.. (bad token)` | token 与 relay 启动值不一致 |
+| `bridged role=..` | phone+mac 配对完成，开始桥接 |
+| `stats role=phone audio_frames=N audio_bytes=M (窗口 10s)` | 每 10s 汇总的音频流量；持续出现说明链路有数据流动 |
+| `disconnected role=.. peer=..` | 连接断开 |
+
+> 判读技巧：只有 `accepted` 没有 `handshake ok` → 客户端不是 TLS 或指纹错；
+> 有 `bridged` 但无 `stats` → 对端没在发音频（手机未授权麦克风或未点开始）。
+
 ---
 
 ## 7. 常驻运行（可选，生产建议）

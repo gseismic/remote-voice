@@ -1,18 +1,22 @@
 package server
 
 import (
+	"bytes"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/binary"
 	"encoding/json"
 	"io"
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"remote-voice/relay/internal/protocol"
+	"remote-voice/relay/internal/selfcert"
 )
 
 // fakeTCP 包装 net.Pipe 并记录 SetNoDelay 调用，用于 H-2 回归断言。
@@ -355,4 +359,85 @@ func TestUnknownFrameTypeDropped(t *testing.T) {
 	if err != nil || typ != protocol.FramePong {
 		t.Fatalf("conn should survive unknown frame and reply PONG, got typ=0x%02x err=%v", typ, err)
 	}
+}
+
+// syncBuf 并发安全的日志缓冲：服务器 goroutine 写、测试主线程读。
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (w *syncBuf) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.Write(p)
+}
+
+func (w *syncBuf) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.String()
+}
+
+// 回归(PLAN-003)：TLS 握手失败绝不能杀死服务器——旧实现握手发生在
+// tls.Listener.Accept 内，单个失败（如客户端指纹不符主动断开、扫描器探针）
+// 会沿 Accept 错误路径导致整个进程退出。现握手移入每连接 goroutine。
+func TestTLSHandshakeFailureDoesNotKillServer(t *testing.T) {
+	dir := t.TempDir()
+	cert, fp, err := selfcert.Ensure(dir)
+	if err != nil {
+		t.Fatalf("ensure cert: %v", err)
+	}
+	var logBuf syncBuf
+	srv := New(Config{
+		Token:     "secret",
+		TlsConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
+		Logger:    log.New(&logBuf, "", 0),
+	})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go srv.Serve(ln) //nolint:errcheck // 测试中忽略 accept 错误
+	t.Cleanup(func() { srv.Close(); ln.Close() })
+	addr := ln.Addr().String()
+
+	// 攻击者：裸 TCP 发 HTTP 探针后立刻断开（等价于指纹不符的客户端中断）
+	bad, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("attacker dial: %v", err)
+	}
+	_, _ = bad.Write([]byte("GET / HTTP/1.0\r\n\r\n"))
+	bad.Close()
+	time.Sleep(300 * time.Millisecond) // 等待握手 goroutine 处理完毕
+
+	if !strings.Contains(logBuf.String(), "tls handshake failed") {
+		t.Fatalf("handshake failure must be logged, got:\n%s", logBuf.String())
+	}
+
+	// 服务器必须仍然存活：合法 TLS 客户端（指纹 pinning，同产品实现）完成双端认证与桥接
+	dialTLS := func() net.Conn {
+		c, err := tls.Dial("tcp", addr, &tls.Config{
+			InsecureSkipVerify: true, // noqa：身份由下方指纹校验保证，非跳过校验
+			VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+				return selfcert.VerifyRawCerts(rawCerts, fp)
+			},
+		})
+		if err != nil {
+			t.Fatalf("tls dial after attack (server died?): %v", err)
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
+	}
+	phone := dialTLS()
+	authReq(t, phone, protocol.RolePhone, "secret")
+	expectFrame(t, phone, protocol.FrameAuthOK, 2*time.Second)
+
+	mac := dialTLS()
+	authReq(t, mac, protocol.RoleMac, "secret")
+	expectFrame(t, mac, protocol.FrameAuthOK, 2*time.Second)
+
+	// 桥接建立：mac 作为后到者，两端都应收到 PEER_STATE(online)
+	expectFrame(t, phone, protocol.FramePeerState, 2*time.Second)
+	expectFrame(t, mac, protocol.FramePeerState, 2*time.Second)
 }

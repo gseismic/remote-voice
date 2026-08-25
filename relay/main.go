@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -46,6 +47,14 @@ func main() {
 	}
 	fmt.Println("==================================================")
 	fmt.Printf("服务端证书指纹 (SHA-256 hex)，请填入两端客户端配置:\n%s\n", fingerprint)
+
+	// 打印手机端可粘贴的一行配置（host 为空时用占位符提示）
+	hostPart, portPart, _ := net.SplitHostPort(*addr)
+	if hostPart == "" {
+		hostPart = "<服务器IP>"
+	}
+	fmt.Printf("手机端配置串（App 设置 → 导入配置串）:\n  rv://%s:%s?t=%s&f=%s\n",
+		hostPart, portPart, token, fingerprint)
 	fmt.Println("==================================================")
 
 	if *pprofAddr != "" {
@@ -59,12 +68,15 @@ func main() {
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS12,
 	}
-	ln, err := tls.Listen("tcp", *addr, tlsCfg)
+	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatalf("监听 %s 失败: %v", *addr, err)
 	}
 
-	srv := server.New(server.Config{Token: token})
+	srv := server.New(server.Config{
+		Token:     token,
+		TlsConfig: tlsCfg,
+	})
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

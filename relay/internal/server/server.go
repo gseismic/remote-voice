@@ -5,7 +5,9 @@ package server
 
 import (
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -15,11 +17,19 @@ import (
 	"remote-voice/relay/internal/protocol"
 )
 
+// 握手与统计相关的常量。
+const (
+	tlsHandshakeTimeout = 10 * time.Second // TLS 握手截止，防慢速连接占住 goroutine
+	acceptRetryDelay    = 100 * time.Millisecond // Accept 暂时性错误后的退避
+	statsInterval       = 10 * time.Second // 音频流量统计窗口
+)
+
 // Config 服务器配置。零值字段使用默认值。
 type Config struct {
 	Token       string        // 预共享 token（必填）
 	ReadTimeout time.Duration // 读超时（心跳判定），默认 40s
 	AuthTimeout time.Duration // 等待 AUTH 帧超时，默认 10s
+	TlsConfig   *tls.Config   // 非nil 时对每条连接执行 TLS 握手；nil 则按裸 TCP 处理（测试用）
 	Logger      *log.Logger
 }
 
@@ -74,8 +84,16 @@ func (s *Server) Serve(ln net.Listener) error {
 			case <-s.quit:
 				return nil
 			default:
-				return fmt.Errorf("accept: %w", err)
 			}
+			// 监听器已被外部关闭（Close 与 Serve 并发的常规路径）
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			// 暂时性错误（如 fd 临时耗尽）：记录后退避重试，绝不因此终止服务。
+			// 修复：旧实现任何 Accept 错误都向上返回并导致整个进程退出。
+			s.cfg.Logger.Printf("accept error (继续运行): %v", err)
+			time.Sleep(acceptRetryDelay)
+			continue
 		}
 		go s.handleConn(conn)
 	}
@@ -105,12 +123,31 @@ func (s *Server) Close() {
 	}
 }
 
-// handleConn 处理单个连接的完整生命周期：认证(含原子占位) → 桥接通知 → 读循环 → 注销通知。
+// handleConn 处理单个连接的完整生命周期：
+// 记录接入 → TLS 握手（可选，失败仅断本连接）→ 认证(含原子占位) →
+// 桥接通知 → 流量统计 → 读循环 → 注销通知。
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
+	peer := conn.RemoteAddr().String()
+	s.cfg.Logger.Printf("accepted peer=%s", peer)
+
+	if s.cfg.TlsConfig != nil {
+		tc := tls.Server(conn, s.cfg.TlsConfig)
+		tc.SetDeadline(time.Now().Add(tlsHandshakeTimeout))
+		if err := tc.Handshake(); err != nil {
+			s.cfg.Logger.Printf("tls handshake failed peer=%s: %v", peer, err)
+			return
+		}
+		tc.SetDeadline(time.Time{}) // 清除握手截止，后续读写由各自超时管理
+		conn = tc
+		s.cfg.Logger.Printf("tls handshake ok peer=%s", peer)
+	}
 	setNoDelay(conn)
 
-	sess := &session{srv: s, conn: conn}
+	sess := &session{srv: s, conn: conn, peer: peer}
+	done := make(chan struct{})
+	defer close(done) // 终止 statsLoop，防 goroutine 泄漏
+
 	peerAtStart, ok := s.authenticate(sess)
 	if !ok {
 		return
@@ -122,16 +159,39 @@ func (s *Server) handleConn(conn net.Conn) {
 		sess.writeFrame(protocol.FramePeerState, []byte{protocol.PeerOnline})
 		peerAtStart.writeFrame(protocol.FramePeerState, []byte{protocol.PeerOnline})
 	}
-	s.cfg.Logger.Printf("bridged role=%s", sess.role)
+	s.cfg.Logger.Printf("bridged role=%s peer=%s", sess.role, peer)
 
+	go s.statsLoop(sess, done)
 	s.readLoop(sess)
 
-	peer := s.unregister(sess)
-	if peer != nil {
-		peer.writeFrame(protocol.FramePeerState, []byte{protocol.PeerOffline})
-		s.cfg.Logger.Printf("peer notified offline role=%s peer=%s", sess.role, peer.role)
+	peerSess := s.unregister(sess)
+	if peerSess != nil {
+		peerSess.writeFrame(protocol.FramePeerState, []byte{protocol.PeerOffline})
+		s.cfg.Logger.Printf("peer notified offline role=%s peer=%s", sess.role, peerSess.peer)
 	}
-	s.cfg.Logger.Printf("disconnected role=%s", sess.role)
+	s.cfg.Logger.Printf("disconnected role=%s peer=%s", sess.role, peer)
+}
+
+// statsLoop 周期性输出音频流量统计。仅当窗口内有增量才打日志，
+// 避免逐帧刷屏（50 帧/s）也避免空闲连接制造噪音。
+func (s *Server) statsLoop(sess *session, done <-chan struct{}) {
+	ticker := time.NewTicker(statsInterval)
+	defer ticker.Stop()
+	var lastFrames, lastBytes int64
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			frames := sess.audioFrames.Load()
+			if delta := frames - lastFrames; delta > 0 {
+				s.cfg.Logger.Printf("stats role=%s audio_frames=%d audio_bytes=%d (窗口 %v)",
+					sess.role, delta, sess.audioBytes.Load()-lastBytes, statsInterval)
+			}
+			lastFrames = frames
+			lastBytes = sess.audioBytes.Load()
+		}
+	}
 }
 
 // authenticate 读取并校验 AUTH 帧；校验通过后在同一临界区内完成槽位
@@ -141,7 +201,7 @@ func (s *Server) authenticate(sess *session) (peer *session, ok bool) {
 	sess.conn.SetReadDeadline(time.Now().Add(s.cfg.AuthTimeout))
 	typ, payload, err := protocol.ReadFrame(sess.conn)
 	if err != nil {
-		s.cfg.Logger.Printf("auth read error: %v", err)
+		s.cfg.Logger.Printf("auth read error peer=%s: %v", sess.peer, err)
 		return nil, false
 	}
 	if typ != protocol.FrameAuth {
@@ -163,7 +223,7 @@ func (s *Server) authenticate(sess *session) (peer *session, ok bool) {
 	}
 	// 常量时间比较，避免 token 逐字节探测
 	if subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.cfg.Token)) != 1 {
-		s.cfg.Logger.Printf("auth failed role=%s (bad token)", req.Role)
+		s.cfg.Logger.Printf("auth failed peer=%s role=%s (bad token)", sess.peer, req.Role)
 		sess.reject("invalid token")
 		return nil, false
 	}
@@ -186,7 +246,7 @@ func (s *Server) authenticate(sess *session) (peer *session, ok bool) {
 		sess.reject("role in use")
 		return nil, false
 	}
-	s.cfg.Logger.Printf("authenticated role=%s", sess.role)
+	s.cfg.Logger.Printf("authenticated role=%s peer=%s", sess.role, sess.peer)
 	return peer, ok
 }
 

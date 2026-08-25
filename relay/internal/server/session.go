@@ -16,8 +16,12 @@ type session struct {
 	srv     *Server
 	conn    net.Conn
 	role    string
+	peer    string // 远端地址字符串，仅用于日志展示
 	writeMu sync.Mutex // 串行化全部帧写
 	closed  atomic.Bool
+	// 音频接收计数（readLoop 单线程累加，statsLoop 原子读取）
+	audioFrames atomic.Int64
+	audioBytes  atomic.Int64
 }
 
 // writeFrame 串行化写出一帧。写失败视为连接已死，主动关闭以唤醒读循环。
@@ -32,8 +36,9 @@ func (s *session) writeFrame(typ byte, payload []byte) {
 	}
 }
 
-// reject 发送 AUTH_ERR；调用方随后关闭连接。
+// reject 发送 AUTH_ERR 并记录拒绝原因；调用方随后关闭连接。
 func (s *session) reject(msg string) {
+	s.srv.cfg.Logger.Printf("rejected peer=%s reason=%q", s.peer, msg)
 	s.writeFrame(protocol.FrameAuthErr, []byte(msg))
 }
 
@@ -65,6 +70,9 @@ func (s *Server) readLoop(sess *session) {
 			if peer != nil && peer != sess {
 				peer.writeFrame(protocol.FrameAudio, payload)
 			}
+			// 计数含未桥接时被丢弃的帧：反映的是"对端发来了什么"
+			sess.audioFrames.Add(1)
+			sess.audioBytes.Add(int64(len(payload)))
 			// 未桥接时到达的 AUDIO 直接丢弃（设计文档 §4.1）
 		default:
 			// 未知类型：payload 已被 ReadFrame 消费，继续运行（向前兼容）

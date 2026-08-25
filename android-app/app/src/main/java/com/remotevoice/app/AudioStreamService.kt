@@ -18,6 +18,9 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 
+/** UI 状态枚举：Activity 据此着色并控制按钮可用性。 */
+enum class StatusState { STOPPED, CONNECTING, WAIT_PEER, STREAMING, ERROR }
+
 /**
  * 前台采音服务：持有 RelayClient 与 AudioRecord 生命周期。
  * 前台服务(microphone 类型)保证后台采音不被系统杀死（设计文档 §6.3）。
@@ -32,7 +35,9 @@ class AudioStreamService : Service(), RelayClient.Listener {
 
     // UI 轮询的状态持有者（零依赖方案：Activity 每 500ms 读取）
     object Status {
+        @Volatile var state: StatusState = StatusState.STOPPED
         @Volatile var text: String = "未启动"
+        @Volatile var framesSent: Long = 0
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -50,6 +55,7 @@ class AudioStreamService : Service(), RelayClient.Listener {
 
     override fun onDestroy() {
         stopStreaming()
+        Status.state = StatusState.STOPPED
         Status.text = "未启动"
         super.onDestroy()
     }
@@ -58,18 +64,35 @@ class AudioStreamService : Service(), RelayClient.Listener {
         if (clientThread?.isAlive == true) return
 
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val server = prefs.getString(KEY_SERVER, "") ?: ""
+        // 服务器地址：prefs 为空时回落内置默认（需求：默认服务器免输入）
+        val server = (prefs.getString(KEY_SERVER, "") ?: "")
+            .ifBlank { DEFAULT_SERVER }
         val token = prefs.getString(KEY_TOKEN, "") ?: ""
         val fingerprint = prefs.getString(KEY_FINGERPRINT, "") ?: ""
         val host = server.substringBeforeLast(":")
         val port = server.substringAfterLast(":").toIntOrNull()
-        if (host.isEmpty() || port == null || token.isEmpty() || fingerprint.isEmpty()) {
-            Status.text = "配置不完整"
+        if (host.isEmpty() || port == null) {
+            Status.state = StatusState.ERROR
+            Status.text = "错误：服务器地址无效（设置中检查）"
+            stopSelf()
+            return
+        }
+        if (token.isEmpty()) {
+            Status.state = StatusState.ERROR
+            Status.text = "错误：未设置连接密码"
+            stopSelf()
+            return
+        }
+        if (fingerprint.isEmpty()) {
+            Status.state = StatusState.ERROR
+            Status.text = "错误：未配置服务端指纹（设置中填写）"
             stopSelf()
             return
         }
 
+        Status.framesSent = 0
         startForegroundWith("启动中…")
+        Status.state = StatusState.CONNECTING
         Status.text = "启动中…"
         client = RelayClient(host, port, token, fingerprint, this)
         clientThread = Thread({ client?.runForever() }, "relay-client").apply {
@@ -96,6 +119,13 @@ class AudioStreamService : Service(), RelayClient.Listener {
     // ---- RelayClient.Listener：状态回调均来自网络线程，仅做赋值与通知更新 ----
 
     override fun onState(text: String) {
+        // 状态归一：RelayClient 的文案 → UI 状态枚举（Activity 据此着色/禁用按钮）
+        Status.state = when {
+            text == "推流中" -> StatusState.STREAMING
+            text.contains("等待") -> StatusState.WAIT_PEER
+            text == "已停止" -> StatusState.STOPPED
+            else -> StatusState.CONNECTING
+        }
         Status.text = text
         mainHandler.post { updateNotification(text) }
     }
@@ -110,6 +140,7 @@ class AudioStreamService : Service(), RelayClient.Listener {
     }
 
     override fun onFatal(message: String) {
+        Status.state = StatusState.ERROR
         Status.text = "错误：$message"
         mainHandler.post {
             updateNotification("错误：$message")
@@ -145,7 +176,8 @@ class AudioStreamService : Service(), RelayClient.Listener {
             while (!Thread.currentThread().isInterrupted && audioRecord === record) {
                 val n = record.read(frame, 0, FRAME_BYTES)
                 if (n == FRAME_BYTES) {
-                    client?.sendAudio(frame) // 对端掉线时 sendAudio 返回 false，帧自然丢弃
+                    // 对端掉线时 sendAudio 返回 false，帧自然丢弃且不计数
+                    if (client?.sendAudio(frame) == true) Status.framesSent++
                 } else if (n < 0) {
                     Log.w(TAG, "AudioRecord.read 返回 $n")
                     break
@@ -215,6 +247,9 @@ class AudioStreamService : Service(), RelayClient.Listener {
     companion object {
         // 供外部组件（MainActivity）使用的动作与规格常量
         const val ACTION_STOP = "com.remotevoice.app.STOP"
+
+        // 默认服务器（需求指定），prefs 未配置时回落使用
+        const val DEFAULT_SERVER = "43.139.226.138:9432"
 
         // 音频规格：48kHz/mono/s16le/20ms 帧（设计文档 §4.1，与服务器/接收器一致）
         const val SAMPLE_RATE = 48000
