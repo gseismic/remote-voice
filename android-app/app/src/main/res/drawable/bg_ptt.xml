@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PTT 大按钮形状：暗色圆盘 + 细描边（按下时绿色描边用 selector 呈现） -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_pressed="true">
+        <shape android:shape="oval">
+            <solid android:color="#1E3A2A" />
+            <stroke android:width="3dp" android:color="#3FB950" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#20262F" />
+            <stroke android:width="2dp" android:color="#3A4452" />
+        </shape>
+    </item>
+</selector>

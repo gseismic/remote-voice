@@ -1,6 +1,7 @@
 package com.remotevoice.app
 
 import android.util.Log
+import org.json.JSONObject
 import java.io.DataInputStream
 import java.io.IOException
 import java.io.OutputStream
@@ -10,18 +11,19 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 
 /**
- * relay 线路协议客户端（设计文档 §4）。
+ * relay 线路协议客户端（v2 注册制）。
  *
  * 帧格式: [1B type][4B length BigEndian][payload]
  * 类型: AUTH=0x01 AUTH_OK=0x02 AUTH_ERR=0x03 AUDIO=0x04 PING=0x05 PONG=0x06 PEER_STATE=0x07
  *
- * 本类只负责连接与协议状态机，不直接触碰 AudioRecord；
- * 音频帧的来源由回调 [onPeerOnline]/[onPeerOffline] 驱动外部采音循环。
+ * v2 认证模型：手机只携带 规范化秘密的 SHA-256 hex（长度固定 64），
+ * AUTH_OK 附目标 Mac 设备名（app 用于"首次连接自动命名"）。
+ * 任何 AUTH_ERR 均视为不可自动恢复（原因码转人性化文案交给 UI）。
  */
 class RelayClient(
     private val host: String,
     private val port: Int,
-    private val token: String,
+    private val secretHex: String,
     private val fingerprintHex: String,
     private val listener: Listener,
 ) {
@@ -29,7 +31,10 @@ class RelayClient(
         /** 状态文本变化（已本地化，可直接展示）。 */
         fun onState(text: String)
 
-        /** 对端上线：开始采音发送。 */
+        /** 对端名字（AUTH_OK 回传），用于设备条目自动命名。 */
+        fun onPeerName(name: String)
+
+        /** 对端上线：开始采音（实际发送受 PTT 门控）。 */
         fun onPeerOnline()
 
         /** 对端掉线：暂停采音（连接保持）。 */
@@ -39,7 +44,7 @@ class RelayClient(
         fun onFatal(message: String)
     }
 
-    // ---- 协议常量（必须与 relay/internal/protocol 保持一致）----
+    // ---- 协议常量（必须与 relay/internal/protocol 保持一致；v2）----
     private val frameAuth = 0x01
     private val frameAuthOk = 0x02
     private val frameAuthErr = 0x03
@@ -50,7 +55,7 @@ class RelayClient(
     private val peerOnlineByte = 0x01
 
     private val maxPayload = 65536
-    private val protoVersion = 1
+    private val protoVersion = 2
     private val rolePhone = "phone"
 
     private val pingIntervalMs = 10_000L   // NAT 保活 + 活性探测（设计文档 §4.3）
@@ -59,6 +64,8 @@ class RelayClient(
 
     @Volatile private var running = false
     @Volatile private var peerOnline = false
+    @Volatile var peerName: String = ""
+        private set
     private var socket: SSLSocket? = null
     private val outLock = Any()
 
@@ -123,9 +130,9 @@ class RelayClient(
         sock.tcpNoDelay = true
         Log.i(TAG, "tls connected")
 
-        // AUTH 必须是首帧（服务器 10s 内等待）
+        // AUTH 必须是首帧（服务器 10s 内等待）：v2 手机只带秘密哈希
         sock.soTimeout = AUTH_TIMEOUT_MS
-        val authJson = "{\"role\":\"$rolePhone\",\"token\":\"${jsonEscape(token)}\",\"proto\":$protoVersion}"
+        val authJson = "{\"role\":\"$rolePhone\",\"secret\":\"${jsonEscape(secretHex)}\",\"proto\":$protoVersion}"
         sendFrame(frameAuth, authJson.toByteArray(Charsets.UTF_8))
         listener.onState("认证中…")
 
@@ -139,12 +146,21 @@ class RelayClient(
         var payload = ByteArray(len)
         input.readFully(payload)
         when (type) {
-            frameAuthOk -> Log.i(TAG, "auth ok")
-            frameAuthErr -> throw FatalProtocolError("认证被拒: ${String(payload, Charsets.UTF_8)}")
+            frameAuthOk -> {
+                // v2：AUTH_OK 携带 Mac 设备名（自动命名数据源）
+                peerName = try {
+                    JSONObject(String(payload, Charsets.UTF_8)).optString("mac", "")
+                } catch (_: Exception) {
+                    ""
+                }
+                listener.onPeerName(peerName)
+                Log.i(TAG, "auth ok, peer=$peerName")
+            }
+            frameAuthErr -> throw FatalProtocolError(reasonText(String(payload, Charsets.UTF_8)))
             else -> throw FatalProtocolError("认证应答异常 type=0x%02x".format(type))
         }
 
-        listener.onState("已连接，等待 Mac 上线…")
+        listener.onState(if (peerName.isBlank()) "已连接，等待 Mac 上线…" else "已连接 · $peerName")
         peerOnline = false
         sock.soTimeout = readTimeoutMs
 
@@ -184,13 +200,22 @@ class RelayClient(
         if (payload.isEmpty()) return
         if (payload[0].toInt() == peerOnlineByte) {
             peerOnline = true
-            listener.onState("推流中")
+            listener.onState(if (peerName.isBlank()) "推流中" else "传输中 · $peerName")
             listener.onPeerOnline()
         } else {
             peerOnline = false
-            listener.onState("已连接服务器，等待 Mac 上线…")
+            listener.onState(if (peerName.isBlank()) "已连接服务器，等待 Mac 上线…" else "已连接 · $peerName")
             listener.onPeerOffline()
         }
+    }
+
+    /** AUTH_ERR 原因码 → 人性化文案（v2 枚举）。 */
+    private fun reasonText(reason: String): String = when (reason) {
+        "invalid-secret" -> "未找到匹配设备（该 Mac 未在线或秘密已更新）"
+        "secret-expired" -> "临时秘密已过期，请在 Mac 端更新或删除该设备后重试"
+        "peer-busy" -> "目标 Mac 正在其他会话中，稍后再试"
+        "rate-limited" -> "尝试过于频繁，已被临时锁定（1 分钟后再试）"
+        else -> "认证被拒（$reason）"
     }
 
     private fun readLength(header: ByteArray): Int {

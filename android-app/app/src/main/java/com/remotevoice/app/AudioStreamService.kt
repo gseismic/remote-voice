@@ -22,8 +22,10 @@ import android.util.Log
 enum class StatusState { STOPPED, CONNECTING, WAIT_PEER, STREAMING, ERROR }
 
 /**
- * 前台采音服务：持有 RelayClient 与 AudioRecord 生命周期。
+ * 前台采音服务（v2）：持有 RelayClient 与 AudioRecord 生命周期。
  * 前台服务(microphone 类型)保证后台采音不被系统杀死（设计文档 §6.3）。
+ * v2 交互：按住说话（PTT）——采音循环常开，但仅在「按住或免提常开」时发送；
+ * 设备名在认证成功后由 AUTH_OK 回写 [RelayClient.Listener.onPeerName]。
  */
 class AudioStreamService : Service(), RelayClient.Listener {
 
@@ -33,11 +35,22 @@ class AudioStreamService : Service(), RelayClient.Listener {
     @Volatile private var audioRecord: AudioRecord? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    /** 免提常开：设置为 true 时相当于 v1 持续推流（默认关闭=仅按住说话）。 */
+    @Volatile private var handsfree = false
+    @Volatile private var pttHeld = false
+
     // UI 轮询的状态持有者（零依赖方案：Activity 每 500ms 读取）
     object Status {
         @Volatile var state: StatusState = StatusState.STOPPED
         @Volatile var text: String = "未启动"
         @Volatile var framesSent: Long = 0
+        @Volatile var peerName: String = ""
+        @Volatile var talking: Boolean = false
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -54,9 +67,11 @@ class AudioStreamService : Service(), RelayClient.Listener {
     }
 
     override fun onDestroy() {
+        instance = null
         stopStreaming()
         Status.state = StatusState.STOPPED
         Status.text = "未启动"
+        Status.talking = false
         super.onDestroy()
     }
 
@@ -64,10 +79,10 @@ class AudioStreamService : Service(), RelayClient.Listener {
         if (clientThread?.isAlive == true) return
 
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        handsfree = prefs.getBoolean(KEY_HANDSFREE, false)
         // 服务器地址：prefs 为空时回落内置默认（需求：默认服务器免输入）
         val server = (prefs.getString(KEY_SERVER, "") ?: "")
             .ifBlank { DEFAULT_SERVER }
-        val token = prefs.getString(KEY_TOKEN, "") ?: ""
         val fingerprint = prefs.getString(KEY_FINGERPRINT, "") ?: ""
         val host = server.substringBeforeLast(":")
         val port = server.substringAfterLast(":").toIntOrNull()
@@ -77,24 +92,29 @@ class AudioStreamService : Service(), RelayClient.Listener {
             stopSelf()
             return
         }
-        if (token.isEmpty()) {
-            Status.state = StatusState.ERROR
-            Status.text = "错误：未设置连接密码"
-            stopSelf()
-            return
-        }
         if (fingerprint.isEmpty()) {
             Status.state = StatusState.ERROR
             Status.text = "错误：未配置服务端指纹（设置中填写）"
             stopSelf()
             return
         }
+        // 激活设备：秘密原文（规范化后本地算哈希，只传 hex 给 relay）
+        val device = DeviceStore(this).active()
+        if (device == null || device.secret.isBlank()) {
+            Status.state = StatusState.ERROR
+            Status.text = "错误：尚无激活设备，请添加 Mac 秘密"
+            stopSelf()
+            return
+        }
+        val secretHex = secretHashHex(device.secret)
 
         Status.framesSent = 0
+        Status.peerName = device.name
+        Status.talking = false
         startForegroundWith("启动中…")
         Status.state = StatusState.CONNECTING
         Status.text = "启动中…"
-        client = RelayClient(host, port, token, fingerprint, this)
+        client = RelayClient(host, port, secretHex, fingerprint, this)
         clientThread = Thread({ client?.runForever() }, "relay-client").apply {
             start()
         }
@@ -121,13 +141,22 @@ class AudioStreamService : Service(), RelayClient.Listener {
     override fun onState(text: String) {
         // 状态归一：RelayClient 的文案 → UI 状态枚举（Activity 据此着色/禁用按钮）
         Status.state = when {
-            text == "推流中" -> StatusState.STREAMING
+            text == "推流中" || text.startsWith("传输中") -> StatusState.STREAMING
             text.contains("等待") -> StatusState.WAIT_PEER
             text == "已停止" -> StatusState.STOPPED
             else -> StatusState.CONNECTING
         }
         Status.text = text
         mainHandler.post { updateNotification(text) }
+    }
+
+    override fun onPeerName(name: String) {
+        if (name.isBlank()) return
+        Status.peerName = name
+        // 首次连接自动命名：设备条目无别名时用 Mac 回传名补全（开放问题②落地）
+        DeviceStore(this).fillNameIfEmpty(
+            DeviceStore(this).activeId(), name
+        )
     }
 
     override fun onPeerOnline() {
@@ -147,6 +176,18 @@ class AudioStreamService : Service(), RelayClient.Listener {
             stopSelf()
         }
     }
+
+    // ---- PTT 门控（Activity 线程调用） ----
+
+    /** 按住说话：按下开始传输、松开停止（仅影响发送，不影响连接）。 */
+    fun setTalking(on: Boolean) {
+        pttHeld = on
+        Status.talking = on
+        mainHandler.post { updateNotification(if (on) "正在传输…" else Status.text) }
+    }
+
+    /** 是否满足发送条件（按住 或 免提常开）。 */
+    private fun shouldSend(): Boolean = handsfree || pttHeld
 
     // ---- 采音循环：仅在对端在线期间运行 ----
 
@@ -176,8 +217,9 @@ class AudioStreamService : Service(), RelayClient.Listener {
             while (!Thread.currentThread().isInterrupted && audioRecord === record) {
                 val n = record.read(frame, 0, FRAME_BYTES)
                 if (n == FRAME_BYTES) {
-                    // 对端掉线时 sendAudio 返回 false，帧自然丢弃且不计数
-                    if (client?.sendAudio(frame) == true) Status.framesSent++
+                    // PTT 门控：未按住且非免提常开时，帧读出即弃（麦克风保持取音，
+                    // 数据不出本机；对端掉线时 sendAudio 返回 false，同样不计数）
+                    if (shouldSend() && client?.sendAudio(frame) == true) Status.framesSent++
                 } else if (n < 0) {
                     Log.w(TAG, "AudioRecord.read 返回 $n")
                     break
@@ -255,14 +297,26 @@ class AudioStreamService : Service(), RelayClient.Listener {
         const val SAMPLE_RATE = 48000
         const val FRAME_BYTES = 1920
 
+        /** 当前服务实例（MainActivity PT T 门控调用）；null=未在运行。 */
+        @Volatile var instance: AudioStreamService? = null
+            private set
+
+        /** 秘密规范化（去空格/连字符+大写）后 SHA-256 hex——传输与 relay 一致。 */
+        fun secretHashHex(secret: String): String {
+            val norm = secret.filter { it != ' ' && it != '-' }.uppercase()
+            return java.security.MessageDigest.getInstance("SHA-256")
+                .digest(norm.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+        }
+
         // 仅内部使用
         private const val TAG = "AudioStreamService"
         private const val CHANNEL_ID = "relay_stream"
         private const val NOTIFY_ID = 1
         private const val PREFS = "config"
         private const val KEY_SERVER = "server"
-        private const val KEY_TOKEN = "token"
         private const val KEY_FINGERPRINT = "fingerprint"
         private const val KEY_AEC = "aec"
+        const val KEY_HANDSFREE = "handsfree"
     }
 }

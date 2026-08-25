@@ -2,6 +2,7 @@ package com.remotevoice.app
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
@@ -11,33 +12,38 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Menu
 import android.view.MenuItem
+import android.view.MotionEvent
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import java.security.SecureRandom
 
 /**
- * 主界面（极简）：连接密码输入/生成 + 启停控制 + 着色状态。
- * 服务器地址与指纹等一次性配置收在 [SettingsActivity]；
- * 密码即三端共享的 token 原文（不做透明派生，保证所见即所得）。
+ * 主界面（v2 对讲式）：连接状态条 + 设备芯片（单选激活）+ 底部按住说话（PTT）。
+ * 服务器/指纹等一次性配置收在 [SettingsActivity]；
+ * 每台 Mac 的秘密保存在设备条目中（新增即激活），按住说话即传输。
  */
 class MainActivity : Activity() {
 
     private lateinit var prefs: SharedPreferences
+    private lateinit var store: DeviceStore
     private lateinit var statusView: TextView
+    private lateinit var devicesRow: LinearLayout
+    private lateinit var pttBtn: Button
     private lateinit var startBtn: Button
-    private lateinit var pwdEdit: EditText
+    private lateinit var stopBtn: Button
     private val pollHandler = Handler(Looper.getMainLooper())
 
     private val pollTask = object : Runnable {
         override fun run() {
             val st = AudioStreamService.Status
-            statusView.text = if (st.state == StatusState.STREAMING) {
+            val line = if (st.state == StatusState.STREAMING) {
                 "${st.text}\n已发送 ${st.framesSent} 帧"
             } else {
                 st.text
             }
+            statusView.text = line
             statusView.setTextColor(
                 when (st.state) {
                     StatusState.STREAMING -> COLOR_GREEN
@@ -47,9 +53,9 @@ class MainActivity : Activity() {
                     else -> COLOR_GRAY
                 }
             )
-            // 运行期间禁止重复启动；停止/出错态允许再次开始
             startBtn.isEnabled = st.state == StatusState.STOPPED ||
                 st.state == StatusState.ERROR
+            stopBtn.isEnabled = !startBtn.isEnabled
             pollHandler.postDelayed(this, 500)
         }
     }
@@ -57,41 +63,45 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        store = DeviceStore(this)
         setContentView(R.layout.activity_main)
 
-        pwdEdit = findViewById(R.id.edit_password)
         statusView = findViewById(R.id.text_status)
+        devicesRow = findViewById(R.id.devices_row)
+        pttBtn = findViewById(R.id.btn_ptt)
         startBtn = findViewById(R.id.btn_start)
-        val stopBtn = findViewById<Button>(R.id.btn_stop)
-        val genBtn = findViewById<Button>(R.id.btn_gen)
+        stopBtn = findViewById(R.id.btn_stop)
 
-        pwdEdit.setText(prefs.getString(KEY_TOKEN, ""))
+        renderDevices()
 
-        genBtn.setOnClickListener {
-            pwdEdit.setText(generatePassword())
-            Toast.makeText(this, R.string.toast_generated, Toast.LENGTH_SHORT).show()
+        // PTT：按下即传、松开即停（边沿由 ACTION_DOWN/UP/CANCEL 保证；滑出也可停）
+        pttBtn.setOnTouchListener { _, ev ->
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    pttBtn.isPressed = true
+                    val svc = AudioStreamService.instance
+                    if (svc == null) {
+                        Toast.makeText(this, "请先点击「连接」开启中继", Toast.LENGTH_SHORT).show()
+                    } else {
+                        svc.setTalking(true)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    pttBtn.isPressed = false
+                    AudioStreamService.instance?.setTalking(false)
+                    true
+                }
+                else -> false
+            }
         }
+
         startBtn.setOnClickListener {
-            val password = pwdEdit.text.toString().trim()
-            if (password.isEmpty()) {
-                Toast.makeText(this, R.string.err_no_password, Toast.LENGTH_SHORT).show()
+            val active = store.active()
+            if (active == null) {
+                showAddDeviceDialog()
                 return@setOnClickListener
             }
-            val server = prefs.getString(KEY_SERVER, null)?.takeIf { it.isNotBlank() }
-                ?: AudioStreamService.DEFAULT_SERVER
-            val fp = ConfigParser.normalizeFingerprint(
-                prefs.getString(KEY_FINGERPRINT, "") ?: ""
-            )
-            if (fp.length != 64) {
-                Toast.makeText(this, R.string.err_no_fingerprint, Toast.LENGTH_LONG).show()
-                startActivity(Intent(this, SettingsActivity::class.java))
-                return@setOnClickListener
-            }
-            prefs.edit()
-                .putString(KEY_TOKEN, password)
-                .putString(KEY_SERVER, server)
-                .putString(KEY_FINGERPRINT, fp)
-                .apply()
             requestPermissionsThenStart()
         }
         stopBtn.setOnClickListener {
@@ -102,8 +112,142 @@ class MainActivity : Activity() {
         }
     }
 
+    // ---- 设备芯片 ----
+
+    private fun renderDevices() {
+        devicesRow.removeAllViews()
+        val devices = store.list()
+        for (d in devices) {
+            val active = store.active()?.id == d.id
+            val chip = TextView(this).apply {
+                text = (if (active) "● " else "○ ") + d.name.ifBlank { d.secret.take(10) }
+                textSize = 13f
+                setTextColor(if (active) COLOR_GREEN else COLOR_GRAY)
+                setBackgroundResource(
+                    if (active) R.drawable.chip_active else R.drawable.chip
+                )
+                setPadding(26, 14, 26, 14)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { marginEnd = 16 }
+            }
+            chip.setOnClickListener {
+                store.activate(d.id)
+                renderDevices()
+                Toast.makeText(this, "已切换到 ${d.name.ifBlank { "设备" }}", Toast.LENGTH_SHORT).show()
+            }
+            chip.setOnLongClickListener {
+                showDeviceMenu(d)
+                true
+            }
+            devicesRow.addView(chip)
+        }
+        val add = TextView(this).apply {
+            text = "＋ 添加"
+            textSize = 13f
+            setTextColor(COLOR_GRAY)
+            setBackgroundResource(R.drawable.chip_add)
+            setPadding(26, 14, 26, 14)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        add.setOnClickListener { showAddDeviceDialog() }
+        devicesRow.addView(add)
+    }
+
+    private fun showDeviceMenu(d: DeviceStore.Device) {
+        val menu = arrayOf("重命名 / 修改秘密", "删除设备")
+        AlertDialog.Builder(this)
+            .setTitle(d.name.ifBlank { "设备" })
+            .setItems(menu) { _, which ->
+                when (which) {
+                    0 -> showEditDeviceDialog(d)
+                    1 -> {
+                        store.remove(d.id)
+                        renderDevices()
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun showAddDeviceDialog() {
+        val alias = EditText(this).apply {
+            hint = "设备名（选填，首次连接后自动补全）"
+            setSingleLine(true)
+        }
+        val secret = EditText(this).apply {
+            hint = "Mac 端显示的临时/永久秘密"
+            setSingleLine(true)
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 8)
+            addView(alias)
+            addView(secret)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("借用 Mac 的秘密添加设备")
+            .setView(box)
+            .setPositiveButton("添加") { _, _ ->
+                val s = secret.text.toString().trim()
+                if (s.isEmpty()) {
+                    Toast.makeText(this, "秘密不能为空", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                store.add(alias.text.toString().trim(), s, typeOf(s))
+                renderDevices()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showEditDeviceDialog(d: DeviceStore.Device) {
+        val alias = EditText(this).apply {
+            setText(d.name)
+            hint = "设备名"
+            setSingleLine(true)
+        }
+        val secret = EditText(this).apply {
+            setText(d.secret)
+            hint = "秘密"
+            setSingleLine(true)
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 8)
+            addView(alias)
+            addView(secret)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("修改设备")
+            .setView(box)
+            .setPositiveButton("保存") { _, _ ->
+                val s = secret.text.toString().trim()
+                if (s.isEmpty()) {
+                    Toast.makeText(this, "秘密不能为空", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                store.update(d.id, alias.text.toString().trim(), s, typeOf(s))
+                renderDevices()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    /** 类型启发：≥12 位视为永久，否则视为临时（仅用于展示，不影响认证）。 */
+    private fun typeOf(secret: String): String {
+        val norm = secret.filter { it != ' ' && it != '-' }
+        return if (norm.length >= 12) "perm" else "temp"
+    }
+
+    // ---- 服务启停 ----
+
     override fun onResume() {
         super.onResume()
+        renderDevices()
         pollHandler.post(pollTask)
     }
 
@@ -125,15 +269,6 @@ class MainActivity : Activity() {
             }
             else -> super.onOptionsItemSelected(item)
         }
-
-    /** 高熵随机密码：剔除易混淆字符（0O1lI）的 base58 风格字母表，163bit 强度。 */
-    private fun generatePassword(): String {
-        val alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz"
-        val rnd = SecureRandom()
-        val sb = StringBuilder(28)
-        repeat(28) { sb.append(alphabet[rnd.nextInt(alphabet.length)]) }
-        return sb.toString()
-    }
 
     private fun requestPermissionsThenStart() {
         val needed = mutableListOf(Manifest.permission.RECORD_AUDIO)
@@ -172,9 +307,6 @@ class MainActivity : Activity() {
 
     private companion object {
         const val PREFS = "config"
-        const val KEY_TOKEN = "token"
-        const val KEY_SERVER = "server"
-        const val KEY_FINGERPRINT = "fingerprint"
         const val REQ_PERMS = 1
 
         val COLOR_GREEN = 0xFF2E7D32.toInt()
