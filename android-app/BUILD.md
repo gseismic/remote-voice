@@ -81,24 +81,34 @@ sdkmanager "platform-tools" "platforms;android-35" "build-tools;34.0.0"
 echo "sdk.dir=$HOME/Android/Sdk" > android-app/local.properties
 ```
 
-### 3.4 生成 Gradle Wrapper
+### 3.4 Gradle Wrapper
 
-仓库未提交 `gradlew`，首次需要用本地 Gradle 生成。**注意：系统的 Gradle 必须 ≥ 8.7**
-（可用 `gradle --version` 确认；Ubuntu apt 装的 4.x 不行）。若没有新版 Gradle：
+> **2026-08-26 起 wrapper 已提交进仓库**：clone 后直接执行 `./gradlew` 即可，
+> 本小节仅当仓库中不存在 `gradlew` 时才需要。
+
+wrapper 会把项目锁定的 Gradle 版本写进 `gradle/wrapper/`，此后任何机器上执行
+`./gradlew` 都自动下载并使用同一版本。生成它需要一个本地 **Gradle ≥ 8.7**；
+⚠️ 实测教训：Ubuntu apt 自带的 4.4.1 跑在 JDK 17 上会直接报出模糊错误
+`Could not create service of type ScriptPluginFactory...`（老 Gradle 不认识新 JDK）。
+且 `export PATH` **只对当前终端会话生效**，新开终端就会退回系统旧版——
+所以推荐移到固定位置、用绝对路径调用：
 
 ```bash
+# 1. 临时获取 Gradle 8.9
 cd $(mktemp -d)
 wget https://services.gradle.org/distributions/gradle-8.9-bin.zip
 unzip gradle-8.9-bin.zip
-export PATH=$PATH:$(pwd)/gradle-8.9/bin
-gradle --version    # 应显示 8.9
+mkdir -p ~/opt && mv gradle-8.9 ~/opt/     # 固定位置，避免放在 /tmp 重启后被清
+
+# 2. 校验：应显示 Gradle 8.9 且 JVM 为 17
+~/opt/gradle-8.9/bin/gradle --version
 ```
 
-然后在工程目录生成 wrapper（之后不再依赖这份手动下载的 Gradle）：
+然后在工程目录生成 wrapper（之后日常构建只认 `./gradlew`）：
 
 ```bash
 cd android-app
-gradle wrapper --gradle-version 8.9
+~/opt/gradle-8.9/bin/gradle wrapper --gradle-version 8.9
 ```
 
 ### 3.5 编译
@@ -164,6 +174,7 @@ App 内依次填入（三项均来自服务器/Mac 侧部署，详见 `../README
 | 现象 | 原因与解决 |
 |---|---|
 | `SDK location not found` | 未配置 SDK 路径，见 §3.3 |
+| `Could not create service of type ScriptPluginFactory...` | 跑了太老的 Gradle（如系统自带 4.4.1）+ 新 JDK 的组合。`gradle --version` 看实际版本，`which -a gradle` 查 PATH 里混入的旧版；改用绝对路径调用新版（见 §3.4） |
 | `Android Gradle plugin requires Java 17 ...` 或 `Unsupported class file major version` | 当前 java 不是 17，`update-alternatives --config java` 切换 |
 | `Could not find com.android.application:com.android.application.gradle.plugin:8.5.2` 或依赖下载超时 | 网络：需能访问 `dl.google.com`、`repo.maven.apache.org`；wrapper 下载慢可改 `gradle/wrapper/gradle-wrapper.properties` 中 URL 为腾讯镜像 `https://mirrors.cloud.tencent.com/gradle/gradle-8.9-bin.zip` |
 | `You have not accepted the license agreements` | 执行 `yes | sdkmanager --licenses` |

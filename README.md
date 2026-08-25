@@ -67,7 +67,7 @@ python3 mac-receiver/receiver.py \
 
 ```bash
 cd android-app
-gradle wrapper && ./gradlew assembleDebug   # 本机需 Android SDK
+./gradlew assembleDebug   # 本机需 JDK 17 与 Android SDK，环境搭建详见 android-app/BUILD.md
 adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
