@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>remote-voice Android UI 原型 v1</title>
+<style>
+  /* ========= 页面底 ========= */
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: "Roboto","Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+    background:#e8eaed; min-height:100vh; padding:32px 24px 48px;
+    display:flex; flex-direction:column; align-items:center; gap:28px;
+  }
+  h1 { font-size:20px; color:#202124; }
+  .sub { font-size:13px; color:#5f6368; max-width:760px; text-align:center; line-height:1.7; }
+  .toolbar { display:flex; gap:12px; }
+  .toolbar button {
+    border:1px solid #dadce0; background:#fff; color:#202124; border-radius:18px;
+    padding:6px 16px; font-size:13px; cursor:pointer;
+  }
+  .toolbar button.on { background:#1a73e8; border-color:#1a73e8; color:#fff; }
+
+  .stage { display:flex; gap:48px; flex-wrap:wrap; justify-content:center; }
+
+  .col { display:flex; flex-direction:column; align-items:center; gap:14px; }
+  .col > .caption { font-size:15px; font-weight:bold; color:#202124; }
+  .col > .src { font-size:12px; color:#5f6368; font-family:Consolas,monospace; }
+
+  /* ========= 手机框 ========= */
+  .phone {
+    width:340px; height:660px; background:#f5f5f5; border-radius:26px;
+    border:10px solid #202124; overflow:hidden; display:flex; flex-direction:column;
+    box-shadow:0 12px 32px rgba(0,0,0,.25); transition:background .25s;
+  }
+
+  /* Action Bar */
+  .appbar {
+    background:#2d2d2d; color:#fff; height:52px; flex:none;
+    display:flex; align-items:center; padding:0 8px 0 16px; gap:8px;
+  }
+  .appbar .back { font-size:20px; opacity:.9; cursor:pointer; }
+  .appbar .title { font-size:17px; flex:1; }
+  .appbar .menu { font-size:18px; letter-spacing:2px; cursor:pointer; padding:0 8px; }
+
+  .content { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:16px; }
+
+  /* 卡片 */
+  .card {
+    background:#fff; border-radius:14px; padding:16px;
+    box-shadow:0 1px 3px rgba(0,0,0,.08); transition:background .25s;
+  }
+  .card .h { font-size:15px; font-weight:bold; color:#202124; }
+  .card .desc { font-size:12px; color:#5f6368; margin-top:4px; line-height:1.5; }
+
+  .field-label { font-size:13px; color:#202124; margin-top:12px; }
+  input[type=text] {
+    width:100%; margin-top:6px; padding:11px 12px; font-size:14px;
+    border:1px solid #dadce0; border-radius:8px; outline:none; background:#fff; color:#202124;
+  }
+  input:focus { border-color:#1a73e8; }
+
+  .row { display:flex; align-items:center; gap:8px; margin-top:8px; }
+  .row input { flex:1; margin-top:0; }
+
+  /* 按钮（DeviceDefault 强调色近似）*/
+  .btn {
+    display:inline-flex; align-items:center; justify-content:center;
+    background:#1a73e8; color:#fff; border:none; border-radius:6px;
+    font-size:15px; padding:12px 16px; cursor:pointer; user-select:none;
+  }
+  .btn.small { padding:11px 14px; font-size:13px; flex:none; }
+  .btn.block { width:100%; margin-top:16px; }
+  .btn.half { flex:1; height:56px; }
+  .btn.disabled { background:#c4c7c5; cursor:not-allowed; }
+
+  /* 开关 */
+  .switch-row { display:flex; align-items:center; justify-content:space-between; margin-top:14px; }
+  .switch-row span { font-size:14px; color:#202124; }
+  .sw { width:38px; height:20px; border-radius:10px; background:#bdc1c6; position:relative; cursor:pointer; transition:.2s; flex:none;}
+  .sw::after { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:#fff; transition:.2s; box-shadow:0 1px 2px rgba(0,0,0,.3);}
+  .sw.on { background:#1a73e8; }
+  .sw.on::after { left:20px; }
+
+  /* 状态演示 */
+  .status-line { font-size:17px; font-weight:bold; margin-top:4px; white-space:pre-line; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+  .chip {
+    font-size:11px; border:1px solid #dadce0; border-radius:12px; padding:4px 10px;
+    cursor:pointer; color:#5f6368; background:transparent;
+  }
+  .chip.on { border-color:#1a73e8; color:#1a73e8; font-weight:bold; }
+
+  /* 暗色 */
+  .dark .phone { background:#121212; }
+  .dark .card { background:#1e1e1e; }
+  .dark .card .h, .dark .field-label, .dark .switch-row span { color:#e8eaed; }
+  .dark .card .desc, .dark .chip { color:#9aa0a6; }
+  .dark input[type=text] { background:#2a2a2a; color:#e8eaed; border-color:#3c4043; }
+  .dark .btn { background:#8ab4f8; color:#202124; }
+  .dark .btn.disabled { background:#3c4043; color:#80868b; }
+  .dark .chip.on { color:#8ab4f8; border-color:#8ab4f8; }
+  .dark .toolbar button { background:#303134; border-color:#3c4043; color:#e8eaed; }
+  .dark .toolbar button.on { background:#8ab4f8; color:#202124; }
+  .dark h1, .dark .col > .caption { color:#e8eaed; }
+
+  /* 注释区 */
+  .notes {
+    max-width:900px; background:#fff; border-radius:12px; padding:20px 24px;
+    font-size:13px; color:#3c4043; line-height:1.9;
+  }
+  .notes b { color:#202124; }
+  .notes code { background:#f1f3f4; border-radius:4px; padding:1px 6px; font-size:12px; }
+  .notes li { margin-left:18px; }
+  .dark .notes { background:#1e1e1e; color:#bdc1c6; }
+  .dark .notes b, .dark .notes code { color:#e8eaed; }
+  .dark .notes code { background:#303134; }
+</style>
+</head>
+<body>
+<h1>remote-voice · Android App UI 原型 v1</h1>
+<div class="sub">
+  忠实还原当前代码的两个界面（MainActivity 主界面 / SettingsActivity 设置页）。
+  可切换 明/暗 主题；主界面状态栏支持五种状态演示。
+</div>
+<div class="toolbar" id="themeBar">
+  <button id="btnLight" class="on">☀ 浅色</button>
+  <button id="btnDark">🌙 深色（DayNight）</button>
+</div>
+
+<div class="stage">
+
+  <!-- ================= 主界面 ================= -->
+  <div class="col">
+    <div class="caption">主界面 —— 只需一个连接密码</div>
+    <div class="src">activity_main.xml · MainActivity.kt</div>
+    <div class="phone">
+      <div class="appbar">
+        <span class="title">远程麦克风</span>
+        <span class="menu">⋮<div style="font-size:11px;display:inline">设置</div></span>
+      </div>
+      <div class="content">
+
+        <!-- 连接密码卡片 -->
+        <div class="card">
+          <div class="h">连接密码</div>
+          <div class="desc">需与服务器 token.txt、Mac 端 --token 完全一致</div>
+          <div class="row">
+            <input type="text" value="" placeholder="输入密码，或点「生成」">
+            <span class="btn small">生成</span>
+          </div>
+        </div>
+
+        <!-- 控制按钮 -->
+        <div class="row" style="margin-top:0">
+          <span class="btn half" id="btnStart">开始推流</span>
+          <span class="btn half">停止</span>
+        </div>
+
+        <!-- 状态卡片 -->
+        <div class="card">
+          <div class="desc" style="margin:0">状态</div>
+          <div class="status-line" id="statusLine" style="color:#8A8A8A">未启动</div>
+          <div class="chips" id="stateChips"></div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 设置页 ================= -->
+  <div class="col">
+    <div class="caption">设置页 —— 一次性配置收纳于此</div>
+    <div class="src">activity_settings.xml · SettingsActivity.kt</div>
+    <div class="phone">
+      <div class="appbar">
+        <span class="back">←</span>
+        <span class="title">设置</span>
+      </div>
+      <div class="content">
+
+        <!-- 导入配置串 -->
+        <div class="card">
+          <div class="h">导入配置串</div>
+          <div class="desc">粘贴 relay 启动时打印的 rv:// 一行配置，自动填全下方各项与主界面密码</div>
+          <input type="text" placeholder="rv://服务器IP:9432?t=密码&f=指纹">
+          <span class="btn block">解析并填入</span>
+        </div>
+
+        <!-- 服务器 -->
+        <div class="card">
+          <div class="h">服务器</div>
+          <div class="field-label">服务器地址（IP:端口）</div>
+          <input type="text" value="43.139.226.138:9432">
+          <div class="field-label">服务端证书指纹（SHA-256 hex）</div>
+          <input type="text" placeholder="relay 首次启动打印的 64 位指纹">
+          <div class="switch-row">
+            <span>回声消除（Mac 外放时建议开启）</span>
+            <span class="sw on" onclick="this.classList.toggle('on')"></span>
+          </div>
+        </div>
+
+        <span class="btn block">保存并返回</span>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 行为注释 -->
+<div class="notes">
+  <b>交互行为说明（与代码一致）：</b>
+  <ul>
+    <li><b>主界面</b>仅一个必输项：<code>连接密码</code>（即三端共享 token 原文）。点<b>「生成」</b>产生 28 位随机强密码（base58 字母表，剔除易混淆字符，约 163bit）。</li>
+    <li><b>运行期间禁用「开始推流」</b>（灰色），仅在 未启动/错误 状态可点。</li>
+    <li><b>状态栏着色规则</b>（点击上方芯片演示）：绿 <code>#2E7D32</code>=推流中（附加“已发送 N 帧”实时计数）；蓝 <code>#1565C0</code>=连接中/等待 Mac 上线；红 <code>#C62828</code>=错误；灰 <code>#8A8A8A</code>=停止。</li>
+    <li><b>设置页</b>服务器地址已预置默认值 <code>43.139.226.138:9432</code>；指纹必填（缺失时主界面点开始会提示并自动跳转设置页）。</li>
+    <li><b>导入配置串</b>格式 <code>rv://host[:port]?t=密码&amp;f=指纹</code>，由 relay 启动横幅直接打印；解析成功后同时写入主界面密码、服务器地址与指纹。</li>
+    <li>Action Bar 右上角 <code>⋮ 设置</code> 进入设置页（菜单资源 menu_main.xml）。</li>
+  </ul>
+  <b>元素 ↔ 源码对照：</b>
+  <ul>
+    <li>密码卡片/按钮/状态卡 → <code>android-app/app/src/main/res/layout/activity_main.xml</code></li>
+    <li>导入串/服务器/指纹/AEC → <code>res/layout/activity_settings.xml</code></li>
+    <li>文案 → <code>res/values/strings.xml</code>；解析逻辑 → <code>ConfigParser.kt</code>；状态机 → <code>AudioStreamService.kt (StatusState)</code></li>
+  </ul>
+</div>
+
+<script>
+/* ---- 主题切换 ---- */
+const btnLight = document.getElementById('btnLight');
+const btnDark  = document.getElementById('btnDark');
+function setTheme(dark){
+  document.body.classList.toggle('dark', dark);
+  btnLight.classList.toggle('on', !dark);
+  btnDark.classList.toggle('on', dark);
+}
+btnLight.onclick = ()=>setTheme(false);
+btnDark.onclick  = ()=>setTheme(true);
+
+/* ---- 状态五态演示（对应 StatusState 枚举）---- */
+const STATES = [
+  { key:'STOPPED',   label:'未启动',              color:'#8A8A8A', text:'未启动' },
+  { key:'CONNECTING',label:'连接中',              color:'#1565C0', text:'连接中…' },
+  { key:'WAIT_PEER', label:'等待Mac上线',         color:'#1565C0', text:'已连接服务器，等待 Mac 上线…' },
+  { key:'STREAMING', label:'推流中',              color:'#2E7D32', text:'推流中\n已发送 15234 帧' },
+  { key:'ERROR',     label:'错误',                color:'#C62828', text:'错误：认证被拒: invalid token' },
+];
+const chipsBox = document.getElementById('stateChips');
+const statusLine = document.getElementById('statusLine');
+const btnStart = document.getElementById('btnStart');
+STATES.forEach((s,i)=>{
+  const c = document.createElement('span');
+  c.className='chip'; c.textContent=s.label;
+  c.onclick = ()=>{
+    document.querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));
+    c.classList.add('on');
+    statusLine.textContent = s.text;
+    statusLine.style.color = s.color;
+    // 与 MainActivity.pollTask 一致：运行中禁用开始按钮
+    const running = s.key==='CONNECTING'||s.key==='WAIT_PEER'||s.key==='STREAMING';
+    btnStart.classList.toggle('disabled', running);
+  };
+  chipsBox.appendChild(c);
+});
+// 默认选中“推流中”，展示最丰富形态
+chipsBox.children[3].click();
+</script>
+</body>
+</html>
