@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""remote-voice Mac 接收器。
+"""remote-voice Mac 接收器（协议 v2 注册制）。
 
 从 relay 中转服务器接收 PCM 音频帧（TLS + 证书指纹固定），写入 BlackHole
 虚拟声卡的输出端；会议软件将 BlackHole 2ch 选为麦克风即可收音。
+本机以 regkey 认证并注册（临时/永久）秘密，手机凭秘密连入。
 
 用法示例:
     python3 receiver.py --server relay.example.com:9432 \
-        --token "$RELAY_TOKEN" --fingerprint <64位hex> --device BlackHole
+        --regkey "$RELAY_REGKEY" --fingerprint <64位hex> --device BlackHole
 
 配置优先级: 命令行参数 > config.toml > 内置默认值。
 """
@@ -30,7 +31,7 @@ except ImportError:  # --sink null 模式允许在无声卡环境运行，此处
     np = None
     sd = None
 
-# ---- 协议常量（必须与 relay/internal/protocol 保持一致）----
+# ---- 协议常量（必须与 relay/internal/protocol 保持一致；v2 注册制）----
 FRAME_AUTH = 0x01
 FRAME_AUTH_OK = 0x02
 FRAME_AUTH_ERR = 0x03
@@ -38,9 +39,12 @@ FRAME_AUDIO = 0x04
 FRAME_PING = 0x05
 FRAME_PONG = 0x06
 FRAME_PEER_STATE = 0x07
+FRAME_REGISTER = 0x08
+FRAME_EVENT = 0x09
 PEER_ONLINE = 0x01
 PEER_OFFLINE = 0x00
 MAX_PAYLOAD = 65536
+PROTO_VERSION = 2
 
 SAMPLE_RATE = 48000
 CHANNELS = 1
@@ -159,7 +163,11 @@ class Receiver:
         if not self.host or not self.port.isdigit():
             sys.exit(f"错误：--server 需为 host:port 格式，收到 {args.server!r}")
         self.port = int(self.port)
-        self.token = args.token
+        self.regkey = args.regkey
+        self.name = args.name
+        self.temp_secret = args.temp_secret or ""
+        self.perm_secret = args.perm_secret or ""
+        self.temp_expiry = args.temp_expiry
         self.fingerprint = normalize_fingerprint(args.fingerprint)
         self.sink = sink
         self.peer_online = threading.Event()
@@ -198,7 +206,7 @@ class Receiver:
             self._sock = sock
         sock.settimeout(AUTH_TIMEOUT)
         auth = json.dumps(
-            {"role": "mac", "token": self.token, "proto": 1}
+            {"role": "mac", "key": self.regkey, "proto": PROTO_VERSION}
         ).encode()
         self._send(sock, FRAME_AUTH, auth)
 
@@ -207,7 +215,20 @@ class Receiver:
             raise PermissionError(f"认证被拒: {payload.decode(errors='replace')}")
         if ftype != FRAME_AUTH_OK:
             raise ConnectionError(f"认证应答异常: type=0x{ftype:02x}")
-        log("认证成功，等待手机上线…")
+        log("注册密钥认证成功，注册秘密…")
+
+        # 注册（v2）：生成或沿用临时/永久秘密并声明给 relay
+        if not self.temp_secret:
+            self.temp_secret = self._gen_temp_secret()
+        reg = {"name": self.name, "perm": "", "temp": self._hash(self.temp_secret),
+               "temp_exp": int(time.time()) + self.temp_expiry}
+        if self.perm_secret:
+            reg["perm"] = self._hash(self.perm_secret)
+        self._send(sock, FRAME_REGISTER, json.dumps(reg).encode())
+        log(f"已注册 name={self.name!r}，临时秘密（手机端输入）: {self.temp_secret}"
+            + ("" if self.temp_expiry else ""))
+        if self.temp_expiry:
+            log(f"临时秘密有效期: {self.temp_expiry} 秒")
 
         sock.settimeout(READ_TIMEOUT)
         threading.Thread(target=self._heartbeat_loop, args=(sock,), daemon=True).start()
@@ -225,9 +246,24 @@ class Receiver:
                     log("手机已掉线，暂停收音（保持连接等待重连）")
                     self.peer_online.clear()
                     self.sink.stop()
+            elif ftype == FRAME_EVENT:
+                # 认证结果事件（仅元数据）：记录后丢弃
+                log(f"事件: {payload.decode(errors='replace')[:120]}")
             elif ftype == FRAME_PING:
                 self._send(sock, FRAME_PONG)
             # 其余类型丢弃（向前兼容）
+
+    @staticmethod
+    def _gen_temp_secret() -> str:
+        import secrets as _s
+        alphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"  # 剔除易混字符 0O1lI
+        part = lambda: "".join(_s.choice(alphabet) for _ in range(4))
+        return f"{part()}-{part()}"
+
+    @staticmethod
+    def _hash(secret: str) -> str:
+        norm = "".join(c.upper() for c in secret if c not in " -")
+        return hashlib.sha256(norm.encode()).hexdigest()
 
     def _heartbeat_loop(self, sock: ssl.SSLSocket) -> None:
         while True:
@@ -275,11 +311,19 @@ def load_config(path: str) -> dict:
 
 def main() -> None:
     cfg = load_config("config.toml")
-    p = argparse.ArgumentParser(description="remote-voice Mac 接收器")
+    p = argparse.ArgumentParser(description="remote-voice Mac 接收器（协议 v2）")
     p.add_argument("--server", default=cfg.get("server"),
                    help="relay 地址 host:port")
-    p.add_argument("--token", default=cfg.get("token"),
-                   help="预共享 token（建议用环境变量传入）")
+    p.add_argument("--regkey", default=cfg.get("regkey"),
+                   help="Mac 注册密钥（建议用环境变量/文件注入）")
+    p.add_argument("--name", default=cfg.get("name", __import__("socket").gethostname().split(".")[0]),
+                   help="向手机展示的设备名（默认本机主机名）")
+    p.add_argument("--temp-secret", default=cfg.get("temp_secret"),
+                   help="临时秘密原文（留空则每次随机生成并打印）")
+    p.add_argument("--perm-secret", default=cfg.get("perm_secret"),
+                   help="永久秘密原文（可选，与临时秘密并存）")
+    p.add_argument("--temp-expiry", type=int, default=cfg.get("temp_expiry", 8 * 3600),
+                   help="临时秘密有效期（秒，默认 8 小时）")
     p.add_argument("--fingerprint", default=cfg.get("fingerprint"),
                    help="服务端证书 SHA-256 指纹（64 位 hex）")
     p.add_argument("--device", default=cfg.get("device", "BlackHole"),
@@ -288,7 +332,7 @@ def main() -> None:
                    help="null=无声卡验证模式，仅统计帧率")
     args = p.parse_args()
 
-    for name in ("server", "token", "fingerprint"):
+    for name in ("server", "regkey", "fingerprint"):
         if not getattr(args, name):
             sys.exit(f"错误：缺少 --{name}（或在 config.toml 中配置）")
     if len(normalize_fingerprint(args.fingerprint)) != 64:
