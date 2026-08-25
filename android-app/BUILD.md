@@ -157,15 +157,21 @@ App 内依次填入（三项均来自服务器/Mac 侧部署，详见 `../README
 
 ## 4. 本开发机（Linux）现状备忘
 
-2026-08-22 在本机实测的环境状态，供在此机器上编译前对照：
+**2026-08-26 更新：环境已全部就绪，且完成首次全流程构建验证**
+（`./gradlew assembleDebug` 成功，产物 `app/build/outputs/apk/debug/app-debug.apk` ≈ 816 KB）。
 
-| 检查项 | 要求 | 实测值 | 结论 |
+| 检查项 | 要求 | 当前状态 | 结论 |
 |---|---|---|---|
-| JDK | 17 | OpenJDK 11.0.29 (`java -version`) | ❌ 需 `apt install openjdk-17-jdk` |
-| 系统 Gradle | ≥ 8.7 | 4.4.1 | ❌ 不能用它生成 wrapper，需按 §3.4 手动获取 8.9 |
-| Android SDK | platform 35 + build-tools | `/usr/lib/android-sdk` 仅 platform-tools | ❌ 需按 §3.2 补装 |
+| JDK | 17 | OpenJDK 17.0.20（2026-08-26 由 11 升级） | ✅ |
+| Gradle | ≥ 8.7 | wrapper 已入库（锁定 8.9），日常只需 `./gradlew`；系统仍残留 4.4.1 勿直接调用，另有完整版在 `~/opt/gradle-8.9` | ✅ |
+| Android SDK | platform 35 + build-tools 34.0.0 + platform-tools | `~/Android/Sdk` 下已装齐（2026-08-26 经 sdkmanager 补装） | ✅ |
+| SDK 路径配置 | local.properties 或 ANDROID_HOME | 已创建 `android-app/local.properties` 指向 `~/Android/Sdk`（不入库） | ✅ |
 
-即：在本机走方案 B 前，需先完成 §3.1–§3.4 三步补齐。
+即：本机现在 clone 后无需任何环境操作，直接执行 §3.5 的
+`./gradlew assembleDebug` 即可构建。仅当换机器或重装系统时才需重走 §3.1–§3.4。
+
+> 历史状态存档：2026-08-22 首次盘点时三项均不满足（JDK 11、Gradle 4.4.1、SDK 缺组件），
+> 相关补齐步骤保留在 §3 各小节。
 
 ---
 
@@ -251,5 +257,5 @@ Android 相反——部署极简（装个 APK），复杂度全在**构建流水
 
 ---
 
-*文档编写：2026-08-22；2026-08-26 增补 §6 原理附录。环境实测基于当日代码库状态。构建参数若后续调整，
-以 `build.gradle.kts` 为准并同步更新本文档 §1。*
+*文档编写：2026-08-22；修订：2026-08-26（增补 §6 原理附录、wrapper 入库、§3.4/§4/§5 按实测更新）。
+构建参数若后续调整，以 `build.gradle.kts` 为准并同步更新本文档 §1。*
