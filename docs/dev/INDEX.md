@@ -15,3 +15,11 @@
 
 - **2026-08-26 04:10** | [PLAN-004-android-ptt-hifi.md](PLAN-004-android-ptt-hifi.md) → [PLAN-004-android-ptt-hifi-OUTCOME.md](PLAN-004-android-ptt-hifi-OUTCOME.md)
   摘要：Android PTT 交互优化。① 总览页 v2/index.html：删除装饰 gbar、收紧 pttzone 间距，按钮贴底。② 新增高保真稿 v2/android-ptt.html：单屏仅保留说话相关元素（状态栏/连接状态/波形/PTT 钮/手势条），拟真手机外框，按住即传（绿辉光+扩散环+计时）、松开即停，pointer capture 防滑出失灵。③ 设计文档同步：映射表 #6 底部锚定、新增决策 D6、验收口径补高保真标准。
+
+  摘要：协议 v2 全量实施三段（commit 20c15ee/09f3edf/116db06）。① relay：注册表路由（Mac regkey 认证+REGISTER 秘密哈希热更；手机只带哈希）、限速防爆破（60s/5 次→1m/5m/30m 递增）、0x08/0x09 新帧、AUTH_ERR 原因码；② mac-client（PySide6）：临时/永久秘密卡+倒计时+Keychain+连接历史+EVENT 落档+回环集成（14 例）；receiver.py 同步 v2；③ Android：PTT 底部大按钮（按住即传/松开即停）+多设备单激活芯片+首次连接自动命名+免提开关+rv:// 无 t= 导入。
+  备注：OUTCOME 文件为 PLAN-005-v2-protocol-clients-OUTCOME.md（本文件写错占位，实际未创建）——修正：本次结果记录于下方 06:00 追加的正常 OUTCOME。
+
+- **2026-08-26 06:05** | [PLAN-005-v2-protocol-clients.md](PLAN-005-v2-protocol-clients.md) → [PLAN-005-v2-protocol-clients-OUTCOME.md](PLAN-005-v2-protocol-clients-OUTCOME.md)
+  摘要：协议 v2 全量实施分三段（relay 20c15ee / mac-client 09f3edf / android 116db06），本次文档交付。
+  验证：go -race 20 用例全绿；mac-client 14 例（含真实 relay 回环）全绿；receiver 5 例；assembleDebug 通过；
+  relay-linux 静态产物 5.9MB。用户待执行：部署 relay + 两端升级客户端（v1 已不兼容）。

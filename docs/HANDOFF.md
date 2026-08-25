@@ -45,3 +45,38 @@ MVP 已实现并通过本机验证（go test 12 用例全绿 + 回环集成测�
   Kotlin: `RelayClient.kt`）
 - 信任模型：整张证书 DER 的 SHA-256 hex = 两端配置的指纹；换证书需重新分发指纹
 - 心跳：客户端 10s PING / 任一侧 40s 读超时断开；重连指数退避封顶 30s
+
+---
+
+# 2026-08-26 v2 迁移交接补充（协议注册制 + PTT + Mac GUI）
+
+## 当前状态（v2 已实施）
+
+协议 v2 全量落地（PLAN-005A/B/C 三端已提交推送），**v1 兼容已删除**：
+
+| 组件 | 路径 | 状态 |
+|---|---|---|
+| relay v2（注册表路由 + 限速防爆破 + REGISTER/EVENT） | `relay/` | ✅ go test -race 全绿（20 用例） |
+| Mac 图形客户端（PySide6） | `mac-client/` | ✅ 单测+回环集成全绿（19 例），GUI offscreen 冒烟通过 |
+| Mac 轻量接收器（已升 v2） | `mac-receiver/receiver.py` | ✅ 5 项协议单测全绿 |
+| Android v2（PTT + 多设备） | `android-app/` | ✅ assembleDebug 通过（0.2.0/versionCode 2） |
+
+## 关键变化（相对 v1）
+
+- 认证模型：Mac 用 **regkey**（`-regkeyfile/RELAY_REGKEY`）认证后 REGISTER 秘密哈希；
+  手机 AUTH 只带 `secret`=规范化+SHA-256 hex；relay 零明文。
+- 新帧：REGISTER(0x08)/EVENT(0x09)；AUTH_ERR 带原因码；t= 参数从 rv:// 移除。
+- 防爆破：按 IP 60s/5 失败 → 1m/5m/30m 递增锁；成功清零。
+- 仅凭秘密连入：手机输入 Mac 界面短码即可，无需再知道服务器密码。
+
+## 部署（生产者→用户手动执行）
+
+见 `relay/DEPLOY.md` §2/§4/§5（regkey.txt 先建）；**保持 ./data 目录不动则指纹不变**。
+relay-linux 静态产物在 `relay/relay-linux`（git 忽略，已交叉编译 amd64，勿 commit）。
+systemd 单元记忆点：`-tokenfile` 已改名 `-regkeyfile`。
+
+## 下一步（v2 余项）
+
+1. 部署新版 relay 上线（用户执行）+ 真机为 Mac/手机装新客户端（v1 客户端已无法认证）
+2. mac-client 长跑观察：Keychain CLI 在真实 macOS 的行为、GUI 与黑屏休眠 PTT 切音
+3. 演化方向：UDP+Opus+FEC、反向声道、历史落 relay 侧、音频波形 UI 化

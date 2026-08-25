@@ -238,9 +238,9 @@ func TestPhoneBadHashFormatRejected(t *testing.T) {
 func TestPhoneExpiredSecretRejected(t *testing.T) {
 	addr := startTestServer(t, 5*time.Second, 2*time.Second)
 	// 注册一个 500ms 后过期的临时秘密，然后等待其过期再认证
-	mac, _, _ := mustRegMac(t, addr, "MacBook", "", "EXP-90", time.Now().Add(500*time.Millisecond).Unix())
+	mac, _, _ := mustRegMac(t, addr, "MacBook", "", "EXP-90", time.Now().Add(2*time.Second).Unix())
 	_ = mac
-	time.Sleep(700 * time.Millisecond)
+	time.Sleep(2500 * time.Millisecond)
 	conn := dial(t, addr)
 	authPhoneReq(t, conn, "EXP-90")
 	payload := expectAuthErr(t, conn)
@@ -407,8 +407,8 @@ func TestAuthOKEventDeliveredToMac(t *testing.T) {
 
 func TestExpiredAttemptEventDeliveredToMac(t *testing.T) {
 	addr := startTestServer(t, 5*time.Second, 2*time.Second)
-	mac, _, _ := mustRegMac(t, addr, "MacBook", "", "EXP-EE", time.Now().Add(500*time.Millisecond).Unix())
-	time.Sleep(700 * time.Millisecond)
+	mac, _, _ := mustRegMac(t, addr, "MacBook", "", "EXP-EE", time.Now().Add(2*time.Second).Unix())
+	time.Sleep(2500 * time.Millisecond)
 	conn := dial(t, addr)
 	authPhoneReq(t, conn, "EXP-EE")
 	expectAuthErr(t, conn)
