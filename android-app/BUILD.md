@@ -188,6 +188,7 @@ App 内依次填入（三项均来自服务器/Mac 侧部署，详见 `../README
 | `adb: no devices` | 先 `lsusb` 定位：① 看不到手机 → 数据线是纯充电线或 USB 口/模式问题；② 能看到但标注 `(MTP)` → 手机未开「USB 调试」，ADB 接口未暴露（实测案例：Xiaomi 2717:ff40 MTP），到开发者选项开启后重插并在手机上确认授权弹窗 |
 | `adb devices` 显示 `no permissions` | Linux 缺 udev 规则：`sudo apt install android-sdk-platform-tools-common` 后重插；另建议用 SDK 内新版 adb（`~/Android/Sdk/platform-tools/adb`），Ubuntu 自带版本过旧 |
 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | 签名不一致的历史安装残留：`adb uninstall com.remotevoice.app` 后重装 |
+| `INSTALL_FAILED_USER_RESTRICTED: Install canceled by user` | 厂商安全拦截（实测：小米/红米 MIUI·澎湃OS），并非真的被用户取消。到开发者选项开启「USB 安装」（可能要求登录小米账号、插 SIM 卡）；重跑安装时保持手机亮屏，数秒内点掉确认框，超时会自动取消并报此错 |
 | 手机提示禁止安装 USB 来源应用 | 开发者选项中允许「USB 安装」/「USB 调试（安全设置）」 |
 
 ---
