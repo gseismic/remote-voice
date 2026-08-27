@@ -191,6 +191,8 @@ class MainWindow(QMainWindow):
         self._drain_timer.timeout.connect(self._drain_events)
         self._drain_timer.start(200)
         self._queue = []
+        # 启动即自动连接：一次性配置齐全时零点击（傻瓜式一键连接，对齐 v2 设计稿）
+        QTimer.singleShot(0, self._connect_if_ready)
 
     # ---------- 临时秘密 ----------
 
@@ -335,6 +337,16 @@ class MainWindow(QMainWindow):
             self.client.update_perm(sec.hash_of(self.perm) if self.perm else "")
 
     # ---------- 连接 ----------
+
+    def _connect_if_ready(self) -> None:
+        """配置齐（服务器/指纹/regkey）时自动连接；缺配置则提示待填。"""
+        server = self.cfg.get("server", "").strip()
+        fp = (self.cfg.get("fingerprint", "") or "").strip().lower().replace(":", "").replace(" ", "")
+        regkey = self.cfg.get("regkey", "").strip()
+        if server and len(fp) == 64 and regkey:
+            self._connect()
+        else:
+            self.status_text.setText("待配置：服务器 / 指纹 / 注册密钥（底部填写后点连接）")
 
     def _connect(self) -> None:
         server = self.ed_server.text().strip()

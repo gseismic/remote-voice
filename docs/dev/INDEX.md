@@ -36,3 +36,11 @@
   并修复 H-1（心跳线程+读超时恢复 40s）与 H-2（FatalError→ST_FATAL），21 测试全绿（含新增 2 回归）；
   C) 三子 README + 根 README 重写。验证：go -race 全绿、CLI 全链路冒烟（50 帧/s）、GUI offscreen 冒烟。
   遗留：M-2（peer-offline）待用户拍板；真机部署待执行。
+
+- **2026-08-28 12:05** | [PLAN-007-one-click-connect.md](PLAN-007-one-click-connect.md) → [PLAN-007-one-click-connect-OUTCOME.md](PLAN-007-one-click-connect-OUTCOME.md)
+  摘要：傻瓜式一键连接（对齐 v2 UI 设计稿）。Android：删除「连接/断开」按钮，打开即自动连接
+  （user_stopped 记忆手动停止），状态条点击=连接/停止，设备芯片切换即自动重连，
+  传输中显示按住秒数+帧计数；PTT 贴底。mac-app：配置保存后启动自动连接
+  （_connect_if_ready，缺配置显示待配置提示）。验证：assembleDebug 通过、
+  offscreen 冒烟确认 auto-connect 触发、pytest 21 例全绿。遗留：真机手感验证、
+  波形可视化另计划、M-2 未拍板。

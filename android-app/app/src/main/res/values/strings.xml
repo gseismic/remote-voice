@@ -5,25 +5,24 @@
     <!-- 主界面 -->
     <string name="label_devices">设备：</string>
     <string name="ptt_hint">按住 说话</string>
-    <string name="ptt_tip">按住说话即传输 · 松开即停（会议场景可在设置里改「免提常开」）</string>
-    <string name="btn_start">连接</string>
-    <string name="btn_stop">断开</string>
+    <string name="ptt_tip">打开即自动连接 · 按住说话即传输，松开即停（会议场景可在设置里开「免提常开」）</string>
     <string name="status_default">未连接</string>
     <string name="menu_settings">设置</string>
     <string name="err_no_mic_perm">未授予麦克风权限，无法推流</string>
     <string name="service_started">已连接中继</string>
+    <string name="toast_stopped">已停止 · 点按状态条恢复连接</string>
 
     <!-- 设置页 -->
     <string name="title_settings">设置</string>
     <string name="label_import">导入配置串</string>
-    <string name="hint_import_desc">粘贴 relay 启动时打印的 rv:// 一行（仅服务器与指纹），自动填入下方各项</string>
+    <string name="hint_import_desc">粘贴 server 启动时打印的 rv:// 一行（仅服务器与指纹），自动填入下方各项</string>
     <string name="hint_import">rv://服务器IP:9432?f=64位指纹</string>
     <string name="btn_parse">解析并填入</string>
     <string name="label_server_section">服务器</string>
     <string name="label_server">服务器地址（IP:端口）</string>
     <string name="hint_server">默认 43.139.226.138:9432</string>
     <string name="label_fingerprint">服务端证书指纹（SHA-256 hex）</string>
-    <string name="hint_fingerprint">relay 首次启动打印的 64 位指纹</string>
+    <string name="hint_fingerprint">server 首次启动打印的 64 位指纹</string>
     <string name="label_aec">回声消除（Mac 外放时建议开启）</string>
     <string name="label_handsfree">免提常开（不开则仅按住说话时传输）</string>
     <string name="label_devices_section">我的设备（秘密保存于本机，仅元数据可见）</string>

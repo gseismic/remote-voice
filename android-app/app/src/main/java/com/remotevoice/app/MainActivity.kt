@@ -13,16 +13,15 @@ import android.os.Looper
 import android.view.Menu
 import android.view.MenuItem
 import android.view.MotionEvent
-import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import android.widget.Button
 
 /**
- * 主界面（v2 对讲式）：连接状态条 + 设备芯片（单选激活）+ 底部按住说话（PTT）。
- * 服务器/指纹等一次性配置收在 [SettingsActivity]；
- * 每台 Mac 的秘密保存在设备条目中（新增即激活），按住说话即传输。
+ * 主界面（傻瓜式一键连接）：打开即自动连接（配置齐全时），状态条即连接态。
+ * 设备芯片单选：切换即重连；PTT 底部大按钮按住说话（边沿由 ACTION_DOWN/UP/CANCEL 保证）。
  */
 class MainActivity : Activity() {
 
@@ -31,15 +30,20 @@ class MainActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var devicesRow: LinearLayout
     private lateinit var pttBtn: Button
-    private lateinit var startBtn: Button
-    private lateinit var stopBtn: Button
     private val pollHandler = Handler(Looper.getMainLooper())
+    private var pttDownAt = 0L
 
     private val pollTask = object : Runnable {
         override fun run() {
             val st = AudioStreamService.Status
             val line = if (st.state == StatusState.STREAMING) {
-                "${st.text}\n已发送 ${st.framesSent} 帧"
+                var t = st.text
+                if (st.talking && pttDownAt > 0) {
+                    t += "\n已按住 ${(System.currentTimeMillis() - pttDownAt) / 1000}s · 已发送 ${st.framesSent} 帧"
+                } else {
+                    t += "\n已发送 ${st.framesSent} 帧"
+                }
+                t
             } else {
                 st.text
             }
@@ -53,9 +57,6 @@ class MainActivity : Activity() {
                     else -> COLOR_GRAY
                 }
             )
-            startBtn.isEnabled = st.state == StatusState.STOPPED ||
-                st.state == StatusState.ERROR
-            stopBtn.isEnabled = !startBtn.isEnabled
             pollHandler.postDelayed(this, 500)
         }
     }
@@ -69,46 +70,75 @@ class MainActivity : Activity() {
         statusView = findViewById(R.id.text_status)
         devicesRow = findViewById(R.id.devices_row)
         pttBtn = findViewById(R.id.btn_ptt)
-        startBtn = findViewById(R.id.btn_start)
-        stopBtn = findViewById(R.id.btn_stop)
 
         renderDevices()
 
-        // PTT：按下即传、松开即停（边沿由 ACTION_DOWN/UP/CANCEL 保证；滑出也可停）
+        // 状态条 = 连接开关：点按连接/停止（停止后进入手动模式，onResume 不自动拉起）
+        statusView.setOnClickListener { toggleService() }
+
+        // PTT：按下即传、松开即停
         pttBtn.setOnTouchListener { _, ev ->
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     pttBtn.isPressed = true
                     val svc = AudioStreamService.instance
                     if (svc == null) {
-                        Toast.makeText(this, "请先点击「连接」开启中继", Toast.LENGTH_SHORT).show()
+                        if (AudioStreamService.Status.state != StatusState.ERROR) {
+                            maybeAutoStart()
+                        }
+                        Toast.makeText(this, "连接中，稍候再按住说话", Toast.LENGTH_SHORT).show()
                     } else {
+                        pttDownAt = System.currentTimeMillis()
                         svc.setTalking(true)
                     }
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     pttBtn.isPressed = false
+                    pttDownAt = 0L
                     AudioStreamService.instance?.setTalking(false)
                     true
                 }
                 else -> false
             }
         }
+    }
 
-        startBtn.setOnClickListener {
-            val active = store.active()
-            if (active == null) {
-                showAddDeviceDialog()
-                return@setOnClickListener
-            }
-            requestPermissionsThenStart()
-        }
-        stopBtn.setOnClickListener {
+    override fun onDestroy() {
+        super.onDestroy()
+    }
+
+    // ---- 一键连接 ----
+
+    private fun toggleService() {
+        val running = AudioStreamService.instance != null
+        if (!running) {
+            prefs.edit().putBoolean(KEY_USER_STOPPED, false).apply()
+            maybeAutoStart()
+            Toast.makeText(this, R.string.service_started, Toast.LENGTH_SHORT).show()
+        } else {
             startService(
-                Intent(this, AudioStreamService::class.java)
-                    .setAction(AudioStreamService.ACTION_STOP)
+                Intent(this, AudioStreamService::class.java).setAction(AudioStreamService.ACTION_STOP)
             )
+            prefs.edit().putBoolean(KEY_USER_STOPPED, true).apply()
+            Toast.makeText(this, R.string.toast_stopped, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** 设备芯片：激活 + 正在运行时切换即重连（与设计稿"切换即重连"一致）。 */
+    private fun activateAndReconnect(d: DeviceStore.Device) {
+        store.activate(d.id)
+        prefs.edit().putBoolean(KEY_USER_STOPPED, false).apply()
+        renderDevices()
+        Toast.makeText(this, "已切换到 ${d.name.ifBlank { "设备" }}", Toast.LENGTH_SHORT).show()
+        pollHandler.removeCallbacksAndMessages(null)
+        if (AudioStreamService.instance != null) {
+            startService(
+                Intent(this, AudioStreamService::class.java).setAction(AudioStreamService.ACTION_STOP)
+            )
+            pollHandler.postDelayed({ maybeAutoStart() }, 600)
+        } else {
+            maybeAutoStart()
         }
     }
 
@@ -132,11 +162,7 @@ class MainActivity : Activity() {
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                 ).apply { marginEnd = 16 }
             }
-            chip.setOnClickListener {
-                store.activate(d.id)
-                renderDevices()
-                Toast.makeText(this, "已切换到 ${d.name.ifBlank { "设备" }}", Toast.LENGTH_SHORT).show()
-            }
+            chip.setOnClickListener { activateAndReconnect(d) }
             chip.setOnLongClickListener {
                 showDeviceMenu(d)
                 true
@@ -243,17 +269,26 @@ class MainActivity : Activity() {
         return if (norm.length >= 12) "perm" else "temp"
     }
 
-    // ---- 服务启停 ----
+    // ---- 服务启停（自动连接） ----
 
     override fun onResume() {
         super.onResume()
         renderDevices()
         pollHandler.post(pollTask)
+        maybeAutoStart()
     }
 
     override fun onPause() {
         super.onPause()
         pollHandler.removeCallbacks(pollTask)
+    }
+
+    /** 一键连接：无激活设备→引导添加；有设备且用户未手动停止→自动拉起服务。 */
+    private fun maybeAutoStart() {
+        if (AudioStreamService.instance != null) return
+        if (prefs.getBoolean(KEY_USER_STOPPED, false)) return
+        if (store.active() == null) return
+        requestPermissionsThenStart()
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -302,11 +337,11 @@ class MainActivity : Activity() {
     private fun doStartService() {
         // 服务内部有 clientThread 存活检查，重复点击安全
         startForegroundService(Intent(this, AudioStreamService::class.java))
-        Toast.makeText(this, R.string.service_started, Toast.LENGTH_SHORT).show()
     }
 
     private companion object {
         const val PREFS = "config"
+        const val KEY_USER_STOPPED = "user_stopped"
         const val REQ_PERMS = 1
 
         val COLOR_GREEN = 0xFF2E7D32.toInt()

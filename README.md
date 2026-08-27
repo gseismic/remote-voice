@@ -57,7 +57,7 @@ remote-voice-gui                            # 填 服务器/指纹/regkey.txt �
 cd android-app && ./gradlew assembleDebug && adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
-设置页导入 `rv://…` 配置串 → 添加设备输入 Mac 显示的短码 → 连接 → **按住说话**。
+设置页导入 `rv://…` 配置串 → 添加设备输入 Mac 显示的短码 → 返回后**自动连接** → **按住说话**（状态条点按可停止/恢复）。
 
 ## 开发验证
 

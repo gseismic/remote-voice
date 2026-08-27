@@ -62,6 +62,7 @@
         android:layout_width="160dp"
         android:layout_height="160dp"
         android:layout_gravity="center_horizontal"
+        android:layout_marginBottom="16dp"
         android:background="@drawable/bg_ptt"
         android:stateListAnimator="@null"
         android:gravity="center"
@@ -73,33 +74,8 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
+        android:layout_marginBottom="16dp"
         android:gravity="center"
         android:text="@string/ptt_tip"
         android:textSize="12sp" />
-
-    <!-- 控制 -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/btn_start"
-            android:layout_width="0dp"
-            android:layout_height="52dp"
-            android:layout_weight="1"
-            android:text="@string/btn_start"
-            android:textSize="16sp" />
-
-        <Button
-            android:id="@+id/btn_stop"
-            android:layout_width="0dp"
-            android:layout_height="52dp"
-            android:layout_marginStart="12dp"
-            android:layout_weight="1"
-            android:text="@string/btn_stop"
-            android:textSize="16sp" />
-    </LinearLayout>
 </LinearLayout>
