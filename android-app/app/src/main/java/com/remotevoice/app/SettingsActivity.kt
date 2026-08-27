@@ -20,7 +20,7 @@ class SettingsActivity : Activity() {
     private lateinit var prefs: SharedPreferences
     private lateinit var store: DeviceStore
     private lateinit var serverEdit: EditText
-    private lateinit var fpEdit: EditText
+    private lateinit var fpState: TextView
     private lateinit var aecSwitch: Switch
     private lateinit var handsfreeSwitch: Switch
     private lateinit var devicesBox: LinearLayout
@@ -35,7 +35,7 @@ class SettingsActivity : Activity() {
         val importEdit = findViewById<EditText>(R.id.edit_import)
         val parseBtn = findViewById<Button>(R.id.btn_parse)
         serverEdit = findViewById(R.id.edit_server)
-        fpEdit = findViewById(R.id.edit_fingerprint)
+        fpState = findViewById(R.id.text_fp_state)
         aecSwitch = findViewById(R.id.switch_aec)
         handsfreeSwitch = findViewById(R.id.switch_handsfree)
         devicesBox = findViewById(R.id.devices_box)
@@ -46,9 +46,15 @@ class SettingsActivity : Activity() {
             prefs.getString(KEY_SERVER, null)?.takeIf { it.isNotBlank() }
                 ?: AudioStreamService.DEFAULT_SERVER
         )
-        fpEdit.setText(prefs.getString(KEY_FINGERPRINT, ""))
+        renderFpState()
         aecSwitch.isChecked = prefs.getBoolean(KEY_AEC, false)
         handsfreeSwitch.isChecked = prefs.getBoolean(AudioStreamService.KEY_HANDSFREE, false)
+
+        findViewById<Button>(R.id.btn_clear_fp).setOnClickListener {
+            prefs.edit().remove(KEY_FINGERPRINT).apply()
+            renderFpState()
+            Toast.makeText(this, R.string.toast_fp_cleared, Toast.LENGTH_SHORT).show()
+        }
 
         parseBtn.setOnClickListener {
             val parsed = ConfigParser.parse(importEdit.text.toString())
@@ -58,11 +64,14 @@ class SettingsActivity : Activity() {
             }
             val server = "${parsed.host}:${parsed.port}"
             serverEdit.setText(server)
-            fpEdit.setText(parsed.fingerprint)
             prefs.edit()
                 .putString(KEY_SERVER, server)
-                .putString(KEY_FINGERPRINT, parsed.fingerprint)
-                .apply()
+                .apply {
+                    if (parsed.fingerprint.isNotEmpty()) {
+                        putString(KEY_FINGERPRINT, parsed.fingerprint)
+                    }
+                }.apply()
+            renderFpState()
             Toast.makeText(this, R.string.toast_import_ok, Toast.LENGTH_SHORT).show()
         }
 
@@ -203,12 +212,22 @@ class SettingsActivity : Activity() {
         return if (norm.length >= 12) "perm" else "temp"
     }
 
+    /** 服务器信任展示：已信任=显示指纹前缀；未信任=提示首次连接自动记录。 */
+    private fun renderFpState() {
+        val fp = prefs.getString(KEY_FINGERPRINT, "") ?: ""
+        if (fp.length == 64) {
+            fpState.text = getString(R.string.fp_trusted_prefix, fp.take(12))
+            fpState.setTextColor(0xFF3FB950.toInt())
+        } else {
+            fpState.text = getString(R.string.fp_trust_empty)
+            fpState.setTextColor(0xFF8B949E.toInt())
+        }
+    }
+
     private fun saveAll() {
         val server = serverEdit.text.toString().trim().ifBlank { AudioStreamService.DEFAULT_SERVER }
-        val fp = ConfigParser.normalizeFingerprint(fpEdit.text.toString())
         prefs.edit()
             .putString(KEY_SERVER, server)
-            .putString(KEY_FINGERPRINT, fp)
             .putBoolean(KEY_AEC, aecSwitch.isChecked)
             .putBoolean(AudioStreamService.KEY_HANDSFREE, handsfreeSwitch.isChecked)
             .apply()

@@ -92,12 +92,7 @@ class AudioStreamService : Service(), RelayClient.Listener {
             stopSelf()
             return
         }
-        if (fingerprint.isEmpty()) {
-            Status.state = StatusState.ERROR
-            Status.text = "错误：未配置服务端指纹（设置中填写）"
-            stopSelf()
-            return
-        }
+        // 指纹为空 = TOFU：连接时自动信任并记录（见 onPeerFingerprint）
         // 激活设备：秘密原文（规范化后本地算哈希，只传 hex 给 relay）
         val device = DeviceStore(this).active()
         if (device == null || device.secret.isBlank()) {
@@ -157,6 +152,19 @@ class AudioStreamService : Service(), RelayClient.Listener {
         DeviceStore(this).fillNameIfEmpty(
             DeviceStore(this).activeId(), name
         )
+    }
+
+    override fun onPeerFingerprint(fingerprint: String) {
+        if (fingerprint.length != 64) return
+        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_FINGERPRINT, fingerprint).apply()
+        Log.i(TAG, "tofu: 已信任服务器证书 $fingerprint")
+        mainHandler.post {
+            if (Status.state == StatusState.CONNECTING) {
+                Status.text = "已连接中继（自动信任证书）"
+                updateNotification(Status.text)
+            }
+        }
     }
 
     override fun onPeerOnline() {

@@ -42,14 +42,17 @@ class RelayClient:
 
     def __init__(self, server: str, fingerprint: str, regkey: str,
                  device_name: str, sink=None,
-                 on_state=None, on_event=None, on_bridge_stats=None):
+                 on_state=None, on_event=None, on_bridge_stats=None,
+                 on_fingerprint=None):
         """
         server: host[:port]（默认端口 9432）
-        fingerprint: 64 hex 服务端证书 SHA-256
+        fingerprint: 64 hex 服务端证书 SHA-256；空串 = TOFU（首次连接自动信任并回调
+            on_fingerprint 供上层持久化，此后固定校验）
         sink: 具备 feed(bytes) 的实例（默认 SoundDeviceSink）
         on_state(state, detail): 状态变更
         on_event(ev: dict): auth-ok / auth-fail 事件（含 ip/kind/reason）
         on_bridge_stats(dur_s, bytes): 一次桥接会话结束统计
+        on_fingerprint(fp): TOFU 首次连接记录到实际证书指纹时回调
         """
         self.server = server
         self.fingerprint = fingerprint.lower()
@@ -59,6 +62,7 @@ class RelayClient:
         self.on_state = on_state or (lambda s, d: None)
         self.on_event = on_event or (lambda ev: None)
         self.on_bridge_stats = on_bridge_stats or (lambda d, b: None)
+        self.on_fingerprint = on_fingerprint or (lambda fp: None)
 
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -220,11 +224,20 @@ class RelayClient:
                 return
 
     def _verify_pinning(self, tls: ssl.SSLSocket) -> None:
-        """证书级 pinning：对服务端叶子证书 DER 做 SHA-256（与 server selfcert 同语义）。"""
+        """证书级 pinning：对服务端叶子证书 DER 做 SHA-256（与 server selfcert 同语义）。
+        fingerprint 为空串 = TOFU：首次连接记录实际证书指纹（回调 on_fingerprint），
+        并更新内部值供后续连接固定校验（SSH known_hosts 同语义）。"""
         der = tls.getpeercert(binary_form=True)
         got = hashlib.sha256(der).hexdigest()
+        if not self.fingerprint:
+            self.fingerprint = got
+            self.on_fingerprint(got)
+            return
         if got != self.fingerprint:
-            raise proto.FatalError("certificate fingerprint mismatch")
+            raise proto.FatalError(
+                f"证书指纹不符（期望 {self.fingerprint[:12]}… 实际 {got[:12]}…；"
+                "若确认服务器更换过证书，请清空指纹配置后重新信任）"
+            )
 
     def _read_frame_timeout(self, timeout: float):
         self._conn.settimeout(timeout)

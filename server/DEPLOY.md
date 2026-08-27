@@ -177,6 +177,7 @@ server 对**每一次连接尝试与数据流动**都有日志，排查"是否�
 |---|---|
 | `accepted peer=<IP:端口>` | 收到 TCP 连接（任何来源，含扫描器） |
 | `tls handshake ok / failed peer=..` | TLS 握手成功/失败；失败常见于客户端指纹填错或非 TLS 探测，**仅断开该连接，服务不受影响** |
+| 客户端「重连失败: 原因」对照 | 客户端状态文本原因 ↔ 本表行：连接超时→看防火墙/端口；连接被拒绝→server 未启动；TLS 握手失败/指纹不符→检查本机与两端的指纹是否一致 |
 | `authenticated role=mac peer=..` | Mac 认证成功（等待 REGISTER）|
 | `mac registered name=".." ..` | Mac 注册/热更秘密成功 |
 | `bridged role=phone peer=.. ↔ mac=..` | 桥接建立（手机↔Mac 1:1） |

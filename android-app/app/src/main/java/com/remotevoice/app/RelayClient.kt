@@ -5,10 +5,16 @@ import org.json.JSONObject
 import java.io.DataInputStream
 import java.io.IOException
 import java.io.OutputStream
+import java.net.ConnectException
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLSocket
+import javax.net.ssl.X509TrustManager
 
 /**
  * relay 线路协议客户端（v2 注册制）。
@@ -42,6 +48,12 @@ class RelayClient(
 
         /** 致命错误（认证被拒/指纹不符）：不应重试。 */
         fun onFatal(message: String)
+
+        /**
+         * TOFU 首次信任：未配置指纹连接时回调实际证书指纹（供上层持久化）。
+         * 此后本实例后续连接以该指纹固定校验。
+         */
+        fun onPeerFingerprint(fingerprint: String) {}
     }
 
     // ---- 协议常量（必须与 relay/internal/protocol 保持一致；v2）----
@@ -88,6 +100,8 @@ class RelayClient(
             } catch (e: Exception) {
                 if (!running) break
                 Log.w(TAG, "connection lost", e)
+                val why = describeError(e)
+                listener.onState(if (attempts == 0) "连接失败: $why" else "重连失败($attempts): $why")
             } finally {
                 closeQuietly()
                 peerOnline = false
@@ -117,7 +131,8 @@ class RelayClient(
     }
 
     private fun connectAndServe() {
-        val tm = FingerprintTrustManager(fingerprintHex)
+        // fingerprintHex 为空=TOFU（首次连接自动信任并记录）；非空=指纹固定校验
+        val tm = if (fingerprintHex.isNotEmpty()) FingerprintTrustManager(fingerprintHex) else TrustAllTrustManager()
         val ctx = SSLContext.getInstance("TLS")
         // 信任根来自指纹而非 CA：跳过默认信任链，由 FingerprintTrustManager 校验
         ctx.init(null, arrayOf(tm), null)
@@ -128,6 +143,14 @@ class RelayClient(
         synchronized(this) { socket = sock }
         sock.soTimeout = readTimeoutMs
         sock.tcpNoDelay = true
+        sock.startHandshake()
+        if (fingerprintHex.isEmpty()) {
+            // TOFU：握手后记录实际证书指纹，本实例后续连接以之校验
+            val chain = sock.session.peerCertificates
+            val fp = FingerprintTrustManager.fingerprintOf((chain[0] as X509Certificate).encoded)
+            listener.onPeerFingerprint(fp)
+            Log.i(TAG, "tofu trusted fingerprint=$fp")
+        }
         Log.i(TAG, "tls connected")
 
         // AUTH 必须是首帧（服务器 10s 内等待）：v2 手机只带秘密哈希
@@ -279,6 +302,31 @@ class RelayClient(
 
     /** 不应自动重试的协议级错误（认证/指纹类）。 */
     private class FatalProtocolError(message: String) : RuntimeException(message)
+
+    /** TOFU 专用：指纹未配置时信任任意证书，随后在应用层记录并固定校验。 */
+    private class TrustAllTrustManager : X509TrustManager {
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+    }
+
+    /** 异常 → 排障可读文案（供状态条/通知直接展示）。 */
+    private fun describeError(e: Throwable): String {
+        var t: Throwable? = e
+        while (t != null) {
+            val m = t.message ?: ""
+            if (m.contains("指纹不符")) return m.take(120)
+            t = t.cause
+        }
+        return when (e) {
+            is SocketTimeoutException -> "连接超时（服务器未响应或防火墙拦了端口）"
+            is UnknownHostException -> "域名解析失败（检查设置中的服务器地址）"
+            is ConnectException -> "连接被拒绝（服务器未启动？端口未放行？）"
+            is SSLHandshakeException -> "TLS 握手失败（证书问题或版本不匹配）"
+            is IOException -> "网络错误: ${e.message ?: "读写失败"}"
+            else -> "${e.javaClass.simpleName}: ${e.message ?: ""}"
+        }.take(120)
+    }
 
     private companion object {
         const val TAG = "RelayClient"

@@ -147,6 +147,7 @@ class MainWindow(QMainWindow):
         cg.setVerticalSpacing(6)
         self.ed_server = QLineEdit(self.cfg.get("server", ""))
         self.ed_fp = QLineEdit(self.cfg.get("fingerprint", ""))
+        self.ed_fp.setPlaceholderText("留空 = 首次连接自动信任（推荐）")
         self.ed_key = QLineEdit(self.cfg.get("regkey", ""))
         self.ed_key.setEchoMode(QLineEdit.Password)
         self.ed_name = QLineEdit(self.cfg.get("name", _hostname()))
@@ -339,22 +340,22 @@ class MainWindow(QMainWindow):
     # ---------- 连接 ----------
 
     def _connect_if_ready(self) -> None:
-        """配置齐（服务器/指纹/regkey）时自动连接；缺配置则提示待填。"""
+        """配置齐（服务器+regkey，指纹可留空=TOFU）时自动连接；缺配置则提示待填。"""
         server = self.cfg.get("server", "").strip()
         fp = (self.cfg.get("fingerprint", "") or "").strip().lower().replace(":", "").replace(" ", "")
         regkey = self.cfg.get("regkey", "").strip()
-        if server and len(fp) == 64 and regkey:
+        if server and (not fp or len(fp) == 64) and regkey:
             self._connect()
         else:
-            self.status_text.setText("待配置：服务器 / 指纹 / 注册密钥（底部填写后点连接）")
+            self.status_text.setText("待配置：服务器 / 注册密钥（底部填写后点连接；指纹可留空=自动信任）")
 
     def _connect(self) -> None:
         server = self.ed_server.text().strip()
         fp = self.ed_fp.text().strip().lower().replace(":", "").replace(" ", "")
         regkey = self.ed_key.text().strip()
-        if not server or len(fp) != 64 or not regkey:
-            QMessageBox.warning(self, "连接设置", "请先填写 服务器 / 指纹（64 hex）/ 注册密钥。\n"
-                                              "三者见 relay 启动横幅与 regkey.txt。")
+        if not server or (fp and len(fp) != 64) or not regkey:
+            QMessageBox.warning(self, "连接设置", "请先填写 服务器 / 注册密钥（必填）。\n"
+                                              "指纹可留空：首次连接自动信任并记录（推荐）。")
             return
         self.cfg.update(server=server, fingerprint=fp, regkey=regkey, name=self.ed_name.text().strip() or _hostname())
         from macapp.config_store import save_config
@@ -363,6 +364,7 @@ class MainWindow(QMainWindow):
             server, fp, regkey, self.cfg["name"],
             on_state=self._on_state, on_event=self._on_event,
             on_bridge_stats=self._on_stats,
+            on_fingerprint=self._on_trusted_fp,
         )
         self._queue.clear()
         self.client.start()
@@ -379,6 +381,14 @@ class MainWindow(QMainWindow):
         self.btn_dis.setEnabled(False)
 
     # ----- core 回调（连接线程）→ 队列 → UI 主线程 -----
+
+    def _on_trusted_fp(self, fp: str) -> None:
+        """TOFU：首次连接自动信任的证书指纹，持久化供下次固定校验。"""
+        self.cfg["fingerprint"] = fp
+        from macapp.config_store import save_config
+        save_config(self.cfg)
+        self.ed_fp.setText(fp)
+        self.status_text.setText("已连接中继（首次连接已自动信任证书）")
 
     def _on_state(self, state: str, detail: str) -> None:
         self._queue.append(("state", state, detail))

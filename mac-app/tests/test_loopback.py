@@ -278,3 +278,17 @@ def test_fingerprint_mismatch_fatal(relay_proc):
     wait_for(lambda: cli.state == ST_FATAL, msg="指纹不符应 fatal")
     assert any(s == ST_FATAL for s, _ in ev)
     cli.stop()
+
+
+def test_tofu_auto_trust_and_reuse(relay_proc):
+    """回归(PLAN-008)：指纹留空 → 首次连接自动记录并注册成功；回调返回真指纹。"""
+    got_fps = []
+    cli = RelayClient(
+        relay_proc["addr"], "", relay_proc["regkey"], "TofuMac",
+        sink=CollectSink(), on_fingerprint=got_fps.append,
+    )
+    cli.start()
+    wait_for(lambda: cli.state == ST_REGISTERED, msg="tofu 模式应注册成功")
+    assert got_fps and got_fps[-1] == relay_proc["fp"], "TOFU 应记录到实际证书指纹"
+    assert cli.fingerprint == relay_proc["fp"], "内部指纹应已固化"
+    cli.stop()

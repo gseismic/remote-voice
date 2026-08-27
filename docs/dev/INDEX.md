@@ -44,3 +44,11 @@
   （_connect_if_ready，缺配置显示待配置提示）。验证：assembleDebug 通过、
   offscreen 冒烟确认 auto-connect 触发、pytest 21 例全绿。遗留：真机手感验证、
   波形可视化另计划、M-2 未拍板。
+
+- **2026-08-28 15:00** | [PLAN-008-tofu-diagnostics.md](PLAN-008-tofu-diagnostics.md) → [PLAN-008-tofu-diagnostics-OUTCOME.md](PLAN-008-tofu-diagnostics-OUTCOME.md)
+  摘要：指纹免输（TOFU 首次信任）与重连诊断可读化。Android：f= 可选、空指纹=TOFU
+  （握手后自动记录并持久化、后续固定校验）、异常→中文原因（超时/拒连/DNS/指纹不符/AUTH 码）
+  经状态条与通知展示；设置页指纹框改"服务器信任状态+清除信任"。mac-app：fingerprint=""
+  同语义 TOFU + on_fingerprint 回调写回 config.json；指纹不符 fatal 文案含期望/实际前 12 位。
+  DEPLOY §6.1 增客户端原因↔server 日志对照表。验证：assembleDebug 通过、
+  pytest 22 例（新增 TOFU 回环用例）。遗留：M-2 未拍板、真机验证。
