@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"remote-voice/relay/internal/protocol"
+	"remote-voice/server/internal/protocol"
 )
 
 // session 表示一个已接入的客户端连接。

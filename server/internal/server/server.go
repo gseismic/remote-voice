@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"remote-voice/relay/internal/protocol"
+	"remote-voice/server/internal/protocol"
 )
 
 // 握手与统计相关的常量。

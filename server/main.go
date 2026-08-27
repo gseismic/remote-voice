@@ -18,8 +18,8 @@ import (
 	"strings"
 	"syscall"
 
-	"remote-voice/relay/internal/selfcert"
-	"remote-voice/relay/internal/server"
+	"remote-voice/server/internal/selfcert"
+	"remote-voice/server/internal/server"
 )
 
 func main() {
@@ -87,7 +87,7 @@ func main() {
 		srv.Close()
 	}()
 
-	log.Printf("relay 启动，监听 %s", *addr)
+	log.Printf("server 启动，监听 %s", *addr)
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatalf("服务器退出: %v", err)
 	}

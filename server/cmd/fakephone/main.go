@@ -19,8 +19,8 @@ import (
 	"syscall"
 	"time"
 
-	"remote-voice/relay/internal/protocol"
-	"remote-voice/relay/internal/selfcert"
+	"remote-voice/server/internal/protocol"
+	"remote-voice/server/internal/selfcert"
 )
 
 const (
@@ -34,7 +34,7 @@ const secretAlphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
-	addr := flag.String("addr", "127.0.0.1:9432", "relay 地址 host:port")
+	addr := flag.String("addr", "127.0.0.1:9432", "server 地址 host:port")
 	fp := flag.String("fingerprint", "", "服务端证书 SHA-256 指纹(hex)")
 	role := flag.String("role", "phone", "角色: phone（推流）| mac（注册并统计）")
 	secret := flag.String("secret", "", "phone: 秘密原文（或临时秘密 4+4 短码）")

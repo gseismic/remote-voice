@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"remote-voice/relay/internal/protocol"
-	"remote-voice/relay/internal/selfcert"
+	"remote-voice/server/internal/protocol"
+	"remote-voice/server/internal/selfcert"
 )
 
 // fakeTCP 包装 net.Pipe 并记录 SetNoDelay 调用，用于 H-2 回归断言。
