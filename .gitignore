@@ -21,3 +21,7 @@ server/server-linux
 
 # 连接密码（机密，严禁入库）
 server/token.txt
+
+# Python 包化（mac-app）
+.pytest_cache/
+*.egg-info/
