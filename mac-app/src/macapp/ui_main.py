@@ -2,7 +2,7 @@
 """Mac 主窗口（对齐高保真稿 v2/index.html 的 Mac 侧）：
 
 状态条（已连接中继 / 对讲在线）· 临时秘密卡（短码/倒计时/时长档/复制/重生成/保持）
-· 永久秘密卡（掩码/修改/停用）· 连接历史入口 · 底部连接设置（服务器/指纹/regkey）。
+· 永久秘密卡（掩码/修改/停用）· 连接历史入口 · 底部连接设置（服务器/设备名）。
 """
 
 import time
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLab
 
 from macapp import secretsgen as sec
 from macapp import core as core_mod
+from macapp import config_store
 from macapp.history import Entry, History
 from macapp.ui_history import HistoryWindow
 
@@ -32,6 +33,7 @@ class MainWindow(QMainWindow):
         self.client = None           # core.RelayClient
         self.hist_win = None
         self.pending_bridge = None   # auth-ok 事件 → 桥接结束时补 dur/bytes
+        self._identity = None
 
         self.setWindowTitle("远程麦克风 · 遥控说话")
         self.resize(460, 700)
@@ -146,19 +148,14 @@ class MainWindow(QMainWindow):
         cg.setContentsMargins(14, 10, 14, 10)
         cg.setVerticalSpacing(6)
         self.ed_server = QLineEdit(self.cfg.get("server", ""))
-        self.ed_fp = QLineEdit(self.cfg.get("fingerprint", ""))
-        self.ed_fp.setPlaceholderText("留空 = 首次连接自动信任（推荐）")
-        self.ed_key = QLineEdit(self.cfg.get("regkey", ""))
-        self.ed_key.setEchoMode(QLineEdit.Password)
         self.ed_name = QLineEdit(self.cfg.get("name", _hostname()))
         cg.addWidget(QLabel("服务器"), 0, 0)
         cg.addWidget(self.ed_server, 0, 1)
-        cg.addWidget(QLabel("指纹"), 1, 0)
-        cg.addWidget(self.ed_fp, 1, 1)
-        cg.addWidget(QLabel("注册密钥"), 2, 0)
-        cg.addWidget(self.ed_key, 2, 1)
-        cg.addWidget(QLabel("设备名"), 3, 0)
-        cg.addWidget(self.ed_name, 3, 1)
+        cg.addWidget(QLabel("设备名"), 1, 0)
+        cg.addWidget(self.ed_name, 1, 1)
+        identity_hint = QLabel("本机身份首次连接时自动创建并安全保存")
+        identity_hint.setObjectName("muted")
+        cg.addWidget(identity_hint, 2, 0, 1, 2)
         lay.addWidget(conn_box)
 
         bpx = QHBoxLayout()
@@ -340,37 +337,42 @@ class MainWindow(QMainWindow):
     # ---------- 连接 ----------
 
     def _connect_if_ready(self) -> None:
-        """配置齐（服务器+regkey，指纹可留空=TOFU）时自动连接；缺配置则提示待填。"""
+        """只要有服务器地址即可自动连接，本机设备身份按需创建。"""
         server = self.cfg.get("server", "").strip()
-        fp = (self.cfg.get("fingerprint", "") or "").strip().lower().replace(":", "").replace(" ", "")
-        regkey = self.cfg.get("regkey", "").strip()
-        if server and (not fp or len(fp) == 64) and regkey:
+        if server:
             self._connect()
         else:
-            self.status_text.setText("待配置：服务器 / 注册密钥（底部填写后点连接；指纹可留空=自动信任）")
+            self.status_text.setText("待配置：服务器（本机身份首次连接自动创建）")
 
     def _connect(self) -> None:
         server = self.ed_server.text().strip()
-        fp = self.ed_fp.text().strip().lower().replace(":", "").replace(" ", "")
-        regkey = self.ed_key.text().strip()
-        if not server or (fp and len(fp) != 64) or not regkey:
-            QMessageBox.warning(self, "连接设置", "请先填写 服务器 / 注册密钥（必填）。\n"
-                                              "指纹可留空：首次连接自动信任并记录（推荐）。")
+        if not server:
+            QMessageBox.warning(self, "连接设置", "请先填写服务器地址。")
             return
-        self.cfg.update(server=server, fingerprint=fp, regkey=regkey, name=self.ed_name.text().strip() or _hostname())
-        from macapp.config_store import save_config
-        save_config(self.cfg)
+        try:
+            identity = self._identity or sec.load_or_create_device_identity()
+        except sec.DeviceIdentityError as e:
+            QMessageBox.critical(self, "设备身份", f"无法创建本机身份：{e}")
+            return
+        self._identity = identity
+        fingerprint = config_store.trusted_fingerprint(self.cfg, server)
+        self.cfg.update(server=server, name=self.ed_name.text().strip() or _hostname())
+        self.cfg.pop("regkey", None)  # 旧配置迁移：新协议不再使用全局 regkey
+        config_store.save_config(self.cfg)
         self.client = core_mod.RelayClient(
-            server, fp, regkey, self.cfg["name"],
+            server, fingerprint, identity.device_id, identity.device_key, self.cfg["name"],
             on_state=self._on_state, on_event=self._on_event,
             on_bridge_stats=self._on_stats,
             on_fingerprint=self._on_trusted_fp,
         )
+        # 在连接线程启动前准备注册内容，认证成功后由 core 一次性发送。
+        self.client.update_temp(sec.hash_of(self.code), self.exp)
+        if self.perm:
+            self.client.update_perm(sec.hash_of(self.perm))
         self._queue.clear()
         self.client.start()
         self.btn_conn.setEnabled(False)
         self.btn_dis.setEnabled(True)
-        self._push_reg()
 
     def _disconnect(self) -> None:
         if self.client:
@@ -383,12 +385,11 @@ class MainWindow(QMainWindow):
     # ----- core 回调（连接线程）→ 队列 → UI 主线程 -----
 
     def _on_trusted_fp(self, fp: str) -> None:
-        """TOFU：首次连接自动信任的证书指纹，持久化供下次固定校验。"""
-        self.cfg["fingerprint"] = fp
-        from macapp.config_store import save_config
-        save_config(self.cfg)
-        self.ed_fp.setText(fp)
-        self.status_text.setText("已连接中继（首次连接已自动信任证书）")
+        """TOFU 回调来自连接线程，只入队，避免跨线程触碰 Qt 控件。"""
+        self._queue.append(("fingerprint", fp, self.server_for_trust()))
+
+    def server_for_trust(self) -> str:
+        return self.cfg.get("server", "").strip()
 
     def _on_state(self, state: str, detail: str) -> None:
         self._queue.append(("state", state, detail))
@@ -408,6 +409,16 @@ class MainWindow(QMainWindow):
                 self._apply_event(item[1])
             elif item[0] == "stats":
                 self._apply_stats(item[1])
+            elif item[0] == "fingerprint":
+                self._apply_fingerprint(item[1], item[2])
+
+    def _apply_fingerprint(self, fingerprint: str, server: str) -> None:
+        """在 UI 线程持久化内部 TOFU 记录；指纹不向用户展示。"""
+        try:
+            config_store.remember_fingerprint(self.cfg, server, fingerprint)
+            config_store.save_config(self.cfg)
+        except ValueError:
+            return
 
     def _apply_state(self, state: str, detail: str) -> None:
         map_ = {

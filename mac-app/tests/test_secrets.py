@@ -2,6 +2,7 @@
 """secrets 模块纯逻辑测试。"""
 
 from macapp import secretsgen as sec
+from macapp import config_store
 
 
 def test_gen_temp_secret_format():
@@ -36,6 +37,7 @@ def test_perm_roundtrip_file_only():
     from pathlib import Path
 
     old = sec.PERM_FILE
+    old_dir = sec.CONFIG_DIR
     try:
         # mypy 兼容写法：直接换模块级路径
         sec.PERM_FILE = Path(tempfile.mkdtemp()) / "perm.secret"
@@ -48,3 +50,31 @@ def test_perm_roundtrip_file_only():
         assert sec.load_perm_secret() is None
     finally:
         sec.PERM_FILE = old
+        sec.CONFIG_DIR = old_dir
+
+
+def test_device_identity_generated_once_and_reloaded(monkeypatch, tmp_path):
+    """测试目的：无 Keychain 时首次生成的设备身份必须落盘，第二次不能换 ID。"""
+    monkeypatch.setattr(sec, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(sec, "DEVICE_FILE", tmp_path / "device.json")
+    monkeypatch.setattr(sec, "_device_keychain_get", lambda: None)
+    monkeypatch.setattr(sec, "_device_keychain_set", lambda identity: False)
+
+    first = sec.load_or_create_device_identity()
+    second = sec.load_or_create_device_identity()
+
+    assert second == first
+    assert len(first.device_key) == 64
+    assert first.device_id.startswith("mac-")
+    assert (tmp_path / "device.json").stat().st_mode & 0o777 == 0o600
+    assert tmp_path.stat().st_mode & 0o777 == 0o700
+
+
+def test_tofu_fingerprint_is_scoped_to_server():
+    """测试目的：切换 server 时不能误用另一台服务器的 TOFU 指纹。"""
+    fp = "ab" * 32
+    cfg = {}
+    config_store.remember_fingerprint(cfg, "Relay.Example", fp)
+
+    assert config_store.trusted_fingerprint(cfg, "relay.example:9432") == fp
+    assert config_store.trusted_fingerprint(cfg, "other.example:9432") == ""

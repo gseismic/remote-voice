@@ -1,6 +1,5 @@
-// relay 中转服务器入口（协议 v2）。
-// regkey（Mac 注册密钥）来源优先级：-regkeyfile > 环境变量 RELAY_REGKEY > -regkey
-// （命令行传密钥会泄露到 ps/shell history，仅限本地调试）。
+// relay 中转服务器入口（协议 v3）。
+// 新 Mac 首次连接会自助登记设备身份；regkey 仅作为旧 v2 客户端的可选兼容参数。
 package main
 
 import (
@@ -15,6 +14,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -26,36 +26,28 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
 
 	addr := flag.String("addr", ":9432", "TLS 监听地址")
-	dataDir := flag.String("data", "./data", "证书与密钥存放目录")
-	regkeyFile := flag.String("regkeyfile", "", "从文件读取 Mac 注册密钥（首行，自动去空白）")
-	regkeyFlag := flag.String("regkey", "", "直接指定 regkey（仅限本地调试）")
+	dataDir := flag.String("data", "./data", "证书、密钥与设备身份存放目录")
+	regkeyFile := flag.String("regkeyfile", "", "旧 v2 兼容：从文件读取 Mac 注册密钥")
+	regkeyFlag := flag.String("regkey", "", "旧 v2 兼容：直接指定 regkey（仅限本地调试）")
 	pprofAddr := flag.String("pprof", "", "可选：pprof 监听地址，如 127.0.0.1:6060")
 	flag.Parse()
 
 	regkey := resolveRegkey(*regkeyFile, *regkeyFlag)
-	if regkey == "" {
-		fmt.Fprintln(os.Stderr, "错误：未提供 regkey。可用方式：\n"+
-			"  1) -regkeyfile /path/to/regkey 文件（推荐）\n"+
-			"  2) 环境变量 RELAY_REGKEY\n"+
-			"  3) -regkey 参数（仅限本地调试，会泄露到 ps/history）")
-		os.Exit(1)
-	}
 
 	cert, fingerprint, err := selfcert.Ensure(*dataDir)
 	if err != nil {
 		log.Fatalf("初始化证书失败: %v", err)
 	}
 	fmt.Println("==================================================")
-	fmt.Printf("服务端证书指纹 (SHA-256 hex)，请填入两端客户端配置:\n%s\n", fingerprint)
+	fmt.Printf("服务端证书指纹 (SHA-256 hex，仅供诊断；客户端首次连接自动信任):\n%s\n", fingerprint)
 
 	// 打印手机端可粘贴的一行配置（host 为空时用占位符提示）。
-	// 协议 v2：手机不再需要 regkey/token，只需地址与指纹。
+	// 协议 v3：客户端只需服务器地址，证书身份由内部 TOFU 管理。
 	hostPart, portPart, _ := net.SplitHostPort(*addr)
 	if hostPart == "" {
 		hostPart = "<服务器IP>"
 	}
-	fmt.Printf("手机端配置串（App 设置 → 导入配置串）:\n  rv://%s:%s?f=%s\n",
-		hostPart, portPart, fingerprint)
+	fmt.Printf("客户端配置串（App 设置 → 导入配置串）:\n  rv://%s:%s\n", hostPart, portPart)
 	fmt.Println("==================================================")
 
 	if *pprofAddr != "" {
@@ -74,10 +66,14 @@ func main() {
 		log.Fatalf("监听 %s 失败: %v", *addr, err)
 	}
 
-	srv := server.New(server.Config{
-		RegKey:    regkey,
-		TlsConfig: tlsCfg,
+	srv, err := server.NewWithError(server.Config{
+		RegKey:          regkey,
+		DeviceStorePath: filepath.Join(*dataDir, "devices.json"),
+		TlsConfig:       tlsCfg,
 	})
+	if err != nil {
+		log.Fatalf("加载设备身份失败: %v", err)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

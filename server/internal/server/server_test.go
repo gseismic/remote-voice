@@ -7,9 +7,12 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,6 +53,8 @@ const (
 	testRegKey = "test-regkey-0123456789abcdef"
 )
 
+var testDeviceSeq atomic.Uint64
+
 // hashSecret 测试内复刻客户端规范化+SHA-256（与 fakephone 同规格）。
 func hashSecret(t *testing.T, raw string) string {
 	t.Helper()
@@ -70,13 +75,17 @@ func hashSecret(t *testing.T, raw string) string {
 
 // startTestServer 在 127.0.0.1 随机端口起一个纯 TCP 测试服务器（单元测试不涉 TLS）。
 func startTestServer(t *testing.T, readTimeout, authTimeout time.Duration) string {
+	return startTestServerWithRegKey(t, readTimeout, authTimeout, "")
+}
+
+func startTestServerWithRegKey(t *testing.T, readTimeout, authTimeout time.Duration, regKey string) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
 	srv := New(Config{
-		RegKey:      testRegKey,
+		RegKey:      regKey,
 		ReadTimeout: readTimeout,
 		AuthTimeout: authTimeout,
 		Logger:      log.New(io.Discard, "", 0),
@@ -110,13 +119,24 @@ func authPhoneReq(t *testing.T, conn net.Conn, secret string) {
 	}
 }
 
-func authMacReq(t *testing.T, conn net.Conn, regkey string) {
+func authMacReq(t *testing.T, conn net.Conn, deviceID, deviceKey string) {
 	t.Helper()
 	payload, _ := json.Marshal(protocol.AuthRequest{
-		Role: protocol.RoleMac, Proto: protocol.ProtoVersion, Key: regkey,
+		Role: protocol.RoleMac, Proto: protocol.ProtoVersion,
+		DeviceID: deviceID, DeviceKey: deviceKey,
 	})
 	if err := protocol.WriteFrame(conn, protocol.FrameAuth, payload); err != nil {
 		t.Fatalf("write AUTH(mac): %v", err)
+	}
+}
+
+func authMacLegacyReq(t *testing.T, conn net.Conn, regkey string) {
+	t.Helper()
+	payload, _ := json.Marshal(protocol.AuthRequest{
+		Role: protocol.RoleMac, Proto: protocol.LegacyProtoVersion, Key: regkey,
+	})
+	if err := protocol.WriteFrame(conn, protocol.FrameAuth, payload); err != nil {
+		t.Fatalf("write legacy AUTH(mac): %v", err)
 	}
 }
 
@@ -167,7 +187,10 @@ func expectAuthErr(t *testing.T, conn net.Conn) []byte {
 func mustRegMac(t *testing.T, addr, name, perm, temp string, tempExp int64) (net.Conn, string, string) {
 	t.Helper()
 	mac := dial(t, addr)
-	authMacReq(t, mac, testRegKey)
+	seq := testDeviceSeq.Add(1)
+	deviceID := fmt.Sprintf("test-device-%d", seq)
+	deviceKey := fmt.Sprintf("%064x", seq)
+	authMacReq(t, mac, deviceID, deviceKey)
 	expectFrame(t, mac, protocol.FrameAuthOK, 2*time.Second)
 	ph, th := "", ""
 	if perm != "" {
@@ -193,10 +216,10 @@ func mustAuthPhone(t *testing.T, addr, secret string) (net.Conn, []byte) {
 
 // ===== 认证 =====
 
-func TestMacBadRegkeyRejected(t *testing.T) {
-	addr := startTestServer(t, 5*time.Second, 2*time.Second)
+func TestLegacyMacBadRegkeyRejected(t *testing.T) {
+	addr := startTestServerWithRegKey(t, 5*time.Second, 2*time.Second, testRegKey)
 	conn := dial(t, addr)
-	authMacReq(t, conn, "wrong-key")
+	authMacLegacyReq(t, conn, "wrong-key")
 	payload := expectAuthErr(t, conn)
 	if !strings.Contains(string(payload), protocol.ReasonInvalidKey) {
 		t.Fatalf("want %q in error, got %q", protocol.ReasonInvalidKey, payload)
@@ -205,6 +228,151 @@ func TestMacBadRegkeyRejected(t *testing.T) {
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, _, err := protocol.ReadFrame(conn); err == nil {
 		t.Fatal("connection should be closed after AUTH_ERR")
+	}
+}
+
+func TestMacInvalidDeviceCredentialRejected(t *testing.T) {
+	addr := startTestServer(t, 5*time.Second, 2*time.Second)
+	good := dial(t, addr)
+	deviceID := "fixed-test-device"
+	goodKey := fmt.Sprintf("%064x", 1)
+	authMacReq(t, good, deviceID, goodKey)
+	expectFrame(t, good, protocol.FrameAuthOK, 2*time.Second)
+
+	bad := dial(t, addr)
+	authMacReq(t, bad, deviceID, fmt.Sprintf("%064x", 2))
+	reason := expectAuthErr(t, bad)
+	if !strings.Contains(string(reason), protocol.ReasonInvalidDevice) {
+		t.Fatalf("want %q, got %q", protocol.ReasonInvalidDevice, reason)
+	}
+}
+
+func TestDeviceRegistryPersistsAndVerifies(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.json")
+	first, err := newDeviceRegistry(path)
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	key := strings.Repeat("ab", 32)
+	ok, err := first.verifyOrEnroll("persisted-device", key)
+	if err != nil || !ok {
+		t.Fatalf("first enrollment failed: ok=%v err=%v", ok, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat device registry: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("device registry permissions = %o, want 600", got)
+	}
+	second, err := newDeviceRegistry(path)
+	if err != nil {
+		t.Fatalf("reload registry: %v", err)
+	}
+	ok, err = second.verifyOrEnroll("persisted-device", key)
+	if err != nil || !ok {
+		t.Fatalf("persisted credential should verify: ok=%v err=%v", ok, err)
+	}
+	ok, err = second.verifyOrEnroll("persisted-device", fmt.Sprintf("%064x", 10))
+	if err != nil {
+		t.Fatalf("wrong credential check: %v", err)
+	}
+	if ok {
+		t.Fatal("wrong credential must be rejected")
+	}
+	upperKey := strings.ToUpper(key)
+	ok, err = second.verifyOrEnroll("persisted-device", upperKey)
+	if err != nil || !ok {
+		t.Fatalf("hex credential case should be normalized: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestDeviceRegistryPersistenceFailureDoesNotEnroll(t *testing.T) {
+	// 测试目的：设备文件无法写入时，首次身份不能被报告为已登记或留在内存。
+	dir := t.TempDir()
+	parent := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(parent, []byte("x"), 0o600); err != nil {
+		t.Fatalf("create blocking parent: %v", err)
+	}
+	registry := &deviceRegistry{
+		path:    filepath.Join(parent, "devices.json"),
+		devices: make(map[string]deviceRecord),
+	}
+	ok, err := registry.verifyOrEnroll("failed-persist-device", fmt.Sprintf("%064x", 11))
+	if err == nil || ok {
+		t.Fatalf("persistence failure must reject enrollment: ok=%v err=%v", ok, err)
+	}
+	if len(registry.devices) != 0 {
+		t.Fatal("failed enrollment must not update in-memory registry")
+	}
+}
+
+func TestMacDeviceAuthSurvivesServerRestart(t *testing.T) {
+	// 测试目的：确认 Mac 首次认证落盘的设备凭据，server 重启后仍可恢复认证。
+	path := filepath.Join(t.TempDir(), "devices.json")
+	const deviceID = "restart-device"
+	const deviceKey = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+	start := func() (*Server, net.Listener) {
+		t.Helper()
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		srv, err := NewWithError(Config{
+			DeviceStorePath: path,
+			ReadTimeout:     5 * time.Second,
+			AuthTimeout:     2 * time.Second,
+			Logger:          log.New(io.Discard, "", 0),
+		})
+		if err != nil {
+			ln.Close()
+			t.Fatalf("new server: %v", err)
+		}
+		go srv.Serve(ln) //nolint:errcheck // 测试中忽略 listener 关闭返回值
+		return srv, ln
+	}
+
+	srv1, ln1 := start()
+	conn1, err := net.Dial("tcp", ln1.Addr().String())
+	if err != nil {
+		srv1.Close()
+		ln1.Close()
+		t.Fatalf("dial first server: %v", err)
+	}
+	authMacReq(t, conn1, deviceID, deviceKey)
+	expectFrame(t, conn1, protocol.FrameAuthOK, 2*time.Second)
+	conn1.Close()
+	srv1.Close()
+	ln1.Close()
+
+	srv2, ln2 := start()
+	t.Cleanup(func() {
+		srv2.Close()
+		ln2.Close()
+	})
+	conn2, err := net.Dial("tcp", ln2.Addr().String())
+	if err != nil {
+		t.Fatalf("dial restarted server: %v", err)
+	}
+	t.Cleanup(func() { conn2.Close() })
+	authMacReq(t, conn2, deviceID, deviceKey)
+	expectFrame(t, conn2, protocol.FrameAuthOK, 2*time.Second)
+}
+
+func TestMacSameDeviceOnlineRejected(t *testing.T) {
+	addr := startTestServer(t, 5*time.Second, 2*time.Second)
+	deviceID := "online-device"
+	deviceKey := fmt.Sprintf("%064x", 77)
+	first := dial(t, addr)
+	authMacReq(t, first, deviceID, deviceKey)
+	expectFrame(t, first, protocol.FrameAuthOK, 2*time.Second)
+
+	second := dial(t, addr)
+	authMacReq(t, second, deviceID, deviceKey)
+	reason := expectAuthErr(t, second)
+	if !strings.Contains(string(reason), protocol.ReasonDeviceBusy) {
+		t.Fatalf("want %q, got %q", protocol.ReasonDeviceBusy, reason)
 	}
 }
 
@@ -362,7 +530,7 @@ func TestBridgeDissolutionOnDisconnect(t *testing.T) {
 func TestRegistersLiveUpdate(t *testing.T) {
 	addr := startTestServer(t, 5*time.Second, 2*time.Second)
 	mac := dial(t, addr)
-	authMacReq(t, mac, testRegKey)
+	authMacReq(t, mac, "registers-live-update", fmt.Sprintf("%064x", 1001))
 	expectFrame(t, mac, protocol.FrameAuthOK, 2*time.Second)
 
 	// 初始注册临时秘密 V1
@@ -478,10 +646,10 @@ func TestRateLimitEscalatesAndClearsOnSuccess(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		rl.fail(ip, base)
 	}
-	if !rl.locked(ip, base.Add(3 * time.Minute)) {
+	if !rl.locked(ip, base.Add(3*time.Minute)) {
 		t.Fatal("2nd lock should be 5m, still locked at +3m")
 	}
-	if rl.locked(ip, base.Add(6 * time.Minute)) {
+	if rl.locked(ip, base.Add(6*time.Minute)) {
 		t.Fatal("2nd lock expired at +5m")
 	}
 	// 三级（封顶 30m）：再一轮窗口失败
@@ -489,10 +657,10 @@ func TestRateLimitEscalatesAndClearsOnSuccess(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		rl.fail(ip, base2)
 	}
-	if !rl.locked(ip, base2.Add(10 * time.Minute)) {
+	if !rl.locked(ip, base2.Add(10*time.Minute)) {
 		t.Fatal("3rd lock should be 30m, still locked at +10m")
 	}
-	if rl.locked(ip, base2.Add(31 * time.Minute)) {
+	if rl.locked(ip, base2.Add(31*time.Minute)) {
 		t.Fatal("3rd lock max 30m")
 	}
 	// 成功后清零
@@ -531,7 +699,7 @@ func TestHeartbeatPingPongKeepsAlive(t *testing.T) {
 func mustAuthPhoneOK(t *testing.T, addr string) net.Conn {
 	t.Helper()
 	mac := dial(t, addr)
-	authMacReq(t, mac, testRegKey)
+	authMacReq(t, mac, "heartbeat-ping-pong", fmt.Sprintf("%064x", 1002))
 	expectFrame(t, mac, protocol.FrameAuthOK, 2*time.Second)
 	registerReq(t, mac, "K", "", hashSecret(t, "KEEP-1"), time.Now().Add(time.Hour).Unix())
 	go func() {
@@ -625,7 +793,6 @@ func TestTLSHandshakeFailureDoesNotKillServer(t *testing.T) {
 	}
 	var logBuf syncBuf
 	srv := New(Config{
-		RegKey:    testRegKey,
 		TlsConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
 		Logger:    log.New(&logBuf, "", 0),
 	})
@@ -665,7 +832,7 @@ func TestTLSHandshakeFailureDoesNotKillServer(t *testing.T) {
 		return c
 	}
 	mac := dialTLS()
-	authMacReq(t, mac, testRegKey)
+	authMacReq(t, mac, "tls-after-attack", fmt.Sprintf("%064x", 1003))
 	expectFrame(t, mac, protocol.FrameAuthOK, 2*time.Second)
 	registerReq(t, mac, "MacBook", "", hashSecret(t, "TLS-1"), time.Now().Add(time.Hour).Unix())
 

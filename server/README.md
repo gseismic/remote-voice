@@ -3,7 +3,7 @@
 公网 Linux 服务器端程序（Go 编写，标准库零依赖）：接收 Android 手机推来的音频流，
 按秘密哈希注册表路由到归属 Mac，建立 1:1 桥接。
 
-- 协议 v2 注册制：Mac 以 regkey 认证后注册（临时/永久）秘密哈希；
+- 协议 v3 注册制：Mac 首次连接自动登记本机设备身份，之后注册（临时/永久）秘密哈希；
   手机认证只带秘密的 SHA-256 hex（服务器零明文）；按 IP 滑窗限速防爆破。
 - 部署指南（systemd、防火墙、日志速查、故障表）：[DEPLOY.md](DEPLOY.md)
 
@@ -18,8 +18,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o ser
 ## 运行
 
 ```bash
-openssl rand -hex 32 > regkey.txt     # Mac 注册密钥（勿泄露、勿入库）
-./server -addr :9432 -data ./data -regkeyfile ./regkey.txt
+./server -addr :9432 -data ./data
 ```
 
 参数：
@@ -27,17 +26,17 @@ openssl rand -hex 32 > regkey.txt     # Mac 注册密钥（勿泄露、勿入库
 | 参数 | 说明 |
 |---|---|
 | `-addr` | TLS 监听地址，默认 `:9432` |
-| `-data` | 证书/密钥目录（自签证书生成于此；**保持目录不动则证书指纹不变**） |
-| `-regkeyfile` | 从文件读 regkey（推荐；首行去空白） |
-| `-regkey` | 直接指定 regkey（仅限本地调试，会泄露到 ps/history） |
+| `-data` | 证书/密钥与 Mac 设备身份目录（**保持目录不动则证书和设备身份不丢失**） |
+| `-regkeyfile` | 可选：旧 v2 Mac 兼容，从文件读取全局 regkey |
+| `-regkey` | 可选：旧 v2 兼容，直接指定 regkey（仅限本地调试） |
 | `-pprof` | 可选：pprof 监听地址（如 `127.0.0.1:6060`） |
 
-regkey 优先级：`-regkeyfile` > 环境变量 `RELAY_REGKEY` > `-regkey`。
-**更换 regkey 即踢掉全部 Mac 注册。**
+旧 v2 regkey 优先级仍为：`-regkeyfile` > 环境变量 `RELAY_REGKEY` > `-regkey`。
+新 v3 Mac 不读取或要求 regkey。设备身份登记保存在 `data/devices.json`。
 
 启动后横幅打印：
-1. 服务端证书指纹（SHA-256 hex）——填入 Mac 端配置；
-2. 手机端配置串 `rv://<服务器IP>:9432?f=<指纹>`——App 里导入即可。
+1. 服务端证书指纹（SHA-256 hex）——仅供排障和人工审计；
+2. 客户端配置串 `rv://<服务器IP>:9432`——App 里导入即可。
 
 ## 常见问题
 
@@ -50,6 +49,9 @@ regkey 优先级：`-regkeyfile` > 环境变量 `RELAY_REGKEY` > `-regkey`。
 `cmd/fakephone`（假手机/假 Mac，无真机联调用）：
 
 ```bash
-go run ./cmd/fakephone -addr 127.0.0.1:9432 -fingerprint <指纹> -role mac -regkey <regkey>   # 假 Mac：注册并统计下行
-go run ./cmd/fakephone -addr 127.0.0.1:9432 -fingerprint <指纹> -role phone -secret <秘密>   # 假手机：推流 440Hz 正弦
+go run ./cmd/fakephone -addr 127.0.0.1:9432 -role mac                                  # 假 Mac：自动生成设备身份
+go run ./cmd/fakephone -addr 127.0.0.1:9432 -role phone -secret <秘密>               # 假手机：推流 440Hz 正弦
 ```
+
+`-fingerprint` 现在是可选高级参数；留空时 fakephone 首次连接自动 TOFU。旧 v2
+fake Mac 如需兼容，仍可显式使用旧版本参数（新流程不需要 regkey）。

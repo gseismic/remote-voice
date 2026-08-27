@@ -52,3 +52,9 @@
   同语义 TOFU + on_fingerprint 回调写回 config.json；指纹不符 fatal 文案含期望/实际前 12 位。
   DEPLOY §6.1 增客户端原因↔server 日志对照表。验证：assembleDebug 通过、
   pytest 22 例（新增 TOFU 回环用例）。遗留：M-2 未拍板、真机验证。
+
+- **2026-08-28 16:56** | [PLAN-009-multi-mac-self-enrollment.md](PLAN-009-multi-mac-self-enrollment.md) → [PLAN-009-multi-mac-self-enrollment-OUTCOME.md](PLAN-009-multi-mac-self-enrollment-OUTCOME.md)
+  摘要：协议升级 v3；Mac 首次自动生成并持久化设备身份，server 支持多 Mac 独立登记与设备级认证，
+  不再要求新流程的全局 regkey；Mac/Android 常规流程不要求用户输入证书指纹，内部按 server 地址 TOFU；
+  保留旧 v2 regkey 兼容。验证：Go race/vet/build、Mac pytest 26 例、Python 编译检查、Android
+  assembleDebug、git diff --check 全部通过。未覆盖：两台实体 Mac、Android 真机、公网与 BlackHole 长跑。

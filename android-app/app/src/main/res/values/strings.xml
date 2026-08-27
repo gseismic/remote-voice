@@ -15,23 +15,18 @@
     <!-- 设置页 -->
     <string name="title_settings">设置</string>
     <string name="label_import">导入配置串</string>
-    <string name="hint_import_desc">粘贴 server 启动时打印的 rv:// 一行（服务器与指纹；指纹可省略——未信任时首次连接自动记录）</string>
-    <string name="hint_import">rv://服务器IP:9432?f=64位指纹</string>
+    <string name="hint_import_desc">粘贴 server 启动时打印的 rv:// 地址；首次连接会自动建立服务器信任</string>
+    <string name="hint_import">rv://服务器IP:9432</string>
     <string name="btn_parse">解析并填入</string>
     <string name="label_server_section">服务器</string>
     <string name="label_server">服务器地址（IP:端口）</string>
     <string name="hint_server">默认 43.139.226.138:9432</string>
-    <string name="label_fingerprint">服务器信任（证书指纹）</string>
-    <string name="fp_trusted_prefix">已信任 %1$s…（首次连接自动记录，之后每次校验；换服务器时清除）</string>
-    <string name="fp_trust_empty">未信任：首次连接将自动记录证书指纹（推荐）；若已导入 rv:// 带 f= 则按固定指纹校验</string>
-    <string name="btn_clear_fp">清除信任（换服务器/证书时用）</string>
-    <string name="toast_fp_cleared">已清除信任，下次连接将重新记录</string>
     <string name="label_aec">回声消除（Mac 外放时建议开启）</string>
     <string name="label_handsfree">免提常开（不开则仅按住说话时传输）</string>
     <string name="label_devices_section">我的设备（秘密保存于本机，仅元数据可见）</string>
     <string name="btn_add_device">＋ 添加设备（输入 Mac 的秘密）</string>
     <string name="btn_save_back">保存并返回</string>
-    <string name="toast_import_ok">导入成功，已填入服务器与指纹</string>
-    <string name="toast_import_bad">格式无效：应为 rv://主机:端口?f=64位指纹</string>
+    <string name="toast_import_ok">导入成功，已填入服务器地址</string>
+    <string name="toast_import_bad">格式无效：应为 rv://主机:端口</string>
     <string name="toast_saved">已保存</string>
 </resources>

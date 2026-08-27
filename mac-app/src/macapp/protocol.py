@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""remote-voice 线路协议（v2，与 server/internal/protocol 对齐）。
+"""remote-voice 线路协议（v3，与 server/internal/protocol 对齐）。
 
 帧格式: [1B type][4B length BigEndian][payload(length 字节)]
 本模块只做编解码与常量定义，不含会话语义。
@@ -24,12 +24,16 @@ FRAME_EVENT = 0x09       # S→Mac 事件通知（认证成功/失败）
 PEER_ONLINE = b"\x01"
 PEER_OFFLINE = b"\x00"
 
-PROTO_VERSION = 2
+LEGACY_PROTO_VERSION = 2
+PROTO_VERSION = 3
 ROLE_PHONE = "phone"
 ROLE_MAC = "mac"
 
 # AUTH_ERR 原因码（客户端按此分支）
 REASON_INVALID_KEY = "invalid-key"
+REASON_INVALID_DEVICE = "invalid-device"
+REASON_DEVICE_BUSY = "device-busy"
+REASON_DEVICE_STORE_UNAVAILABLE = "device-store-unavailable"
 REASON_INVALID_SECRET = "invalid-secret"
 REASON_SECRET_EXPIRED = "secret-expired"
 REASON_PEER_BUSY = "peer-busy"
@@ -56,10 +60,17 @@ class FatalError(Exception):
     """不可恢复错误（指纹不符等）；调用方应终止重连。"""
 
 
-def auth_payload(role: str, key: str = "", secret_hex: str = "") -> bytes:
+def auth_payload(role: str, device_id: str = "", device_key: str = "",
+                 secret_hex: str = "", key: str = "") -> bytes:
+    """生成 AUTH payload；key 仅保留旧 v2 调试/兼容调用。"""
     body = {"role": role, "proto": PROTO_VERSION}
     if role == ROLE_MAC:
-        body["key"] = key
+        if device_id or device_key:
+            body["device_id"] = device_id
+            body["device_key"] = device_key
+        elif key:
+            body["proto"] = LEGACY_PROTO_VERSION
+            body["key"] = key
     else:
         body["secret"] = secret_hex
     return json.dumps(body, separators=(",", ":")).encode()

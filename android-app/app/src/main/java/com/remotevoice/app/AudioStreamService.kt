@@ -22,7 +22,7 @@ import android.util.Log
 enum class StatusState { STOPPED, CONNECTING, WAIT_PEER, STREAMING, ERROR }
 
 /**
- * 前台采音服务（v2）：持有 RelayClient 与 AudioRecord 生命周期。
+ * 前台采音服务（v3）：持有 RelayClient 与 AudioRecord 生命周期。
  * 前台服务(microphone 类型)保证后台采音不被系统杀死（设计文档 §6.3）。
  * v2 交互：按住说话（PTT）——采音循环常开，但仅在「按住或免提常开」时发送；
  * 设备名在认证成功后由 AUTH_OK 回写 [RelayClient.Listener.onPeerName]。
@@ -83,7 +83,6 @@ class AudioStreamService : Service(), RelayClient.Listener {
         // 服务器地址：prefs 为空时回落内置默认（需求：默认服务器免输入）
         val server = (prefs.getString(KEY_SERVER, "") ?: "")
             .ifBlank { DEFAULT_SERVER }
-        val fingerprint = prefs.getString(KEY_FINGERPRINT, "") ?: ""
         val host = server.substringBeforeLast(":")
         val port = server.substringAfterLast(":").toIntOrNull()
         if (host.isEmpty() || port == null) {
@@ -92,7 +91,9 @@ class AudioStreamService : Service(), RelayClient.Listener {
             stopSelf()
             return
         }
-        // 指纹为空 = TOFU：连接时自动信任并记录（见 onPeerFingerprint）
+        val serverKey = TrustStore.serverKey(host, port)
+        val fingerprint = TrustStore.load(prefs, serverKey)
+        // 指纹为空 = TOFU：连接时自动信任并记录（用户无需输入）
         // 激活设备：秘密原文（规范化后本地算哈希，只传 hex 给 relay）
         val device = DeviceStore(this).active()
         if (device == null || device.secret.isBlank()) {
@@ -154,14 +155,13 @@ class AudioStreamService : Service(), RelayClient.Listener {
         )
     }
 
-    override fun onPeerFingerprint(fingerprint: String) {
-        if (fingerprint.length != 64) return
+    override fun onPeerFingerprint(fingerprint: String, serverKey: String) {
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_FINGERPRINT, fingerprint).apply()
-        Log.i(TAG, "tofu: 已信任服务器证书 $fingerprint")
+        TrustStore.remember(prefs, serverKey, fingerprint)
+        Log.i(TAG, "tofu: 已建立服务器信任")
         mainHandler.post {
             if (Status.state == StatusState.CONNECTING) {
-                Status.text = "已连接中继（自动信任证书）"
+                Status.text = "已连接中继（首次连接已建立信任）"
                 updateNotification(Status.text)
             }
         }
@@ -323,8 +323,8 @@ class AudioStreamService : Service(), RelayClient.Listener {
         private const val NOTIFY_ID = 1
         private const val PREFS = "config"
         private const val KEY_SERVER = "server"
-        private const val KEY_FINGERPRINT = "fingerprint"
         private const val KEY_AEC = "aec"
         const val KEY_HANDSFREE = "handsfree"
     }
+
 }

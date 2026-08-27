@@ -1,6 +1,6 @@
 // Package protocol 定义 remote-voice 线路协议：
 // 所有帧统一为 [1B type][4B length BigEndian][payload(length 字节)]。
-// v2（注册制）：手机只带秘密哈希认证，Mac 以 regkey 认证后注册/热更秘密，
+// v3（设备自助入网）：手机只带配对秘密哈希认证，Mac 以本机设备身份认证后注册/热更秘密，
 // relay 按秘密哈希路由、按 IP 限速防爆破。本包只负责帧的编解码与常量定义。
 package protocol
 
@@ -11,7 +11,7 @@ import (
 	"io"
 )
 
-// 帧类型常量（设计文档 §4.1 + v2 扩展）
+// 帧类型常量（设计文档 §4.1；v3 沿用既有帧类型）
 const (
 	FrameAuth      byte = 0x01 // C→S 认证请求，payload 为 JSON
 	FrameAuthOK    byte = 0x02 // S→C 认证成功，payload 为 JSON（手机侧含 mac 设备名）
@@ -36,22 +36,26 @@ const MaxPayloadSize = 65536
 // HeaderLen 帧头长度：1 字节 type + 4 字节 length
 const HeaderLen = 5
 
-// 协议版本与角色取值（AUTH payload）
+// 协议版本与角色取值（AUTH payload）。v2 保留给旧 Mac 的可选兼容路径。
 const (
-	ProtoVersion = 2
-	RolePhone    = "phone"
-	RoleMac      = "mac"
+	LegacyProtoVersion = 2
+	ProtoVersion       = 3
+	RolePhone          = "phone"
+	RoleMac            = "mac"
 )
 
 // AUTH_ERR 原因枚举（ReasonAuthErr 的取值，客户端按此分支处理）
 const (
-	ReasonInvalidKey      = "invalid-key"    // Mac regkey 错误
-	ReasonInvalidSecret   = "invalid-secret" // 秘密哈希查无此条目
-	ReasonSecretExpired   = "secret-expired" // 临时秘密已过期
-	ReasonPeerBusy        = "peer-busy"      // 目标 Mac 已有桥接
-	ReasonRateLimited     = "rate-limited"   // IP 处于防爆破锁定，恒定排除进一步探测
-	ReasonBadRequest      = "bad-request"    // 请求格式/语义非法
-	ReasonUnsupportedVer  = "unsupported-proto"
+	ReasonInvalidKey             = "invalid-key"              // 旧 v2 Mac 的 regkey 错误
+	ReasonInvalidDevice          = "invalid-device"           // v3 Mac 设备身份错误
+	ReasonDeviceBusy             = "device-busy"              // 同一设备已有在线会话
+	ReasonDeviceStoreUnavailable = "device-store-unavailable" // 设备身份无法持久化
+	ReasonInvalidSecret          = "invalid-secret"           // 秘密哈希查无此条目
+	ReasonSecretExpired          = "secret-expired"           // 临时秘密已过期
+	ReasonPeerBusy               = "peer-busy"                // 目标 Mac 已有桥接
+	ReasonRateLimited            = "rate-limited"             // IP 处于防爆破锁定，恒定排除进一步探测
+	ReasonBadRequest             = "bad-request"              // 请求格式/语义非法
+	ReasonUnsupportedVer         = "unsupported-proto"
 )
 
 // Event 事件类型（FrameEvent 的 event 字段取值）
@@ -66,13 +70,16 @@ const (
 	SecretKindTemp = "temp" // 临时秘密
 )
 
-// AuthRequest AUTH 帧 payload 结构（proto=2）
-// Mac 用 Key（regkey）认证；手机用 Secret（规范化后 SHA-256 hex）认证。
+// AuthRequest AUTH 帧 payload 结构。
+// v3 Mac 用 DeviceID + DeviceKey 认证；v2 Mac 可用 Key（旧全局 regkey）兼容认证；
+// 手机用 Secret（规范化后 SHA-256 hex）认证。
 type AuthRequest struct {
-	Role   string `json:"role"`
-	Proto  int    `json:"proto"`
-	Key    string `json:"key,omitempty"`    // role=mac：注册密钥
-	Secret string `json:"secret,omitempty"` // role=phone：秘密哈希（hex）
+	Role      string `json:"role"`
+	Proto     int    `json:"proto"`
+	Key       string `json:"key,omitempty"`        // v2 role=mac：旧全局注册密钥
+	DeviceID  string `json:"device_id,omitempty"`  // v3 role=mac：本机持久设备 ID
+	DeviceKey string `json:"device_key,omitempty"` // v3 role=mac：本机随机设备凭据
+	Secret    string `json:"secret,omitempty"`     // role=phone：配对秘密哈希（hex）
 }
 
 // AuthOKPayload 认证成功应答（FrameAuthOK）。手机侧通过 mac 字段获得对端设备名。

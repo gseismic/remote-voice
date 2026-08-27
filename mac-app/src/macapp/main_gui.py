@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""remote-voice Mac 图形客户端入口（协议 v2）。
+"""remote-voice Mac 图形客户端入口（协议 v3）。
 
 运行: remote-voice-gui （安装后任意目录；或 python3 -m macapp.main_gui）
 配置: ~/.config/remote-voice/config.json

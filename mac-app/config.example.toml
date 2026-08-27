@@ -1,11 +1,10 @@
-# remote-voice Mac 接收器配置示例（协议 v2）
+# remote-voice Mac 接收器配置示例（协议 v3）
 # 复制为 config.toml 并填写；命令行参数优先级高于本文件。
 
 server = "203.0.113.10:9432"
-regkey = "用-openssl-rand-hex-32-生成-的-mac-注册密钥"
-fingerprint = "relay-首次启动打印的-64-位-hex-指纹"
 device = "BlackHole"
 name = "MacBook-Pro"       # 手机端看到的设备名（默认主机名）
 temp_expiry = 28800        # 临时秘密有效期（秒，默认 8 小时）
 # temp_secret = "K7M-2QX9"  # 可选：复用固定临时秘密；留空则每次随机生成并打印
 # perm_secret = "123456789ABCDEF"  # 可选：永久秘密（≥12 位）
+# fingerprint = "..."       # 可选高级项；留空时首次连接自动建立 TOFU

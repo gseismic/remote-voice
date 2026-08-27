@@ -2,7 +2,7 @@
 """回环集成：真实 relay（Go 二进制）↔ mac-client（Core）↔ 假手机端。
 
 链路验证：
-1. mac 认证（regkey）+ REGISTER（临时秘密）
+1. mac 首次设备自助入网 + REGISTER（临时秘密）
 2. 假手机用同一秘密认证 → AUTH_OK 带设备名 → 桥接 PEER_STATE(online)
 3. 手机→Mac AUDIO 帧透传（sink 收到）；Mac→手机 帧透传
 4. 错误秘密 → invalid-secret；Mac 收到 EVENT auth-ok/auth-fail
@@ -41,7 +41,7 @@ def wait_for(cond, timeout=5.0, poll=0.05, msg="timeout"):
 
 @pytest.fixture(scope="session")
 def relay_proc(tmp_path_factory):
-    """构建并启动真实 relay；产出 {addr, fp, regkey, proc, log}。"""
+    """构建并启动不配置 regkey 的真实 server；产出 {addr, fp, proc, log}。"""
     repo = _find_repo()
     if not repo:
         pytest.skip("找不到仓库根（relay/ 目录）")
@@ -55,19 +55,9 @@ def relay_proc(tmp_path_factory):
         pytest.skip(f"server 构建失败: {r.stderr}")
 
     data = tmp_path_factory.mktemp("data")
-    regkey = "test-regkey-0000"
     port = free_port()
     proc = subprocess.Popen(
-        [str(binpath), "-addr", f"127.0.0.1:{port}", "-data", str(data),
-         "-regkeyflag-check", "unused"],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-    )
-    # 重新拉起：上面占位参数错误，直接起正确命令
-    proc.kill(); proc.wait()
-
-    proc = subprocess.Popen(
-        [str(binpath), "-addr", f"127.0.0.1:{port}", "-data", str(data),
-         "-regkey", regkey],
+        [str(binpath), "-addr", f"127.0.0.1:{port}", "-data", str(data)],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         bufsize=1,
     )
@@ -97,7 +87,6 @@ def relay_proc(tmp_path_factory):
     yield {
         "addr": f"127.0.0.1:{port}",
         "fp": fp,
-        "regkey": regkey,
         "log": lambda: "".join(lines),
     }
     proc.terminate()
@@ -124,15 +113,16 @@ def free_port():
 
 # ---------- 工具 ----------
 
-def mac_client(relay_proc, name="MacBook-Pro", perm="", temp="", temp_exp=0, sink=None):
-    kwargs = {}
-    if perm:
-        kwargs.setdefault("_perm", perm)
+def mac_client(relay_proc, name="MacBook-Pro", perm="", temp="", temp_exp=0, sink=None,
+               device_id=None, device_key=None):
+    identity = sec.new_device_identity()
+    device_id = device_id or identity.device_id
+    device_key = device_key or identity.device_key
     events = []
     states = []
     stats = []
     cli = RelayClient(
-        relay_proc["addr"], relay_proc["fp"], relay_proc["regkey"], name,
+        relay_proc["addr"], relay_proc["fp"], device_id, device_key, name,
         sink=sink or CollectSink(),
         on_state=lambda s, d: states.append((s, d)),
         on_event=events.append,
@@ -204,6 +194,41 @@ def test_full_bridge_then_teardown(relay_proc):
     cli.stop()
 
 
+def test_two_macs_are_isolated(relay_proc):
+    """测试目的：同一 server 上两台 Mac 同时在线时，秘密只路由到各自 Mac。"""
+    mac_a, _states_a, _events_a, _stats_a = mac_client(
+        relay_proc, name="Mac-A", temp="MAC-A-SECRET", temp_exp=int(time.time()) + 3600,
+    )
+    mac_b, _states_b, _events_b, _stats_b = mac_client(
+        relay_proc, name="Mac-B", temp="MAC-B-SECRET", temp_exp=int(time.time()) + 3600,
+    )
+    try:
+        wait_for(lambda: mac_a.state == ST_REGISTERED, msg="Mac-A 未达 registered")
+        wait_for(lambda: mac_b.state == ST_REGISTERED, msg="Mac-B 未达 registered")
+
+        phone_a, ok_a = phone_auth(relay_proc["addr"], relay_proc["fp"], "MAC-A-SECRET")
+        phone_b, ok_b = phone_auth(relay_proc["addr"], relay_proc["fp"], "MAC-B-SECRET")
+        assert ok_a.get("mac") == "Mac-A"
+        assert ok_b.get("mac") == "Mac-B"
+        try:
+            wait_for(lambda: mac_a.state == ST_BRIDGED, msg="Mac-A 未达 bridged")
+            wait_for(lambda: mac_b.state == ST_BRIDGED, msg="Mac-B 未达 bridged")
+            frame_a = b"A" * 32
+            frame_b = b"B" * 32
+            proto.write_frame(phone_a, proto.FRAME_AUDIO, frame_a)
+            proto.write_frame(phone_b, proto.FRAME_AUDIO, frame_b)
+            wait_for(lambda: mac_a.sink.total_bytes >= len(frame_a), msg="Mac-A 未收到自己的音频")
+            wait_for(lambda: mac_b.sink.total_bytes >= len(frame_b), msg="Mac-B 未收到自己的音频")
+            assert mac_a.sink.chunks[-1] == frame_a
+            assert mac_b.sink.chunks[-1] == frame_b
+        finally:
+            phone_a.close()
+            phone_b.close()
+    finally:
+        mac_a.stop()
+        mac_b.stop()
+
+
 def test_wrong_secret_and_event(relay_proc):
     cli, states, events, stats = mac_client(
         relay_proc, temp="GOOD-0001", temp_exp=int(time.time()) + 3600,
@@ -232,16 +257,23 @@ def test_expired_secret_event(relay_proc):
     cli.stop()
 
 
-def test_auth_fatal_on_bad_regkey(relay_proc):
+def test_auth_fatal_on_bad_device_key(relay_proc):
     ev = []
+    device_id = "python-test-device"
+    good = mac_client(
+        relay_proc, name="Good", temp="GOOD-DEVICE", temp_exp=int(time.time()) + 3600,
+        device_id=device_id, device_key="aa" * 32,
+    )[0]
+    wait_for(lambda: good.state == ST_REGISTERED, msg="good device 未达 registered")
     cli = RelayClient(
-        relay_proc["addr"], relay_proc["fp"], "WRONG-REKEY", "B",
+        relay_proc["addr"], relay_proc["fp"], device_id, "bb" * 32, "B",
         sink=CollectSink(), on_state=lambda s, d: ev.append((s, d)),
     )
     cli.start()
-    wait_for(lambda: cli.state == ST_FATAL, msg="bad regkey 应 fatal")
+    wait_for(lambda: cli.state == ST_FATAL, msg="bad device key 应 fatal")
     assert any(s == ST_FATAL for s, _ in ev)
     cli.stop()
+    good.stop()
 
 
 def test_mac_disconnect_invalidates_secret(relay_proc):
@@ -271,7 +303,8 @@ def test_fingerprint_mismatch_fatal(relay_proc):
     bad_fp = "ab" * 32 if relay_proc["fp"] != "ab" * 32 else "cd" * 32
     ev = []
     cli = RelayClient(
-        relay_proc["addr"], bad_fp, relay_proc["regkey"], "B",
+        relay_proc["addr"], bad_fp, sec.new_device_identity().device_id,
+        sec.new_device_identity().device_key, "B",
         sink=CollectSink(), on_state=lambda s, d: ev.append((s, d)),
     )
     cli.start()
@@ -284,7 +317,8 @@ def test_tofu_auto_trust_and_reuse(relay_proc):
     """回归(PLAN-008)：指纹留空 → 首次连接自动记录并注册成功；回调返回真指纹。"""
     got_fps = []
     cli = RelayClient(
-        relay_proc["addr"], "", relay_proc["regkey"], "TofuMac",
+        relay_proc["addr"], "", sec.new_device_identity().device_id,
+        sec.new_device_identity().device_key, "TofuMac",
         sink=CollectSink(), on_fingerprint=got_fps.append,
     )
     cli.start()
@@ -292,3 +326,29 @@ def test_tofu_auto_trust_and_reuse(relay_proc):
     assert got_fps and got_fps[-1] == relay_proc["fp"], "TOFU 应记录到实际证书指纹"
     assert cli.fingerprint == relay_proc["fp"], "内部指纹应已固化"
     cli.stop()
+
+
+def test_register_is_gated_until_auth():
+    """测试目的：秘密热更不能在 Mac AUTH 成功前抢跑 REGISTER。"""
+    class FakeWriter:
+        def __init__(self):
+            self.frames = []
+
+        def send(self, ftype, payload=b""):
+            self.frames.append((ftype, payload))
+
+    writer = FakeWriter()
+    identity = sec.new_device_identity()
+    client = RelayClient(
+        "127.0.0.1:9432", "", identity.device_id, identity.device_key, "GateMac",
+        sink=CollectSink(),
+    )
+    client._writer = writer
+
+    client.update_temp(sec.hash_of("TEMP-GATE"), int(time.time()) + 3600)
+    assert writer.frames == []
+
+    client._auth_ready.set()
+    client.update_perm(sec.hash_of("PERM-GATE"))
+    assert len(writer.frames) == 1
+    assert writer.frames[0][0] == proto.FRAME_REGISTER

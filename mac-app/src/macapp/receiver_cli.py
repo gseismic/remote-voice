@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""remote-voice Mac 轻接收器（CLI，协议 v2 注册制）。
+"""remote-voice Mac 轻接收器（CLI，协议 v3 自助入网）。
 
-本机以 regkey 认证并注册（临时/永久）秘密，手机凭秘密连入；
+本机首次使用自动生成设备身份并注册（临时/永久）秘密，手机凭秘密连入；
 接收 AUDIO 帧写入 BlackHole 输出端（作为 Mac 的虚拟麦克风）。
 
 替代旧 mac-receiver/receiver.py：`remote-voice-recv` 命令等价
@@ -9,7 +9,7 @@
 
 用法示例:
     remote-voice-recv --server server.example.com:9432 \
-        --regkey "$RELAY_REGKEY" --fingerprint <64位hex> --device BlackHole
+        --device BlackHole
 
 配置优先级: 命令行参数 > config.toml > 内置默认值。
 """
@@ -24,8 +24,11 @@ import time
 import tomllib
 
 from macapp import core as core_mod
+from macapp import config_store
 from macapp.audio import AudioSink, StatsSink, log
-from macapp.secretsgen import gen_temp_secret, hash_of
+from macapp.protocol import normalize_fingerprint
+from macapp.secretsgen import gen_temp_secret, hash_of, load_or_create_device_identity
+from macapp import secretsgen as sec
 
 
 def load_config(path: str) -> dict:
@@ -46,12 +49,19 @@ class CliReceiver:
         self.perm_secret = args.perm_secret or ""
         self._fatal_msg: str | None = None
         self._was_bridged = False
+        self._trust_cfg = config_store.load_config()
+        self._identity = load_or_create_device_identity()
+        fingerprint = args.fingerprint or config_store.trusted_fingerprint(
+            self._trust_cfg, args.server,
+        )
 
         self.client = core_mod.RelayClient(
-            args.server, args.fingerprint, args.regkey, args.name,
+            args.server, fingerprint, self._identity.device_id, self._identity.device_key,
+            args.name,
             sink=self.sink,
             on_state=self._on_state, on_event=self._on_event,
             on_bridge_stats=self._on_stats,
+            on_fingerprint=self._on_fingerprint,
         )
         if self.perm_secret:
             self.client.update_perm(hash_of(self.perm_secret))
@@ -84,6 +94,14 @@ class CliReceiver:
     def _on_stats(self, dur: float, total_bytes: int) -> None:
         log(f"本次桥接会话: {dur:.1f}s / {total_bytes / 1024:.1f} KB")
 
+    def _on_fingerprint(self, fingerprint: str) -> None:
+        """首次连接后保存当前 server 的内部 TOFU 信任。"""
+        try:
+            config_store.remember_fingerprint(self._trust_cfg, self.args.server, fingerprint)
+            config_store.save_config(self._trust_cfg)
+        except ValueError:
+            log("警告：服务器证书指纹格式无效，未保存 TOFU 记录")
+
     def run(self) -> None:
         if not self.temp_secret:
             self.temp_secret = gen_temp_secret()
@@ -111,11 +129,9 @@ class CliReceiver:
 
 def main() -> None:
     cfg = load_config("config.toml")
-    p = argparse.ArgumentParser(description="remote-voice Mac 接收器（协议 v2，CLI）")
+    p = argparse.ArgumentParser(description="remote-voice Mac 接收器（协议 v3，CLI）")
     p.add_argument("--server", default=cfg.get("server"),
                    help="server 地址 host:port")
-    p.add_argument("--regkey", default=cfg.get("regkey"),
-                   help="Mac 注册密钥（建议用环境变量/文件注入）")
     p.add_argument("--name", default=cfg.get("name", socket.gethostname().split(".")[0]),
                    help="向手机展示的设备名（默认本机主机名）")
     p.add_argument("--temp-secret", default=cfg.get("temp_secret"),
@@ -124,23 +140,24 @@ def main() -> None:
                    help="永久秘密原文（可选，与临时秘密并存）")
     p.add_argument("--temp-expiry", type=int, default=cfg.get("temp_expiry", 8 * 3600),
                    help="临时秘密有效期（秒，默认 8 小时）")
-    p.add_argument("--fingerprint", default=cfg.get("fingerprint"),
-                   help="服务端证书 SHA-256 指纹（64 位 hex）")
+    p.add_argument("--fingerprint", default=cfg.get("fingerprint", ""),
+                   help="高级选项：固定服务端证书 SHA-256 指纹；留空自动建立 TOFU")
     p.add_argument("--device", default=cfg.get("device", "BlackHole"),
                    help="输出设备名称子串匹配（默认 BlackHole）")
     p.add_argument("--sink", choices=["audio", "null"], default="audio",
                    help="null=无声卡验证模式，仅统计帧率")
     args = p.parse_args()
 
-    for name in ("server", "regkey", "fingerprint"):
-        if not getattr(args, name):
-            sys.exit(f"错误：缺少 --{name}（或在 config.toml 中配置）")
-    from macapp.protocol import normalize_fingerprint
-    if len(normalize_fingerprint(args.fingerprint)) != 64:
-        sys.exit("错误：--fingerprint 应为 64 位 SHA-256 hex（server 启动时会打印）")
-    args.fingerprint = normalize_fingerprint(args.fingerprint)
-
-    CliReceiver(args).run()
+    if not args.server:
+        sys.exit("错误：缺少 --server（或在 config.toml 中配置）")
+    if args.fingerprint:
+        args.fingerprint = normalize_fingerprint(args.fingerprint)
+        if len(args.fingerprint) != 64 or any(c not in "0123456789abcdef" for c in args.fingerprint):
+            sys.exit("错误：--fingerprint 必须是 64 位 SHA-256 hex")
+    try:
+        CliReceiver(args).run()
+    except sec.DeviceIdentityError as e:
+        sys.exit(f"错误：{e}")
 
 
 if __name__ == "__main__":

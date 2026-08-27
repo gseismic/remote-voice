@@ -13,13 +13,14 @@ import (
 // 并发模型（内部接口契约）：每个会话恰好一个读 goroutine；
 // 所有写操作必须经 writeFrame 串行化，保证帧头与 payload 不被并发写撕裂。
 type session struct {
-	srv     *Server
-	conn    net.Conn
-	role    string // AUTH 通过后才有值；mac 或 phone
-	peer    string // 远端地址字符串，仅用于日志展示
-	writeMu sync.Mutex // 串行化全部帧写
-	closed  atomic.Bool
-	bridge  *bridge // 已通过认证的手机/Mac 持有其桥接；由 Server.mu 读写，读取在锁内
+	srv      *Server
+	conn     net.Conn
+	role     string     // AUTH 通过后才有值；mac 或 phone
+	deviceID string     // v3 Mac 设备身份；由 Server.mu 保护其关联索引
+	peer     string     // 远端地址字符串，仅用于日志展示
+	writeMu  sync.Mutex // 串行化全部帧写
+	closed   atomic.Bool
+	bridge   *bridge // 已通过认证的手机/Mac 持有其桥接；由 Server.mu 读写，读取在锁内
 	// 音频接收计数（readLoop 单线程累加，statsLoop 原子读取）
 	audioFrames atomic.Int64
 	audioBytes  atomic.Int64

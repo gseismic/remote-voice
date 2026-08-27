@@ -1,4 +1,4 @@
-// fakephone 调试工具（协议 v2）：模拟手机端向 relay 推送 440Hz 正弦波 PCM，
+// fakephone 调试工具（协议 v3）：模拟手机端向 server 推送 440Hz 正弦波 PCM，
 // 或以 mac 身份连接注册并统计下行帧数，用于没有真机时的全链路联调。
 package main
 
@@ -35,26 +35,34 @@ const secretAlphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
 	addr := flag.String("addr", "127.0.0.1:9432", "server 地址 host:port")
-	fp := flag.String("fingerprint", "", "服务端证书 SHA-256 指纹(hex)")
+	fp := flag.String("fingerprint", "", "高级选项：服务端证书 SHA-256 指纹(hex)，留空自动 TOFU")
 	role := flag.String("role", "phone", "角色: phone（推流）| mac（注册并统计）")
 	secret := flag.String("secret", "", "phone: 秘密原文（或临时秘密 4+4 短码）")
-	regkey := flag.String("regkey", "", "mac: 注册密钥")
+	deviceID := flag.String("device-id", "", "mac: 设备 ID（留空则本次随机生成）")
+	deviceKey := flag.String("device-key", "", "mac: 设备凭据（留空则本次随机生成）")
 	name := flag.String("name", "", "mac: 设备名（默认主机名）")
 	freq := flag.Float64("freq", 440, "正弦波频率 Hz")
 	flag.Parse()
 
-	if selfcert.NormalizeFingerprint(*fp) == "" {
-		log.Fatal("必须提供 -fingerprint")
+	fingerprint := selfcert.NormalizeFingerprint(*fp)
+	if *fp != "" && (len(fingerprint) != 64 || !isHex(fingerprint)) {
+		log.Fatal("-fingerprint 必须是 64 位 hex")
 	}
 
-	conn := dialTLS(*addr, selfcert.NormalizeFingerprint(*fp))
+	conn := dialTLS(*addr, fingerprint)
 	defer conn.Close()
 
 	switch *role {
 	case "phone":
 		runPhone(conn, *secret, *freq)
 	case "mac":
-		runMac(conn, *regkey, *name)
+		id, key := *deviceID, *deviceKey
+		if id == "" && key == "" {
+			id, key = newDeviceIdentity()
+		} else if id == "" || key == "" {
+			log.Fatal("-device-id 与 -device-key 必须同时提供")
+		}
+		runMac(conn, id, key, *name)
 	default:
 		log.Fatalf("未知角色 %q", *role)
 	}
@@ -158,17 +166,15 @@ func runPhone(conn *tls.Conn, secretRaw string, freq float64) {
 	}
 }
 
-// runMac mac 侧：regkey 认证 → 生成临时秘密并注册 → 统计下行音频帧。
+// runMac mac 侧：设备身份认证 → 生成临时秘密并注册 → 统计下行音频帧。
 // 生成的临时秘密打印在日志里，供手机侧用同一秘密连入。
-func runMac(conn *tls.Conn, regkey, name string) {
-	if regkey == "" {
-		log.Fatal("mac 模式必须提供 -regkey")
-	}
+func runMac(conn *tls.Conn, deviceID, deviceKey, name string) {
 	if name == "" {
 		name, _ = os.Hostname()
 	}
 	authPayload, _ := json.Marshal(protocol.AuthRequest{
-		Role: protocol.RoleMac, Proto: protocol.ProtoVersion, Key: regkey,
+		Role: protocol.RoleMac, Proto: protocol.ProtoVersion,
+		DeviceID: deviceID, DeviceKey: deviceKey,
 	})
 	mustWrite(conn, protocol.FrameAuth, authPayload)
 
@@ -269,21 +275,57 @@ func hashSecret(raw string) string {
 	return sha256Hex(b.String())
 }
 
-// dialTLS 建立带证书指纹固定的 TLS 连接（与真实客户端同语义）。
+// dialTLS 建立 TLS 连接；有指纹时固定校验，留空时首次连接自动 TOFU。
 func dialTLS(addr, fingerprintHex string) *tls.Conn {
 	cfg := &tls.Config{
-		// 信任根来自指纹而非 CA：跳过系统校验，由 VerifyPeerCertificate 执行 pinning
+		// 信任根来自指纹而非 CA：跳过系统校验，由下方 pinning/TOFU 决定信任。
 		InsecureSkipVerify: true,
-		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+		MinVersion:         tls.VersionTLS12,
+	}
+	if fingerprintHex != "" {
+		cfg.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 			return selfcert.VerifyRawCerts(rawCerts, fingerprintHex)
-		},
-		MinVersion: tls.VersionTLS12,
+		}
 	}
 	c, err := tls.Dial("tcp", addr, cfg)
 	if err != nil {
 		log.Fatalf("TLS 连接失败: %v", err)
 	}
+	if fingerprintHex == "" {
+		certs := c.ConnectionState().PeerCertificates
+		if len(certs) == 0 {
+			c.Close()
+			log.Fatal("TLS 未返回服务器证书")
+		}
+		log.Printf("TOFU 已信任服务端证书 %s", fingerprintOf(certs[0].Raw))
+	}
 	return c
+}
+
+func newDeviceIdentity() (string, string) {
+	idRaw := make([]byte, 16)
+	keyRaw := make([]byte, 32)
+	if _, err := rand.Read(idRaw); err != nil {
+		log.Fatalf("生成 fake Mac 设备 ID 失败: %v", err)
+	}
+	if _, err := rand.Read(keyRaw); err != nil {
+		log.Fatalf("生成 fake Mac 设备凭据失败: %v", err)
+	}
+	return "fake-mac-" + hex.EncodeToString(idRaw), hex.EncodeToString(keyRaw)
+}
+
+func fingerprintOf(der []byte) string {
+	sum := sha256.Sum256(der)
+	return hex.EncodeToString(sum[:])
+}
+
+func isHex(value string) bool {
+	for _, c := range value {
+		if !(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func mustWrite(conn *tls.Conn, typ byte, payload []byte) {

@@ -1,5 +1,5 @@
-// Package server 实现 relay 中转服务器（协议 v2 注册制）：
-// TLS 接入 → Mac 以 regkey 认证并注册秘密哈希；手机只带秘密哈希认证 →
+// Package server 实现 relay 中转服务器（协议 v3 设备自助入网）：
+// TLS 接入 → Mac 以本机设备身份认证并注册秘密哈希；手机只带秘密哈希认证 →
 // 按哈希路由到归属 Mac 建立 1:1 桥接（AUDIO 帧双向透传）→
 // 心跳超时管理 → 断线解桥通知 → 按 IP 防爆破限速。
 // 服务器不接触秘密原文（两端只传 SHA-256 哈希），也不理解音频内容。
@@ -21,19 +21,20 @@ import (
 
 // 握手与统计相关的常量。
 const (
-	tlsHandshakeTimeout = 10 * time.Second     // TLS 握手截止，防慢速连接占住 goroutine
+	tlsHandshakeTimeout = 10 * time.Second       // TLS 握手截止，防慢速连接占住 goroutine
 	acceptRetryDelay    = 100 * time.Millisecond // Accept 暂时性错误后的退避
-	statsInterval       = 10 * time.Second      // 音频流量统计窗口
-	registerTimeout     = 10 * time.Second      // Mac 认证后等待 REGISTER 帧时限
+	statsInterval       = 10 * time.Second       // 音频流量统计窗口
+	registerTimeout     = 10 * time.Second       // Mac 认证后等待 REGISTER 帧时限
 )
 
 // Config 服务器配置。零值字段使用默认值。
 type Config struct {
-	RegKey      string        // Mac 注册密钥（必填），如文件/环境变量注入
-	ReadTimeout time.Duration // 读超时（心跳判定），默认 40s
-	AuthTimeout time.Duration // 等待 AUTH 帧超时，默认 10s
-	TlsConfig   *tls.Config   // 非nil 时对每条连接执行 TLS 握手；nil 则按裸 TCP 处理（测试用）
-	Logger      *log.Logger
+	RegKey          string        // 旧 v2 Mac 注册密钥（可选，仅兼容旧客户端）
+	DeviceStorePath string        // v3 Mac 身份文件；空值表示仅内存测试仓库
+	ReadTimeout     time.Duration // 读超时（心跳判定），默认 40s
+	AuthTimeout     time.Duration // 等待 AUTH 帧超时，默认 10s
+	TlsConfig       *tls.Config   // 非nil 时对每条连接执行 TLS 握手；nil 则按裸 TCP 处理（测试用）
+	Logger          *log.Logger
 }
 
 func (c Config) withDefaults() Config {
@@ -51,11 +52,12 @@ func (c Config) withDefaults() Config {
 
 // macReg 一台在线 Mac 的注册状态。由 Server.mu 保护。
 type macReg struct {
-	sess    *session
-	name    string
-	perm    string // 永久秘密哈希（""=未注册）
-	temp    string // 临时秘密哈希（""=未注册）
-	tempExp int64  // 临时秘密过期时刻（unix 秒）
+	sess     *session
+	deviceID string
+	name     string
+	perm     string // 永久秘密哈希（""=未注册）
+	temp     string // 临时秘密哈希（""=未注册）
+	tempExp  int64  // 临时秘密过期时刻（unix 秒）
 }
 
 // bridge 一座 1:1 桥接（Mac↔手机）。全局不超过 macs 数量。
@@ -71,12 +73,14 @@ type Server struct {
 	cfg Config
 	mu  sync.Mutex
 	// macs: 在线 Mac 会话 → 其注册状态；regs: 秘密哈希 → 归属条目（注册表）
-	macs  map[*session]*macReg
-	regs  map[string]*regEntry
-	rate  *rateLimiter
-	ln    net.Listener
-	closed bool
-	quit   chan struct{}
+	macs          map[*session]*macReg
+	devicesOnline map[string]*session
+	regs          map[string]*regEntry
+	deviceStore   *deviceRegistry
+	rate          *rateLimiter
+	ln            net.Listener
+	closed        bool
+	quit          chan struct{}
 }
 
 // regEntry 秘密哈希的注册表条目：该哈希属于哪台 Mac、什么类型、何时过期。
@@ -86,13 +90,39 @@ type regEntry struct {
 	tempExp int64  // temp 类才有效
 }
 
+// New 创建 server。生产入口应优先使用 NewWithError，以便在设备身份文件损坏时启动即失败；
+// 旧调用方使用本函数时，身份仓库错误会被保留并在 Mac 认证时拒绝。
 func New(cfg Config) *Server {
+	s, err := NewWithError(cfg)
+	if err == nil {
+		return s
+	}
+	cfg = cfg.withDefaults()
+	cfg.Logger.Printf("设备身份仓库不可用（Mac 认证将被拒绝）: %v", err)
+	return newServer(cfg, &deviceRegistry{
+		path: cfg.DeviceStorePath, devices: make(map[string]deviceRecord), loadErr: err,
+	})
+}
+
+// NewWithError 创建并加载 server 的设备身份仓库。
+func NewWithError(cfg Config) (*Server, error) {
+	cfg = cfg.withDefaults()
+	store, err := newDeviceRegistry(cfg.DeviceStorePath)
+	if err != nil {
+		return nil, err
+	}
+	return newServer(cfg, store), nil
+}
+
+func newServer(cfg Config, store *deviceRegistry) *Server {
 	return &Server{
-		cfg:   cfg.withDefaults(),
-		macs:  make(map[*session]*macReg),
-		regs:  make(map[string]*regEntry),
-		rate:  newRateLimiter(),
-		quit:  make(chan struct{}),
+		cfg:           cfg,
+		macs:          make(map[*session]*macReg),
+		devicesOnline: make(map[string]*session),
+		regs:          make(map[string]*regEntry),
+		deviceStore:   store,
+		rate:          newRateLimiter(),
+		quit:          make(chan struct{}),
 	}
 }
 
@@ -206,7 +236,8 @@ func (s *Server) handleConn(conn net.Conn) {
 }
 
 // authenticate 读取并校验 AUTH 帧。
-// Mac（regkey 常量时间比较）与手机（秘密哈希查注册表 + 桥接 check-and-reserve）
+// v3 Mac 使用设备身份自助入网；v2 Mac 仅在配置旧 RegKey 时兼容。
+// 手机（秘密哈希查注册表 + 桥接 check-and-reserve）
 // 在锁外完成全部网络 IO，注册/建桥在临界区内原子完成。
 // 返回 ok 表示认证成功（Mac 尚待 REGISTER）。
 func (s *Server) authenticate(sess *session) bool {
@@ -225,7 +256,7 @@ func (s *Server) authenticate(sess *session) bool {
 		sess.reject(protocol.ReasonBadRequest, "malformed AUTH payload")
 		return false
 	}
-	if req.Proto != protocol.ProtoVersion {
+	if req.Proto != protocol.ProtoVersion && req.Proto != protocol.LegacyProtoVersion {
 		sess.reject(protocol.ReasonUnsupportedVer, fmt.Sprintf("unsupported proto version %d", req.Proto))
 		return false
 	}
@@ -240,9 +271,17 @@ func (s *Server) authenticate(sess *session) bool {
 	}
 }
 
-// authMac regkey 常量时间比较；通过后登记在线 Mac（注册表空可待 REGISTER）。
+// authMac 按协议版本选择 v3 设备身份认证或 v2 旧 regkey 认证。
 func (s *Server) authMac(sess *session, req protocol.AuthRequest) bool {
-	if subtle.ConstantTimeCompare([]byte(req.Key), []byte(s.cfg.RegKey)) != 1 {
+	if req.Proto == protocol.LegacyProtoVersion {
+		return s.authMacLegacy(sess, req)
+	}
+	return s.authMacDevice(sess, req)
+}
+
+// authMacLegacy 保留 v2 全局 regkey 兼容路径，不参与新客户端流程。
+func (s *Server) authMacLegacy(sess *session, req protocol.AuthRequest) bool {
+	if s.cfg.RegKey == "" || subtle.ConstantTimeCompare([]byte(req.Key), []byte(s.cfg.RegKey)) != 1 {
 		s.cfg.Logger.Printf("auth failed peer=%s role=mac (%s)", sess.peer, protocol.ReasonInvalidKey)
 		sess.reject(protocol.ReasonInvalidKey, "invalid key")
 		return false
@@ -260,6 +299,47 @@ func (s *Server) authMac(sess *session, req protocol.AuthRequest) bool {
 	s.macs[sess] = &macReg{sess: sess}
 	s.mu.Unlock()
 	s.cfg.Logger.Printf("mac authed peer=%s (等待 REGISTER)", sess.peer)
+	return true
+}
+
+// authMacDevice 完成 v3 Mac 的首次自助登记、凭据校验和在线会话占位。
+// 首次登记必须在 Server.mu 内完成，避免同一 device_id 并发抢占。
+func (s *Server) authMacDevice(sess *session, req protocol.AuthRequest) bool {
+	if !validDeviceID(req.DeviceID) || !validDeviceKey(req.DeviceKey) {
+		s.cfg.Logger.Printf("auth failed peer=%s role=mac (%s)", sess.peer, protocol.ReasonInvalidDevice)
+		sess.reject(protocol.ReasonInvalidDevice, "invalid device identity")
+		return false
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return false
+	}
+	ok, err := s.deviceStore.verifyOrEnroll(req.DeviceID, req.DeviceKey)
+	if err != nil {
+		s.mu.Unlock()
+		s.cfg.Logger.Printf("auth failed peer=%s role=mac (%s): %v", sess.peer, protocol.ReasonDeviceStoreUnavailable, err)
+		sess.reject(protocol.ReasonDeviceStoreUnavailable, "device store unavailable")
+		return false
+	}
+	if !ok {
+		s.mu.Unlock()
+		s.cfg.Logger.Printf("auth failed peer=%s role=mac (%s)", sess.peer, protocol.ReasonInvalidDevice)
+		sess.reject(protocol.ReasonInvalidDevice, "invalid device identity")
+		return false
+	}
+	if existing := s.devicesOnline[req.DeviceID]; existing != nil {
+		s.mu.Unlock()
+		s.cfg.Logger.Printf("auth failed peer=%s role=mac (%s)", sess.peer, protocol.ReasonDeviceBusy)
+		sess.reject(protocol.ReasonDeviceBusy, "device already online")
+		return false
+	}
+	sess.role = protocol.RoleMac
+	sess.deviceID = req.DeviceID
+	s.macs[sess] = &macReg{sess: sess, deviceID: req.DeviceID}
+	s.devicesOnline[req.DeviceID] = sess
+	s.mu.Unlock()
+	s.cfg.Logger.Printf("mac authed device=%s peer=%s (等待 REGISTER)", req.DeviceID, sess.peer)
 	return true
 }
 
@@ -317,6 +397,8 @@ func (s *Server) authPhone(sess *session, req protocol.AuthRequest) bool {
 		return false
 	}
 	macSess := entry.mac
+	macName := reg.name
+	secretKind := entry.kind
 	if macSess.bridge != nil {
 		// 该 Mac 已有桥接：1:1 语义，拒绝新手机而不计入限速
 		s.mu.Unlock()
@@ -333,16 +415,16 @@ func (s *Server) authPhone(sess *session, req protocol.AuthRequest) bool {
 
 	s.rate.clear(ip)
 	s.cfg.Logger.Printf("bridged role=phone peer=%s ↔ mac=%s peer=%s",
-		sess.peer, reg.name, macSess.peer)
+		sess.peer, macName, macSess.peer)
 
 	// 双方 PEER_STATE(online)；AUTH_OK 先于状态帧发出（客户端契约），附设备名；
 	// 归属 Mac 收 auth-ok 事件。全部网络 IO 在锁外完成。
-	okPayload, _ := json.Marshal(protocol.AuthOKPayload{Mac: reg.name})
+	okPayload, _ := json.Marshal(protocol.AuthOKPayload{Mac: macName})
 	sess.writeFrame(protocol.FrameAuthOK, okPayload)
 	sess.writeFrame(protocol.FramePeerState, []byte{protocol.PeerOnline})
 	macSess.writeFrame(protocol.FramePeerState, []byte{protocol.PeerOnline})
 	s.notifyMac(macSess, protocol.EventNotify{
-		Event: protocol.EventAuthOK, IP: ip, Kind: entry.kind,
+		Event: protocol.EventAuthOK, IP: ip, Kind: secretKind,
 	})
 	return true
 }
@@ -365,6 +447,9 @@ func (s *Server) detach(sess *session) *session {
 	if sess.role == protocol.RoleMac {
 		if reg, ok := s.macs[sess]; ok {
 			delete(s.macs, sess)
+			if reg.deviceID != "" && s.devicesOnline[reg.deviceID] == sess {
+				delete(s.devicesOnline, reg.deviceID)
+			}
 			if e, ok := s.regs[reg.perm]; ok && e.mac == sess {
 				delete(s.regs, reg.perm)
 			}

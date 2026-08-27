@@ -1,9 +1,8 @@
 package com.remotevoice.app
 
 /**
- * 一行配置串解析器（协议 v2）：rv://host[:port]?f=<指纹>
- * 手机已无需密码/秘密（秘密随设备条目保存），配置串仅含服务器与指纹；
- * 由 relay 启动横幅直接打印，用户在设置页粘贴导入，消除手打。
+ * 一行配置串解析器（协议 v3）：rv://host[:port]
+ * 旧版本的 ?f=<指纹> 仍可解析，结果只供内部 TOFU 迁移，不是用户必填项。
  */
 object ConfigParser {
 
@@ -22,7 +21,9 @@ object ConfigParser {
     fun parse(raw: String): Parsed? {
         val m = pattern.find(raw.trim()) ?: return null
         val port = m.groupValues[2].toIntOrNull()?.takeIf { it in 1..65535 } ?: DEFAULT_PORT
-        val fingerprint = normalizeFingerprint(m.groupValues[3])
+        val rawFingerprint = m.groupValues[3]
+        val fingerprint = normalizeFingerprint(rawFingerprint)
+        if (rawFingerprint.isNotBlank() && fingerprint.isEmpty()) return null
         if (fingerprint.isNotEmpty() && fingerprint.length != FP_LEN) return null
         return Parsed(m.groupValues[1], port, fingerprint)
     }

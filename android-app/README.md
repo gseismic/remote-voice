@@ -1,6 +1,6 @@
 # android-app · Android 手机端
 
-手机端采音程序（Kotlin，零第三方依赖）：前台服务 + TLS 指纹固定连接 server，
+手机端采音程序（Kotlin，零第三方依赖）：前台服务 + TLS 内部 TOFU 连接 server，
 认证凭 Mac 显示的秘密（临时/永久），桥接后按住说话（PTT）推 48kHz/mono 音频。
 
 ## 构建与安装
@@ -18,8 +18,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ## 首次使用流程
 
 1. 打开 App → 设置（右上角齿轮）：
-   - 「导入配置串」粘贴 server 启动横幅的 `rv://<IP>:9432?f=<指纹>`（`f=` **可省略**：
-     未信任时首次连接自动记录证书，之后固定校验；设备改换服务器时可至设置页「清除信任」）
+   - 「导入配置串」粘贴 server 启动横幅的 `rv://<IP>:9432`；首次连接自动建立内部信任
    - 「添加设备」输入 **Mac 端显示的临时/永久秘密**（新增即激活）
    - （可选）编辑设备名/开关免提常开/回声消除
 2. 返回主界面：**App 打开即自动连接**，底部大按钮 **按住说话**（松开即停）；
@@ -32,4 +31,4 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 
 - 权限：录音（前台采音必需）、通知（Android 13+ 前台服务通知）
 - 秘密仅存本机 SharedPreferences，网络层只传 SHA-256 hex；
-  TLS 使用服务端证书指纹固定（`FingerprintTrustManager`），不信任 CA
+  TLS 首次连接使用内部 TOFU，之后按服务器地址固定证书（`FingerprintTrustManager`），不要求用户输入指纹

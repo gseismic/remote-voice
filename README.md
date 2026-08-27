@@ -1,7 +1,7 @@
 # remote-voice
 
 Mac 麦克风硬件损坏的替代方案：**Android 手机采音 → 公网 Linux 中继服务器 → Mac 虚拟麦克风**。
-全链路自研、完全可控，TLS 加密 + 首次信任后指纹固定（TOFU），无需域名。协议 v2 注册制。
+全链路自研、完全可控，TLS 加密 + 首次连接自动建立内部信任（TOFU），无需域名。协议 v3 设备自助入网。
 
 ## 架构（三端各自独立交付）
 
@@ -10,7 +10,7 @@ Android 手机: 按住说话(PTT)              Linux 服务器(公网IP)        
 ┌──────────────────┐  出站TLS  ┌──────────────────────┐  出站TLS  ┌──────────────────┐
 │ android-app       │ ───────→│ server (Go)          │────────→│ mac-app           │
 │ 秘密SHA-256 hex   │        │ 秘密哈希注册表路由+桥接 │         │ GUI / CLI 收流    │
-│ 48k/mono/s16le    │        │ Mac regkey 认证注册     │         │ 写入 BlackHole   │
+│ 48k/mono/s16le    │        │ Mac 设备身份登记+桥接   │         │ 写入 BlackHole   │
 └──────────────────┘        │ 按IP限速防爆破           │         └──────────────────┘
                             └──────────────────────┘            ↑ 会议软件选 BlackHole 2ch 当麦克风
 ```
@@ -21,11 +21,11 @@ Android 手机: 按住说话(PTT)              Linux 服务器(公网IP)        
 | [`mac-app/`](mac-app/README.md) | macOS | Python（PySide6） | 可安装包：`remote-voice-gui` 图形客户端（临时/永久秘密、历史、自动注册）与 `remote-voice-recv` CLI 轻接收器 |
 | [`android-app/`](android-app/README.md) | Android 手机 | Kotlin（零第三方依赖） | 前台服务 + 按住说话（PTT），多设备单激活，免提常开 |
 
-- 协议 v2：`[1B type][4B len BE][payload]`；Mac 用 regkey 认证后注册秘密哈希，
+- 协议 v3：`[1B type][4B len BE][payload]`；Mac 首次自动登记本机设备身份后注册秘密哈希，
   手机认证只带规范化秘密的 SHA-256 hex（全程无明文）；桥接 1:1；
   IP 滑窗限速（60s/5 失败 → 1m/5m/30m 递增锁）
 - 音频：48kHz/mono/s16le/20ms 帧裸 PCM（1920B），server 不解析内容
-- 安全模型：TLS 自签证书 + SHA-256 指纹固定（pinning 在两端做，首次连接自动信任并可手填固定）；secret 只存哈希
+- 安全模型：TLS 自签证书 + 客户端内部 TOFU 固定；设备凭据按 Mac 隔离并持久化；配对秘密只传 SHA-256 哈希
 
 ## 快速启动
 
@@ -34,10 +34,9 @@ Android 手机: 按住说话(PTT)              Linux 服务器(公网IP)        
 > 逐命令详解、systemd 托管、日志速查与故障排查见 **server/[DEPLOY.md](server/DEPLOY.md)**。需要 Go ≥ 1.22。
 
 ```bash
-openssl rand -hex 32 > regkey.txt            # Mac 注册密钥（只给 Mac，不入库）
 cd server && go build -o server .
-./server -addr :9432 -data ./data -regkeyfile ./regkey.txt
-# 打印① 证书指纹（成 Mac 配置）；② rv://<IP>:9432?f=<指纹>（手机 App 一键导入）
+./server -addr :9432 -data ./data
+# 打印客户端可导入的 rv://<IP>:9432 地址；证书指纹仅供诊断
 ```
 
 ### 2. Mac
@@ -45,11 +44,11 @@ cd server && go build -o server .
 ```bash
 brew install blackhole-2ch                  # 虚拟声卡（2ch 已够）
 pip install -e mac-app/                     # 安装 GUI+CLI（PySide6 ~200MB）
-remote-voice-gui                            # 填 服务器/指纹/regkey.txt 内容/设备名
+remote-voice-gui                            # 填服务器/设备名；本机身份首次连接自动创建
 # 界面显示临时短码；手机 App 输入即可连入；连接记录见「查看连接历史」
 ```
 
-无桌面/脚本化用法：`remote-voice-recv --server <IP>:9432 --regkey ... --fingerprint ...`（见 [mac-app/README.md](mac-app/README.md)）。
+无桌面/脚本化用法：`remote-voice-recv --server <IP>:9432`（见 [mac-app/README.md](mac-app/README.md)）。
 
 ### 3. Android
 
@@ -75,5 +74,5 @@ cd android-app && ./gradlew assembleDebug
 ## 文档索引
 
 - 交接档案（项目背景/状态/演进）：[docs/HANDOFF.md](docs/HANDOFF.md)
-- 设计与计划：`docs/design/`（v1 协议、v2 交互、仓库重组）、`docs/dev/`（计划/结果/评审）
+- 设计与计划：`docs/design/`（含多 Mac 自助入网）、`docs/dev/`（计划/结果/评审）
 - 部署：server/[DEPLOY.md](server/DEPLOY.md)（服务器）、android-app/[BUILD.md](android-app/BUILD.md)（Android 构建环境）

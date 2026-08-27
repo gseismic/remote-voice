@@ -17,12 +17,12 @@ import javax.net.ssl.SSLSocket
 import javax.net.ssl.X509TrustManager
 
 /**
- * relay 线路协议客户端（v2 注册制）。
+ * relay 线路协议客户端（v3 配对秘密认证）。
  *
  * 帧格式: [1B type][4B length BigEndian][payload]
  * 类型: AUTH=0x01 AUTH_OK=0x02 AUTH_ERR=0x03 AUDIO=0x04 PING=0x05 PONG=0x06 PEER_STATE=0x07
  *
- * v2 认证模型：手机只携带 规范化秘密的 SHA-256 hex（长度固定 64），
+ * v3 认证模型：手机只携带 规范化秘密的 SHA-256 hex（长度固定 64），
  * AUTH_OK 附目标 Mac 设备名（app 用于"首次连接自动命名"）。
  * 任何 AUTH_ERR 均视为不可自动恢复（原因码转人性化文案交给 UI）。
  */
@@ -30,7 +30,7 @@ class RelayClient(
     private val host: String,
     private val port: Int,
     private val secretHex: String,
-    private val fingerprintHex: String,
+    fingerprintHex: String,
     private val listener: Listener,
 ) {
     interface Listener {
@@ -50,13 +50,13 @@ class RelayClient(
         fun onFatal(message: String)
 
         /**
-         * TOFU 首次信任：未配置指纹连接时回调实际证书指纹（供上层持久化）。
+         * TOFU 首次信任：未配置指纹连接时回调实际证书指纹与所属 server key（供上层持久化）。
          * 此后本实例后续连接以该指纹固定校验。
          */
-        fun onPeerFingerprint(fingerprint: String) {}
+        fun onPeerFingerprint(fingerprint: String, serverKey: String) {}
     }
 
-    // ---- 协议常量（必须与 relay/internal/protocol 保持一致；v2）----
+    // ---- 协议常量（必须与 server/internal/protocol 保持一致；v3）----
     private val frameAuth = 0x01
     private val frameAuthOk = 0x02
     private val frameAuthErr = 0x03
@@ -67,7 +67,7 @@ class RelayClient(
     private val peerOnlineByte = 0x01
 
     private val maxPayload = 65536
-    private val protoVersion = 2
+    private val protoVersion = 3
     private val rolePhone = "phone"
 
     private val pingIntervalMs = 10_000L   // NAT 保活 + 活性探测（设计文档 §4.3）
@@ -80,6 +80,8 @@ class RelayClient(
         private set
     private var socket: SSLSocket? = null
     private val outLock = Any()
+    // 只在连接线程更新；首次握手后固定，后续重连不再重新接受任意证书。
+    private var trustedFingerprint = fingerprintHex.trim().lowercase()
 
     /**
      * 连接主循环：连接 → 认证 → 读事件 → 断线退避重连。
@@ -131,8 +133,8 @@ class RelayClient(
     }
 
     private fun connectAndServe() {
-        // fingerprintHex 为空=TOFU（首次连接自动信任并记录）；非空=指纹固定校验
-        val tm = if (fingerprintHex.isNotEmpty()) FingerprintTrustManager(fingerprintHex) else TrustAllTrustManager()
+        // trustedFingerprint 为空=TOFU（首次连接自动信任并记录）；非空=指纹固定校验
+        val tm = if (trustedFingerprint.isNotEmpty()) FingerprintTrustManager(trustedFingerprint) else TrustAllTrustManager()
         val ctx = SSLContext.getInstance("TLS")
         // 信任根来自指纹而非 CA：跳过默认信任链，由 FingerprintTrustManager 校验
         ctx.init(null, arrayOf(tm), null)
@@ -144,16 +146,17 @@ class RelayClient(
         sock.soTimeout = readTimeoutMs
         sock.tcpNoDelay = true
         sock.startHandshake()
-        if (fingerprintHex.isEmpty()) {
-            // TOFU：握手后记录实际证书指纹，本实例后续连接以之校验
+        if (trustedFingerprint.isEmpty()) {
+            // TOFU：握手后记录实际证书指纹，本实例后续重连以之校验
             val chain = sock.session.peerCertificates
             val fp = FingerprintTrustManager.fingerprintOf((chain[0] as X509Certificate).encoded)
-            listener.onPeerFingerprint(fp)
+            trustedFingerprint = fp
+            listener.onPeerFingerprint(fp, TrustStore.serverKey(host, port))
             Log.i(TAG, "tofu trusted fingerprint=$fp")
         }
         Log.i(TAG, "tls connected")
 
-        // AUTH 必须是首帧（服务器 10s 内等待）：v2 手机只带秘密哈希
+        // AUTH 必须是首帧（服务器 10s 内等待）：v3 手机只带秘密哈希
         sock.soTimeout = AUTH_TIMEOUT_MS
         val authJson = "{\"role\":\"$rolePhone\",\"secret\":\"${jsonEscape(secretHex)}\",\"proto\":$protoVersion}"
         sendFrame(frameAuth, authJson.toByteArray(Charsets.UTF_8))
@@ -170,7 +173,7 @@ class RelayClient(
         input.readFully(payload)
         when (type) {
             frameAuthOk -> {
-                // v2：AUTH_OK 携带 Mac 设备名（自动命名数据源）
+                // v3：AUTH_OK 携带 Mac 设备名（自动命名数据源）
                 peerName = try {
                     JSONObject(String(payload, Charsets.UTF_8)).optString("mac", "")
                 } catch (_: Exception) {
@@ -232,7 +235,7 @@ class RelayClient(
         }
     }
 
-    /** AUTH_ERR 原因码 → 人性化文案（v2 枚举）。 */
+    /** AUTH_ERR 原因码 → 人性化文案。 */
     private fun reasonText(reason: String): String = when (reason) {
         "invalid-secret" -> "未找到匹配设备（该 Mac 未在线或秘密已更新）"
         "secret-expired" -> "临时秘密已过期，请在 Mac 端更新或删除该设备后重试"

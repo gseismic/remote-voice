@@ -39,6 +39,12 @@ class CollectSink:
         with self._lock:
             return sum(len(c) for c in self._chunks)
 
+    @property
+    def chunks(self) -> list[bytes]:
+        """返回收到帧的快照，供桥接隔离测试检查路由结果。"""
+        with self._lock:
+            return list(self._chunks)
+
     def reset(self) -> None:
         with self._lock:
             self._chunks.clear()
