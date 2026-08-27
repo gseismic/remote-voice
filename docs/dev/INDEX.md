@@ -23,3 +23,16 @@
   摘要：协议 v2 全量实施分三段（relay 20c15ee / mac-client 09f3edf / android 116db06），本次文档交付。
   验证：go -race 20 用例全绿；mac-client 14 例（含真实 relay 回环）全绿；receiver 5 例；assembleDebug 通过；
   relay-linux 静态产物 5.9MB。用户待执行：部署 relay + 两端升级客户端（v1 已不兼容）。
+
+- **2026-08-26 15:42** | review 文档 [20260826-1540-REVIEW-13aadb1-v2-impl.md](20260826-1540-REVIEW-13aadb1-v2-impl.md)
+  摘要：v2 实施评审（commit 13aadb1）。实测复现：H-1 mac-client 无心跳+读超时 10s（空闲 10s 断连/静默桥接断链）、
+  H-2 指纹不符 FatalError 逃逸（线程死亡粘 CONNECTING）、M-1 server reg.name 数据竞争（-race 实证）、
+  M-2 计划偏差 peer-offline 缺失（离线坍缩 invalid-secret 计入限速）。其余 L 级 5 + Info 6。修复计划见下条。
+
+- **2026-08-28 10:32** | [PLAN-006-repo-restructure.md](PLAN-006-repo-restructure.md) → [PLAN-006-repo-restructure-OUTCOME.md](PLAN-006-repo-restructure-OUTCOME.md)
+  摘要：三端目录重组 + Mac 侧包化（用户拍板命名：server/mac-app/android-app）。
+  A) relay→server：module remote-voice/server、产物 server-linux、DEPLOY/BUILD 文档同步；
+  B) mac-client+mac-receiver 合并 mac-app（src/macapp + pyproject 双入口 remote-voice-gui/remote-voice-recv），
+  并修复 H-1（心跳线程+读超时恢复 40s）与 H-2（FatalError→ST_FATAL），21 测试全绿（含新增 2 回归）；
+  C) 三子 README + 根 README 重写。验证：go -race 全绿、CLI 全链路冒烟（50 帧/s）、GUI offscreen 冒烟。
+  遗留：M-2（peer-offline）待用户拍板；真机部署待执行。
