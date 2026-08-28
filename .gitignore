@@ -25,3 +25,9 @@ server/token.txt
 # Python 包化（mac-app）
 .pytest_cache/
 *.egg-info/
+
+# Rust/Tauri Mac 客户端
+mac-app-tauri/node_modules/
+mac-app-tauri/dist/
+mac-app-tauri/src-tauri/target/
+mac-app-tauri/src-tauri/gen/

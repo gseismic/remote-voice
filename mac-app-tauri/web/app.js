@@ -1,0 +1,344 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { createIcons, icons } from "lucide";
+
+const $ = (id) => document.getElementById(id);
+const tauriReady = Boolean(window.__TAURI_INTERNALS__);
+
+const statusText = {
+  idle: "未连接",
+  stopped: "未连接",
+  connecting: "连接中",
+  registered: "等待手机",
+  bridged: "已桥接",
+  reconnecting: "重连中",
+  fatal: "连接失败",
+};
+
+const statusDetail = {
+  idle: "等待连接",
+  stopped: "等待连接",
+  connecting: "正在连接中继服务",
+  registered: "等待手机连接",
+  bridged: "音频正在转发",
+  reconnecting: "网络暂时不可用",
+  fatal: "请检查连接设置",
+};
+
+const fallbackState = {
+  status: "stopped",
+  detail: "等待连接",
+  server: "",
+  name: "",
+  audio_device: "BlackHole",
+  temp_secret: "--------",
+  temp_exp: 0,
+  temp_duration: 28800,
+  keep: false,
+  permanent_enabled: false,
+  peer_name: "",
+  audio_frames: 0,
+  audio_bytes: 0,
+  dropped_audio_frames: 0,
+  audio_error: "",
+  events: [],
+};
+
+let state = fallbackState;
+let renderStarted = false;
+let toastTimer = null;
+let audioDevices = [];
+let expiryRefreshAttempt = 0;
+
+function formatBytes(value) {
+  if (!Number.isFinite(value) || value < 1024) return `${Math.max(0, value || 0)} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatTime(seconds) {
+  const value = Math.max(0, Math.floor(seconds));
+  const hours = String(Math.floor(value / 3600)).padStart(2, "0");
+  const minutes = String(Math.floor((value % 3600) / 60)).padStart(2, "0");
+  const remainder = String(value % 60).padStart(2, "0");
+  return `${hours}:${minutes}:${remainder}`;
+}
+
+function formatEventTime(timestamp) {
+  const date = new Date(Number(timestamp || 0) * 1000);
+  if (Number.isNaN(date.getTime()) || !timestamp) return "--:--";
+  return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+function statusIsConnected(value) {
+  return ["connecting", "registered", "bridged", "reconnecting"].includes(value);
+}
+
+function displayStatus(value) {
+  return statusText[value] || "未连接";
+}
+
+function showToast(message, tone = "normal") {
+  const toast = $("toast");
+  toast.textContent = message;
+  toast.dataset.tone = tone;
+  toast.classList.add("is-visible");
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => toast.classList.remove("is-visible"), 3200);
+}
+
+function renderIcons() {
+  createIcons({ icons, attrs: { "stroke-width": 1.8 } });
+}
+
+function commandError(error) {
+  if (error && typeof error === "object") {
+    return error.message || `${error.code || "command-error"}`;
+  }
+  try {
+    const parsed = JSON.parse(error);
+    return parsed.message || "操作失败";
+  } catch {
+    return String(error || "操作失败");
+  }
+}
+
+async function call(command, args = {}) {
+  if (!tauriReady) {
+    throw { code: "desktop-only", message: "请在 Remote Voice 桌面应用中运行" };
+  }
+  return invoke(command, args);
+}
+
+function setValueIfIdle(element, value) {
+  if (document.activeElement !== element) element.value = value ?? "";
+}
+
+function renderAudioOptions() {
+  const select = $("audio-device");
+  const current = state.audio_device || "BlackHole";
+  const values = [...new Set([current, ...audioDevices].filter(Boolean))];
+  select.replaceChildren();
+  if (!values.length) {
+    const option = new Option("暂无可用设备", "");
+    option.disabled = true;
+    select.add(option);
+    return;
+  }
+  values.forEach((value) => select.add(new Option(value, value)));
+  select.value = current;
+}
+
+function renderEvents() {
+  const list = $("event-list");
+  const events = Array.isArray(state.events) ? state.events : [];
+  list.replaceChildren();
+  events.slice(0, 50).forEach((event) => {
+    const item = document.createElement("li");
+    item.className = "event-item";
+    item.dataset.level = event.level || "info";
+
+    const marker = document.createElement("span");
+    marker.className = "event-marker";
+    marker.setAttribute("aria-hidden", "true");
+    const message = document.createElement("span");
+    message.className = "event-message";
+    message.textContent = event.message || "";
+    const time = document.createElement("time");
+    time.textContent = formatEventTime(event.at);
+    time.dateTime = event.at ? new Date(event.at * 1000).toISOString() : "";
+    item.append(marker, message, time);
+    list.append(item);
+  });
+  $("empty-events").hidden = events.length > 0;
+}
+
+function renderConnectButton() {
+  const button = $("connect-toggle");
+  const connected = statusIsConnected(state.status);
+  button.classList.toggle("is-disconnect", connected);
+  button.setAttribute("aria-label", connected ? "断开连接" : "连接服务器");
+  button.replaceChildren();
+  const icon = document.createElement("i");
+  icon.dataset.lucide = connected ? "power-off" : "power";
+  icon.setAttribute("aria-hidden", "true");
+  const label = document.createElement("span");
+  label.textContent = connected ? "断开" : "连接";
+  button.append(icon, label);
+  renderIcons();
+}
+
+function render(next) {
+  state = { ...fallbackState, ...next };
+  const status = state.status || "stopped";
+  const cluster = $("status-cluster");
+  cluster.dataset.status = status;
+  $("status-label").textContent = displayStatus(status);
+  $("server-summary").textContent = state.server || "尚未配置服务器";
+  $("connection-detail").textContent = state.detail || statusDetail[status] || "等待连接";
+  $("peer-summary").textContent = state.peer_name
+    ? `${state.peer_name} 已连接`
+    : status === "bridged" ? "手机已连接" : "手机未连接";
+  $("temp-secret").textContent = state.temp_secret || "--------";
+  $("permanent-state").textContent = state.permanent_enabled ? "已启用" : "未设置";
+  $("permanent-state").dataset.enabled = state.permanent_enabled ? "true" : "false";
+  $("device-status").textContent = state.name ? `设备：${state.name}` : "身份：首次连接自动建立";
+  $("audio-frames").textContent = Number(state.audio_frames || 0).toLocaleString("zh-CN");
+  $("audio-bytes").textContent = formatBytes(Number(state.audio_bytes || 0));
+  $("dropped-frames").textContent = Number(state.dropped_audio_frames || 0).toLocaleString("zh-CN");
+
+  setValueIfIdle($("server"), state.server);
+  setValueIfIdle($("device-name"), state.name);
+  if (document.activeElement !== $("temp-expiry-choice")) {
+    $("temp-expiry-choice").value = String(state.temp_duration || 28800);
+  }
+  if (document.activeElement !== $("keep-temp")) $("keep-temp").checked = Boolean(state.keep);
+  renderAudioOptions();
+  const alert = $("audio-alert");
+  alert.hidden = !state.audio_error;
+  alert.textContent = state.audio_error || "";
+  renderEvents();
+  renderConnectButton();
+  renderStarted = true;
+}
+
+function renderCountdown() {
+  const seconds = Number(state.temp_exp || 0) - Math.floor(Date.now() / 1000);
+  const expiry = $("temp-expiry");
+  expiry.textContent = seconds > 0 ? formatTime(seconds) : "已过期";
+  expiry.dataset.expired = seconds > 0 ? "false" : "true";
+  if (
+    seconds <= 0 &&
+    state.temp_exp > 0 &&
+    tauriReady &&
+    renderStarted &&
+    expiryRefreshAttempt !== state.temp_exp
+  ) {
+    expiryRefreshAttempt = state.temp_exp;
+    runAction(() => call("regenerate_temp"), "临时秘密已自动更新");
+  }
+}
+
+async function refreshAudioDevices(quiet = false) {
+  try {
+    audioDevices = await call("list_audio_devices");
+    renderAudioOptions();
+    if (!quiet) showToast(`已发现 ${audioDevices.length} 个输出设备`);
+  } catch (error) {
+    renderAudioOptions();
+    if (!quiet) showToast(commandError(error), "error");
+  }
+}
+
+async function runAction(action, successMessage = "已完成") {
+  try {
+    const next = await action();
+    if (next) render(next);
+    if (successMessage) showToast(successMessage);
+    return next;
+  } catch (error) {
+    showToast(commandError(error), "error");
+    return null;
+  }
+}
+
+async function copyTempSecret() {
+  if (!state.temp_secret || state.temp_secret === "--------") {
+    showToast("临时秘密尚未生成", "error");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(state.temp_secret);
+    showToast("临时秘密已复制");
+  } catch {
+    const input = document.createElement("textarea");
+    input.value = state.temp_secret;
+    input.style.position = "fixed";
+    input.style.opacity = "0";
+    document.body.append(input);
+    input.select();
+    document.execCommand("copy");
+    input.remove();
+    showToast("临时秘密已复制");
+  }
+}
+
+async function toggleConnection() {
+  if (statusIsConnected(state.status)) {
+    await runAction(() => call("disconnect"), "已断开连接");
+    return;
+  }
+  await runAction(async () => {
+    // 连接动作同时提交当前表单，让首次使用只需填写服务器地址即可开始。
+    await call("save_settings", readSettings());
+    return call("connect");
+  }, "正在连接");
+}
+
+function readSettings() {
+  return {
+    server: $("server").value.trim(),
+    name: $("device-name").value.trim(),
+    audioDevice: $("audio-device").value.trim() || "BlackHole",
+    tempDuration: Number($("temp-expiry-choice").value),
+    keep: $("keep-temp").checked,
+  };
+}
+
+async function saveSettings() {
+  await runAction(() => call("save_settings", readSettings()), "设置已保存");
+}
+
+function bindEvents() {
+  $("copy-temp").addEventListener("click", copyTempSecret);
+  $("regenerate-temp").addEventListener("click", () =>
+    runAction(() => call("regenerate_temp"), "临时秘密已更新"));
+  $("connect-toggle").addEventListener("click", toggleConnection);
+  $("save-settings").addEventListener("click", saveSettings);
+  $("clear-trust").addEventListener("click", () => {
+    if (!window.confirm("清除当前服务器信任后，下一次连接会重新接受服务器证书。继续吗？")) {
+      return;
+    }
+    runAction(
+      () => call("clear_server_trust"),
+      "服务器信任已清除，下次连接将重新建立",
+    );
+  });
+  $("refresh-audio").addEventListener("click", () => refreshAudioDevices(false));
+  $("clear-history").addEventListener("click", () =>
+    runAction(() => call("clear_history"), "事件已清空"));
+  $("set-permanent").addEventListener("click", async () => {
+    const secret = $("permanent-input").value.trim();
+    if (!secret) {
+      showToast("请输入永久秘密", "error");
+      $("permanent-input").focus();
+      return;
+    }
+    const next = await runAction(() => call("set_permanent", { secret }), "永久秘密已启用");
+    if (next) $("permanent-input").value = "";
+  });
+  $("clear-permanent").addEventListener("click", () =>
+    runAction(() => call("clear_permanent"), "永久秘密已停用"));
+}
+
+async function boot() {
+  bindEvents();
+  render(fallbackState);
+  renderIcons();
+  window.setInterval(renderCountdown, 1000);
+  renderCountdown();
+  if (!tauriReady) {
+    showToast("预览模式：请通过桌面应用连接", "normal");
+    return;
+  }
+  try {
+    await listen("app-state", (event) => render(event.payload));
+    const current = await call("get_state");
+    render(current);
+    await refreshAudioDevices(true);
+  } catch (error) {
+    showToast(commandError(error), "error");
+  }
+}
+
+boot();

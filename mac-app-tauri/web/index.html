@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#101311" />
+    <title>Remote Voice / Mac</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true">RV</span>
+          <div>
+            <p class="eyebrow">REMOTE VOICE</p>
+            <h1>Mac 接收端</h1>
+          </div>
+        </div>
+        <div class="status-cluster" id="status-cluster" data-status="stopped">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="status-label">未连接</span>
+        </div>
+      </header>
+
+      <main>
+        <section class="signal-band" aria-labelledby="signal-title">
+          <div class="signal-copy">
+            <p class="eyebrow">PAIRING SIGNAL</p>
+            <h2 id="signal-title">临时配对秘密</h2>
+          <p class="server-line" id="server-summary">尚未配置服务器</p>
+          </div>
+          <div class="secret-display">
+            <span class="secret-code" id="temp-secret">--------</span>
+            <span class="expiry" id="temp-expiry">--:--:--</span>
+          </div>
+          <div class="signal-actions">
+            <button class="button button-accent" id="copy-temp" title="复制临时秘密">
+              <i data-lucide="copy" aria-hidden="true"></i><span>复制</span>
+            </button>
+            <button class="button button-quiet" id="regenerate-temp" title="重新生成临时秘密">
+              <i data-lucide="refresh-cw" aria-hidden="true"></i><span>重新生成</span>
+            </button>
+          </div>
+          <div class="signal-meta" aria-live="polite">
+            <span id="connection-detail">等待连接</span>
+            <span class="meta-separator" aria-hidden="true"></span>
+            <span id="peer-summary">手机未连接</span>
+          </div>
+        </section>
+
+        <div class="content-grid">
+          <section class="panel panel-permanent" aria-labelledby="permanent-title">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">LONG-LIVED ACCESS</p>
+                <h2 id="permanent-title">永久秘密</h2>
+              </div>
+              <span class="state-tag" id="permanent-state">未设置</span>
+            </div>
+            <div class="permanent-row">
+              <label class="field grow">
+                <span>新秘密</span>
+                <input id="permanent-input" type="password" autocomplete="new-password" placeholder="至少 12 位" />
+              </label>
+              <button class="icon-button" id="set-permanent" title="保存永久秘密" aria-label="保存永久秘密">
+                <i data-lucide="key-round" aria-hidden="true"></i>
+              </button>
+              <button class="icon-button danger" id="clear-permanent" title="停用永久秘密" aria-label="停用永久秘密">
+                <i data-lucide="trash-2" aria-hidden="true"></i>
+              </button>
+            </div>
+          </section>
+
+          <section class="panel panel-settings" aria-labelledby="settings-title">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">RECEIVER PROFILE</p>
+                <h2 id="settings-title">连接设置</h2>
+              </div>
+              <div class="panel-actions">
+                <button class="icon-button" id="clear-trust" title="清除服务器信任" aria-label="清除服务器信任">
+                  <i data-lucide="shield-off" aria-hidden="true"></i>
+                </button>
+                <button class="icon-button" id="refresh-audio" title="刷新音频设备" aria-label="刷新音频设备">
+                  <i data-lucide="volume-2" aria-hidden="true"></i>
+                </button>
+              </div>
+            </div>
+            <div class="settings-fields">
+              <label class="field">
+                <span>服务器地址</span>
+                <input id="server" type="text" inputmode="url" placeholder="host:9432" autocomplete="url" />
+              </label>
+              <label class="field">
+                <span>设备名</span>
+                <input id="device-name" type="text" placeholder="MacBook" autocomplete="organization" />
+              </label>
+              <label class="field">
+                <span>音频输出</span>
+                <select id="audio-device"></select>
+              </label>
+              <label class="field">
+                <span>临时秘密有效期</span>
+                <select id="temp-expiry-choice">
+                  <option value="600">10 分钟</option>
+                  <option value="3600">1 小时</option>
+                  <option value="28800" selected>8 小时</option>
+                  <option value="86400">24 小时</option>
+                </select>
+              </label>
+            </div>
+            <div class="settings-footer">
+              <label class="toggle-field">
+                <input id="keep-temp" type="checkbox" />
+                <span class="toggle-track" aria-hidden="true"></span>
+                <span>重启后保持临时秘密</span>
+              </label>
+              <button class="button button-primary" id="save-settings">
+                <i data-lucide="save" aria-hidden="true"></i><span>保存设置</span>
+              </button>
+            </div>
+            <p class="audio-alert" id="audio-alert" hidden></p>
+          </section>
+        </div>
+
+        <section class="activity-section" aria-labelledby="activity-title">
+          <div class="activity-heading">
+            <div>
+              <p class="eyebrow">SESSION LOG</p>
+              <h2 id="activity-title">最近事件</h2>
+            </div>
+            <button class="text-button" id="clear-history" title="清空最近事件">
+              <i data-lucide="x" aria-hidden="true"></i><span>清空</span>
+            </button>
+          </div>
+          <ol class="event-list" id="event-list"></ol>
+          <p class="empty-state" id="empty-events">暂无事件</p>
+          <div class="activity-metrics" aria-live="polite">
+            <span><strong id="audio-frames">0</strong> 音频帧</span>
+            <span><strong id="audio-bytes">0 B</strong> 已接收</span>
+            <span><strong id="dropped-frames">0</strong> 丢弃</span>
+          </div>
+        </section>
+      </main>
+
+      <footer class="bottom-bar">
+        <span id="device-status">身份：首次连接自动建立</span>
+        <button class="button button-connect" id="connect-toggle">
+          <i data-lucide="power" aria-hidden="true"></i><span>连接</span>
+        </button>
+      </footer>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

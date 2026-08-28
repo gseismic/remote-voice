@@ -8,7 +8,7 @@ Mac 麦克风硬件损坏的替代方案：**Android 手机采音 → 公网 Lin
 ```
 Android 手机: 按住说话(PTT)              Linux 服务器(公网IP)          Mac
 ┌──────────────────┐  出站TLS  ┌──────────────────────┐  出站TLS  ┌──────────────────┐
-│ android-app       │ ───────→│ server (Go)          │────────→│ mac-app           │
+│ android-app       │ ───────→│ server (Go)          │────────→│ mac-app / Tauri   │
 │ 秘密SHA-256 hex   │        │ 秘密哈希注册表路由+桥接 │         │ GUI / CLI 收流    │
 │ 48k/mono/s16le    │        │ Mac 设备身份登记+桥接   │         │ 写入 BlackHole   │
 └──────────────────┘        │ 按IP限速防爆破           │         └──────────────────┘
@@ -19,6 +19,7 @@ Android 手机: 按住说话(PTT)              Linux 服务器(公网IP)        
 |---|---|---|---|
 | [`server/`](server/README.md) | 公网 Linux 服务器 | Go（标准库零依赖） | 中继服务器：TLS + 秘密注册表路由 + 1:1 桥接 + 按 IP 限速防爆破；含调试工具 `cmd/fakephone` |
 | [`mac-app/`](mac-app/README.md) | macOS | Python（PySide6） | 可安装包：`remote-voice-gui` 图形客户端（临时/永久秘密、历史、自动注册）与 `remote-voice-recv` CLI 轻接收器 |
+| [`mac-app-tauri/`](mac-app-tauri/README.md) | macOS | Rust/Tauri | 独立原生 GUI；首次自动生成设备身份，免输 regkey/指纹，使用 cpal 写入 BlackHole |
 | [`android-app/`](android-app/README.md) | Android 手机 | Kotlin（零第三方依赖） | 前台服务 + 按住说话（PTT），多设备单激活，免提常开 |
 
 - 协议 v3：`[1B type][4B len BE][payload]`；Mac 首次自动登记本机设备身份后注册秘密哈希，
@@ -48,6 +49,14 @@ remote-voice-gui                            # 填服务器/设备名；本机身
 # 界面显示临时短码；手机 App 输入即可连入；连接记录见「查看连接历史」
 ```
 
+也可以使用 Rust/Tauri GUI（macOS 上构建，详见 [`mac-app-tauri/README.md`](mac-app-tauri/README.md)）：
+
+```bash
+cd mac-app-tauri && npm install && npm run tauri dev
+```
+
+它与 Python 客户端共用本机身份和配对秘密存储，首次连接同样不需要输入 `regkey` 或证书指纹。
+
 无桌面/脚本化用法：`remote-voice-recv --server <IP>:9432`（见 [mac-app/README.md](mac-app/README.md)）。
 
 ### 3. Android
@@ -69,6 +78,10 @@ pip install -e '.[test]' && python3 -m pytest mac-app/tests/ -q
 
 # android-app：构建
 cd android-app && ./gradlew assembleDebug
+
+# Tauri Mac GUI：核心测试与前端构建
+cd mac-app-tauri/src-tauri && cargo test
+cd .. && npm run build
 ```
 
 ## 文档索引
@@ -76,3 +89,5 @@ cd android-app && ./gradlew assembleDebug
 - 交接档案（项目背景/状态/演进）：[docs/HANDOFF.md](docs/HANDOFF.md)
 - 设计与计划：`docs/design/`（含多 Mac 自助入网）、`docs/dev/`（计划/结果/评审）
 - 部署：server/[DEPLOY.md](server/DEPLOY.md)（服务器）、android-app/[BUILD.md](android-app/BUILD.md)（Android 构建环境）
+
+当前开放自助入网适合自托管：知道 server 地址的人可以尝试登记新 Mac。若未来服务面向互不信任的多用户，需要增加账号、邀请、配额和撤销管理。

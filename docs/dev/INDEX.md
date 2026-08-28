@@ -58,3 +58,6 @@
   不再要求新流程的全局 regkey；Mac/Android 常规流程不要求用户输入证书指纹，内部按 server 地址 TOFU；
   保留旧 v2 regkey 兼容。验证：Go race/vet/build、Mac pytest 26 例、Python 编译检查、Android
   assembleDebug、git diff --check 全部通过。未覆盖：两台实体 Mac、Android 真机、公网与 BlackHole 长跑。
+
+- **2026-08-28 19:00** | [PLAN-010-tauri-mac-client.md](PLAN-010-tauri-mac-client.md) → [PLAN-010-tauri-mac-client-OUTCOME.md](PLAN-010-tauri-mac-client-OUTCOME.md)
+  评审：[20260828-1900-REVIEW-bfb44b3-tauri-mac-client.md](20260828-1900-REVIEW-bfb44b3-tauri-mac-client.md)。摘要：新增 Rust/Tauri Mac GUI，首次自动生成设备身份，复用 Keychain/文件存储，内部按服务器地址 TOFU，完成 v3 AUTH→REGISTER、心跳、重连、cpal 音频和完整状态 UI；修复重启历史恢复、TOFU 重置恢复、连接生命周期并发问题。验证：Rust 17 项、clippy、前端构建、Linux Tauri bundle、Go race/vet/build、Python 26 项、Android assembleDebug 全部通过。未覆盖：macOS 真机 Keychain/BlackHole、签名公证、实体多 Mac 公网长跑。
