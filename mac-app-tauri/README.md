@@ -16,16 +16,19 @@
 
 ## 安装与构建
 
+前置：安装 pnpm（任选其一）：`corepack enable pnpm` 或 `npm install -g pnpm`。
+`package.json` 已通过 `packageManager` 字段固定 pnpm 版本。
+
 在 macOS 上构建发布包：
 
 ```bash
 cd mac-app-tauri
-npm install
-npm run tauri dev
-npm run tauri build
+pnpm install
+pnpm run tauri dev
+pnpm run tauri build
 ```
 
-`npm run tauri build` 会按当前平台生成安装包。签名和公证需要用户自己的 Apple 开发者环境；Linux 只能验证 Rust 核心和 Tauri 构建流程，不能替代 macOS 安装、Keychain 与音频验收。
+`pnpm run tauri build` 会按当前平台生成安装包。签名和公证需要用户自己的 Apple 开发者环境；Linux 只能验证 Rust 核心和 Tauri 构建流程，不能替代 macOS 安装、Keychain 与音频验收。
 
 ## 本地数据
 
@@ -51,7 +54,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 
 cd ..
-npm run build
+pnpm run build
 node --check web/app.js
 ```
 

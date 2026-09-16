@@ -138,7 +138,7 @@ Mac 首帧：
 - Rust 单元测试：帧往返/截断/超限、v3 JSON、秘密规范化和哈希、设备身份校验、配置/TOFU 隔离、状态转换和错误码。
 - Rust 集成测试：本地 TLS server + v3 Mac client 完成 AUTH→REGISTER→手机桥接，验证音频帧透传、心跳、错误设备凭据、TOFU mismatch 和停止清理。
 - 前端测试：设置保存、秘密显示/复制/重生成、状态事件渲染、认证错误展示；至少通过 Vite production build。
-- 构建：`cargo fmt --check`、`cargo test`、`cargo check`、`npm run build`、Tauri Linux bundle/check；macOS bundle、Keychain 和 BlackHole 在 macOS 另行验收。
+- 构建：`cargo fmt --check`、`cargo test`、`cargo check`、`pnpm run build`、Tauri Linux bundle/check；macOS bundle、Keychain 和 BlackHole 在 macOS 另行验收。
 
 ## 8. 三轮查漏补缺
 

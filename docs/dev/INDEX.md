@@ -64,3 +64,6 @@
 
 - **2026-08-28 19:05** | [PLAN-011-android-connection-followup.md](PLAN-011-android-connection-followup.md) → [PLAN-011-android-connection-followup-OUTCOME.md](PLAN-011-android-connection-followup-OUTCOME.md)
   摘要：修复 Android 在当前 v3 设计下添加 Mac 秘密后不触发或看似不响应的问题。新增主页面/设置页自动连接与串行重启、可读错误保留、连接与采音代次隔离、拨号 socket 清理；支持 `rv://` 地址、内部 TOFU、仅以麦克风权限作为启动前置条件，并修正多设备删除后的激活切换。验证：Android `clean assembleDebug`、Go 测试、Mac Python 测试、`git diff --check` 通过；无 Android 实体设备，公网/权限/前台服务未实测。
+
+- **2026-09-17 03:45** | [PLAN-012-npm-to-pnpm.md](PLAN-012-npm-to-pnpm.md) → [PLAN-012-npm-to-pnpm-OUTCOME.md](PLAN-012-npm-to-pnpm-OUTCOME.md)
+  摘要：Tauri 前端包管理器统一为 pnpm（用户指令"凡涉及 npm 全部改为 pnpm"）。tauri.conf beforeDev/BuildCommand、两个 README、设计文档命令全部切换；package.json 增加 packageManager 固定 pnpm@10.5.2；package-lock.json 删除、pnpm-lock.yaml 入库。验证：pnpm install（offline）、pnpm build、node --check、`pnpm run tauri build` 产出 deb/rpm/AppImage 全部通过。顺带修复开发机环境并记入 HANDOFF：PATH 中旧 cargo 1.75 挡 rustup 1.98；crates.io Fastly CDN 不通，用户级 ~/.cargo/config.toml 配 rsproxy 镜像（不入仓库）；pnpm 在线安装挂起改用 offline store。历史文档保留 npm 记载不改写。

@@ -52,7 +52,7 @@ remote-voice-gui                            # 填服务器/设备名；本机身
 也可以使用 Rust/Tauri GUI（macOS 上构建，详见 [`mac-app-tauri/README.md`](mac-app-tauri/README.md)）：
 
 ```bash
-cd mac-app-tauri && npm install && npm run tauri dev
+cd mac-app-tauri && pnpm install && pnpm run tauri dev
 ```
 
 它与 Python 客户端共用本机身份和配对秘密存储，首次连接同样不需要输入 `regkey` 或证书指纹。
@@ -79,9 +79,9 @@ pip install -e '.[test]' && python3 -m pytest mac-app/tests/ -q
 # android-app：构建
 cd android-app && ./gradlew assembleDebug
 
-# Tauri Mac GUI：核心测试与前端构建
+# Tauri Mac GUI：核心测试与前端构建（包管理器统一用 pnpm）
 cd mac-app-tauri/src-tauri && cargo test
-cd .. && npm run build
+cd .. && pnpm run build
 ```
 
 ## 文档索引

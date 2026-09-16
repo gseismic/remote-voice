@@ -1,6 +1,6 @@
 # 交接文档 (HANDOFF)
 
-更新时间：2026-08-28 19:05 (UTC+8)
+更新时间：2026-09-17 03:45 (UTC+8)
 
 ## 项目背景（零上下文可读）
 
@@ -12,7 +12,8 @@
 - 设计文档目录：`docs/design/`（协议、交互、仓库重组、多 Mac 自助入网）
 - 计划与结果：`docs/dev/`（PLAN-XXX / -OUTCOME + INDEX.md）
 - 评审文档：`docs/dev/20260826-1540-REVIEW-13aadb1-v2-impl.md`
-- 当前计划：[docs/dev/PLAN-011-android-connection-followup.md](dev/PLAN-011-android-connection-followup.md)
+- 当前计划：[docs/dev/PLAN-012-npm-to-pnpm.md](dev/PLAN-012-npm-to-pnpm.md)（工具链切换，已完成）
+- 上一计划：[docs/dev/PLAN-011-android-connection-followup.md](dev/PLAN-011-android-connection-followup.md)
 - 当前设计：[docs/design/tauri-mac-client-20260828-overview.md](design/tauri-mac-client-20260828-overview.md)
 
 ## 当前状态（2026-08-28 Tauri Mac 客户端后）
@@ -63,6 +64,8 @@
 
 - Go 工具链：`~/go-sdk/go`（go1.22.10），PATH 已写入 `~/.bashrc`，兜底软链 `~/.local/bin/go`
 - Python：miniconda 3.12（`python3`/`pip3` 直用）；mac-app 已 `pip install -e` 安装（26 测试可跑）
+- pnpm：Tauri 前端统一用 pnpm（PLAN-012，pnpm 10.5.2）；在线 install 会被 TUN 代理挂起，用 `pnpm install --offline`（本地 store 已有包）
+- Rust：必须用 rustup 工具链 `export PATH="$HOME/.cargo/bin:$PATH"`（/usr/bin/cargo 1.75 过旧，报 edition2024）；cargo 已配 rsproxy 镜像（`~/.cargo/config.toml`，用户级不入库），crates.io Fastly CDN 直连不通
 - 预编译产物（易失）：`/tmp/opencode/server-test`、`/tmp/opencode/fakephone-test`（重编命令见根 README 开发验证段）
 
 ## 关键技术决策速查
