@@ -18,9 +18,11 @@ Android 手机: 按住说话(PTT)              Linux 服务器(公网IP)        
 | 目录 | 运行端 | 语言 | 介绍 |
 |---|---|---|---|
 | [`server/`](server/README.md) | 公网 Linux 服务器 | Go（标准库零依赖） | 中继服务器：TLS + 秘密注册表路由 + 1:1 桥接 + 按 IP 限速防爆破；含调试工具 `cmd/fakephone` |
-| [`mac-app/`](mac-app/README.md) | macOS | Python（PySide6） | 可安装包：`remote-voice-gui` 图形客户端（临时/永久秘密、历史、自动注册）与 `remote-voice-recv` CLI 轻接收器 |
-| [`mac-app-tauri/`](mac-app-tauri/README.md) | macOS | Rust/Tauri | 独立原生 GUI；首次自动生成设备身份，免输 regkey/指纹，使用 cpal 写入 BlackHole |
+| [`mac-app-tauri/`](mac-app-tauri/README.md) | macOS | Rust/Tauri | 唯一受支持 Mac 客户端；首次自动生成设备身份，免输 regkey/指纹，使用 cpal 写入 BlackHole |
 | [`android-app/`](android-app/README.md) | Android 手机 | Kotlin（零第三方依赖） | 前台服务 + 按住说话（PTT），多设备单激活，免提常开 |
+
+> Mac 端早期 Python 客户端已归档至 [`backup/mac-app/`](backup/mac-app/README.md)
+> （只保留 Tauri 版的决定，PLAN-013）；存储约定兼容，如需恢复 `git mv` 回即可。
 
 - 协议 v3：`[1B type][4B len BE][payload]`；Mac 首次自动登记本机设备身份后注册秘密哈希，
   手机认证只带规范化秘密的 SHA-256 hex（全程无明文）；桥接 1:1；
@@ -40,24 +42,17 @@ cd server && go build -o server .
 # 打印客户端可导入的 rv://<IP>:9432 地址；证书指纹仅供诊断
 ```
 
-### 2. Mac
+### 2. Mac（唯一客户端：Tauri）
 
 ```bash
 brew install blackhole-2ch                  # 虚拟声卡（2ch 已够）
-pip install -e mac-app/                     # 安装 GUI+CLI（PySide6 ~200MB）
-remote-voice-gui                            # 填服务器/设备名；本机身份首次连接自动创建
-# 界面显示临时短码；手机 App 输入即可连入；连接记录见「查看连接历史」
+brew install pnpm                           # 或 corepack enable pnpm
+cd mac-app-tauri && pnpm install && pnpm run tauri build   # 开发调试用 pnpm run tauri dev
 ```
 
-也可以使用 Rust/Tauri GUI（macOS 上构建，详见 [`mac-app-tauri/README.md`](mac-app-tauri/README.md)）：
-
-```bash
-cd mac-app-tauri && pnpm install && pnpm run tauri dev
-```
-
-它与 Python 客户端共用本机身份和配对秘密存储，首次连接同样不需要输入 `regkey` 或证书指纹。
-
-无桌面/脚本化用法：`remote-voice-recv --server <IP>:9432`（见 [mac-app/README.md](mac-app/README.md)）。
+启动后填一次服务器地址（`host:9432`，可选设备名），首次连接自动生成本机设备身份，
+**不需要输入 regkey 或证书指纹**；窗口顶部显示配对秘密，填入 Android 即可。
+它没有独立 CLI；无桌面/脚本化场景暂未覆盖（如需要从 `backup/mac-app/` 恢复 Python 版）。
 
 ### 3. Android
 
@@ -72,9 +67,6 @@ cd android-app && ./gradlew assembleDebug && adb install app/build/outputs/apk/d
 ```bash
 # server：构建 + 竞态测试
 cd server && go build ./... && go vet ./... && go test ./... -count=1 -race
-
-# mac-app：纯逻辑 + 真实 server 回环集成（无需声卡；可复现协议行为）
-pip install -e '.[test]' && python3 -m pytest mac-app/tests/ -q
 
 # android-app：构建
 cd android-app && ./gradlew assembleDebug

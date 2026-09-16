@@ -12,13 +12,14 @@
 - 设计文档目录：`docs/design/`（协议、交互、仓库重组、多 Mac 自助入网）
 - 计划与结果：`docs/dev/`（PLAN-XXX / -OUTCOME + INDEX.md）
 - 评审文档：`docs/dev/20260826-1540-REVIEW-13aadb1-v2-impl.md`
-- 当前计划：[docs/dev/PLAN-012-npm-to-pnpm.md](dev/PLAN-012-npm-to-pnpm.md)（工具链切换，已完成）
-- 上一计划：[docs/dev/PLAN-011-android-connection-followup.md](dev/PLAN-011-android-connection-followup.md)
+- 当前计划：[docs/dev/PLAN-013-lan-discovery-dual-address.md](dev/PLAN-013-lan-discovery-dual-address.md)（局域网发现 + 双地址 + 归档 Python 客户端）
+- 上一计划：[docs/dev/PLAN-012-npm-to-pnpm.md](dev/PLAN-012-npm-to-pnpm.md)（工具链切换，已完成）
 - 当前设计：[docs/design/tauri-mac-client-20260828-overview.md](design/tauri-mac-client-20260828-overview.md)
 
 ## 当前状态（2026-08-28 Tauri Mac 客户端后）
 
-运行端目录为：**server（公网服务器）/ mac-app 或 mac-app-tauri（Mac）/ android-app（手机）**。
+运行端目录为：**server（公网服务器）/ mac-app-tauri（Mac，唯一受支持客户端）/ android-app（手机）**；
+早期 Python 客户端已归档至 `backup/mac-app/`（PLAN-013，存储约定兼容，可恢复）。
 协议 v3 注册制（Mac 设备身份认证 + 秘密哈希注册表 + 1:1 桥接 + IP 限速防爆破），v1 已删除。
 新 Mac 首次连接自动生成 `device_id/device_key`，server 首次登记凭据哈希；之后无需输入全局
 `regkey`。旧 v2 Mac 仅在 server 显式配置兼容 regkey 时可用。
@@ -29,7 +30,7 @@
 | 目录 | 运行端 | 内容 | 状态 |
 |---|---|---|---|
 | `server/` | 公网 Linux | Go 中继服务器（module `remote-voice/server`，产物 `server`/`server-linux`）+ `cmd/fakephone` | ✅ `go test -race` 28 服务端/协议用例全绿 |
-| `mac-app/` | macOS | 可安装 Python 包 `remote-voice-mac`（src/macapp）：`remote-voice-gui`（图形）+ `remote-voice-recv`（CLI） | ✅ 26 测试全绿（含设备自助入网、TOFU、H-1/H-2 回归） |
+| ~~`mac-app/`~~ → `backup/mac-app/` | （已归档） | Python 包 `remote-voice-mac`：GUI+CLI，26 测试曾全绿 | 📦 PLAN-013 归档，仅作参考实现；协议变更不再同步 |
 | `mac-app-tauri/` | macOS | Rust/Tauri GUI；Tokio/rustls relay + cpal 音频输出；共享身份/秘密存储 | ✅ Rust 17 测试、clippy、前端构建和 Linux bundle 通过；macOS 真机待验收 |
 | `android-app/` | Android | Kotlin：PTT 按住说话、多设备单激活（0.2.0） | ✅ PLAN-011 连接链路修复，assembleDebug 通过；真机联调待执行 |
 
@@ -53,7 +54,7 @@
 
 1. **真机与公网验收**（用户执行）：
    - 服务器：交叉编译 `server-linux` → 上传 → systemd 启动 `-addr :9432 -data ./data`，保留 `data/`；
-   - 多台 Mac：分别启动 Python GUI/CLI 或 Tauri GUI，确认无需 regkey 即可在线并各自显示配对秘密；
+   - 多台 Mac：启动 Tauri GUI，确认无需 regkey 即可在线并各自显示配对秘密；
    - 手机：导入 `rv://<服务器IP>:9432`，添加对应 Mac 的临时/永久秘密，确认只桥接到目标 Mac。
 2. 两个 Mac 客户端长跑观察：真实 macOS Keychain 行为、黑屏/休眠后的重连和 BlackHole 输出；Tauri 还需验证签名、公证和安装包升级。
 3. 后续安全演化：若 server 面向不完全互信的多用户，增加账号/邀请/配额/撤销管理；当前开放自助
@@ -71,8 +72,8 @@
 ## 关键技术决策速查
 
 - 协议：`[1B type][4B len BE][payload]`，音频 48kHz/mono/s16le/20ms(1920B) 裸 PCM；
-  三端常量必须同步修改（Go: `server/internal/protocol`，Python: `mac-app/src/macapp/protocol.py`，
-  Kotlin: `android-app/.../RelayClient.kt`）
+  活跃端常量必须同步修改（Go: `server/internal/protocol`，Rust: `mac-app-tauri/src-tauri`，
+  Kotlin: `android-app/.../RelayClient.kt`；Python 版已归档 `backup/mac-app/src/macapp/protocol.py`，不再同步）
 - 信任模型：整张证书 DER 的 SHA-256 hex = 内部 TOFU 记录；按 `host:port` 隔离，换证书需清理对应
   客户端信任记录（server `data/` 目录勿动可避免证书变化）
 - 心跳：客户端 10s PING / 任一侧 40s 读超时断开；重连指数退避封顶 30s

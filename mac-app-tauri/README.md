@@ -1,8 +1,8 @@
 # mac-app-tauri · Rust/Tauri Mac 客户端
 
-`mac-app-tauri/` 是 remote-voice 的独立 Rust/Tauri 图形客户端。它与
-[`mac-app/`](../mac-app/README.md) Python 客户端共用 v3 relay 协议、Keychain
-账号和本地配置约定；两者可以按使用环境任选其一。
+`mac-app-tauri/` 是 remote-voice **唯一受支持的 Mac 图形客户端**（PLAN-013 起；早期
+Python 客户端已归档至 [`backup/mac-app/`](../backup/mac-app/README.md)）。它实现 v3
+relay 协议，本地身份/秘密存储约定与归档的 Python 版兼容，可在两者间互换而不用重配。
 
 ## 首次使用
 
