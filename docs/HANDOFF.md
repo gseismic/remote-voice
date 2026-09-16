@@ -1,6 +1,6 @@
 # 交接文档 (HANDOFF)
 
-更新时间：2026-09-17 03:45 (UTC+8)
+更新时间：2026-09-17 06:00 (UTC+8)
 
 ## 项目背景（零上下文可读）
 
@@ -29,10 +29,10 @@
 
 | 目录 | 运行端 | 内容 | 状态 |
 |---|---|---|---|
-| `server/` | 公网 Linux | Go 中继服务器（module `remote-voice/server`，产物 `server`/`server-linux`）+ `cmd/fakephone` | ✅ `go test -race` 28 服务端/协议用例全绿 |
+| `server/` | 公网 Linux | Go 中继服务器（module `remote-voice/server`，产物 `server/server-linux`）+ `cmd/fakephone`；**已部署 118.193.40.160**（systemd `remote-voice-server`，源码 `/home/ubuntu/services/`） | ✅ `go test -race` 全绿（含 discovery 3 例）；⚠️ 云安全组未放行 9432，公网待通 |
 | ~~`mac-app/`~~ → `backup/mac-app/` | （已归档） | Python 包 `remote-voice-mac`：GUI+CLI，26 测试曾全绿 | 📦 PLAN-013 归档，仅作参考实现；协议变更不再同步 |
-| `mac-app-tauri/` | macOS | Rust/Tauri GUI；Tokio/rustls relay + cpal 音频输出；共享身份/秘密存储 | ✅ Rust 17 测试、clippy、前端构建和 Linux bundle 通过；macOS 真机待验收 |
-| `android-app/` | Android | Kotlin：PTT 按住说话、多设备单激活（0.2.0） | ✅ PLAN-011 连接链路修复，assembleDebug 通过；真机联调待执行 |
+| `mac-app-tauri/` | macOS | Rust/Tauri GUI；Tokio/rustls relay + cpal 音频输出；共享身份/秘密存储；**唯一受支持 Mac 客户端**（pnpm 构建） | ✅ Rust 17 测试、clippy、前端构建和 Linux bundle 通过；macOS 真机待验收 |
+| `android-app/` | Android | Kotlin：PTT 按住说话、多设备单激活；局域网扫描 + 本地/远程双地址（本地优先，PLAN-013） | ✅ PLAN-013 assembleDebug 通过；真机联调待执行 |
 
 ## 当前阶段完成的重点（PLAN-011：Android 连接链路修复）
 
@@ -53,7 +53,8 @@
 ## 下一步（按优先级）
 
 1. **真机与公网验收**（用户执行）：
-   - 服务器：交叉编译 `server-linux` → 上传 → systemd 启动 `-addr :9432 -data ./data`，保留 `data/`；
+   - **安全组放行**：云控制台为 118.193.40.160 放行入站 **TCP 9432 + UDP 9432**（UDP 仅
+     局域网扫描需要）；放行后 server 即公网可用（本机回环已全绿，见 PLAN-013 OUTCOME）；
    - 多台 Mac：启动 Tauri GUI，确认无需 regkey 即可在线并各自显示配对秘密；
    - 手机：导入 `rv://<服务器IP>:9432`，添加对应 Mac 的临时/永久秘密，确认只桥接到目标 Mac。
 2. 两个 Mac 客户端长跑观察：真实 macOS Keychain 行为、黑屏/休眠后的重连和 BlackHole 输出；Tauri 还需验证签名、公证和安装包升级。

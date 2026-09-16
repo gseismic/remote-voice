@@ -108,19 +108,26 @@ class AudioStreamService : Service(), RelayClient.Listener {
 
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         handsfree = prefs.getBoolean(KEY_HANDSFREE, false)
-        // 服务器地址：prefs 为空时回落内置默认（需求：默认服务器免输入）
-        val server = (prefs.getString(KEY_SERVER, "") ?: "")
-            .ifBlank { DEFAULT_SERVER }
-        val parsed = ConfigParser.parse(server)
-        if (parsed == null) {
-            failAndStop("服务器地址无效（设置中检查）")
-            return
+        // 双地址（PLAN-013）：本地（局域网，可空）优先，远程兜底（空值回落内置默认）。
+        // 本地地址无效时跳过（不致命）；远程无效且无本地才报错。
+        val endpoints = ArrayList<RelayClient.Endpoint>()
+        val localRaw = (prefs.getString(KEY_SERVER_LOCAL, "") ?: "").trim()
+        if (localRaw.isNotEmpty()) {
+            ConfigParser.parse(localRaw)?.let {
+                endpoints.add(RelayClient.Endpoint(it.host, it.port, "本地"))
+            }
         }
-        val host = parsed.host
-        val port = parsed.port
-        val serverKey = TrustStore.serverKey(host, port)
-        val fingerprint = TrustStore.load(prefs, serverKey)
-        // 指纹为空 = TOFU：连接时自动信任并记录（用户无需输入）
+        val remoteRaw = (prefs.getString(KEY_SERVER, "") ?: "").ifBlank { DEFAULT_SERVER }
+        val remote = ConfigParser.parse(remoteRaw)
+        if (remote == null) {
+            if (endpoints.isEmpty()) {
+                failAndStop("服务器地址无效（设置中检查）")
+                return
+            }
+        } else {
+            endpoints.add(RelayClient.Endpoint(remote.host, remote.port, "远程"))
+        }
+        // 指纹为空 = TOFU：连接时自动信任并记录（用户无需输入），按 host:port 隔离
         // 激活设备：秘密原文（规范化后本地算哈希，只传 hex 给 relay）
         val device = DeviceStore(this).active()
         if (device == null || device.secret.isBlank()) {
@@ -170,7 +177,12 @@ class AudioStreamService : Service(), RelayClient.Listener {
                 }
             }
         }
-        relay = RelayClient(host, port, secretHex, fingerprint, relayListener)
+        relay = RelayClient(
+            endpoints,
+            secretHex,
+            { h, p -> TrustStore.load(prefs, TrustStore.serverKey(h, p)) },
+            relayListener,
+        )
         client = relay
         clientThread = Thread({ relay.runForever() }, "relay-client").apply {
             start()
@@ -464,8 +476,11 @@ class AudioStreamService : Service(), RelayClient.Listener {
         const val ACTION_RESTART = "com.remotevoice.app.RESTART"
         const val KEY_USER_STOPPED = "user_stopped"
 
-        // 默认服务器（需求指定），prefs 未配置时回落使用
+        // 默认远程服务器（需求指定），prefs 未配置时回落使用
         const val DEFAULT_SERVER = "43.139.226.138:9432"
+
+        /** 本地局域网服务器地址（可空；扫描选择或手动填写，优先于远程尝试）。 */
+        const val KEY_SERVER_LOCAL = "server_local"
 
         // 音频规格：48kHz/mono/s16le/20ms 帧（设计文档 §4.1，与服务器/接收器一致）
         const val SAMPLE_RATE = 48000

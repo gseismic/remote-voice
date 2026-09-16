@@ -18,6 +18,7 @@ import (
 	"strings"
 	"syscall"
 
+	"remote-voice/server/internal/discovery"
 	"remote-voice/server/internal/selfcert"
 	"remote-voice/server/internal/server"
 )
@@ -30,6 +31,8 @@ func main() {
 	regkeyFile := flag.String("regkeyfile", "", "旧 v2 兼容：从文件读取 Mac 注册密钥")
 	regkeyFlag := flag.String("regkey", "", "旧 v2 兼容：直接指定 regkey（仅限本地调试）")
 	pprofAddr := flag.String("pprof", "", "可选：pprof 监听地址，如 127.0.0.1:6060")
+	discoveryOn := flag.Bool("discovery", true, "局域网发现应答（UDP 与 -addr 同号端口）")
+	discoveryName := flag.String("name", "", "局域网发现显示名（默认主机名）")
 	flag.Parse()
 
 	regkey := resolveRegkey(*regkeyFile, *regkeyFlag)
@@ -64,6 +67,17 @@ func main() {
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatalf("监听 %s 失败: %v", *addr, err)
+	}
+
+	// 局域网发现：UDP 与 TCP 同号端口应答手机探测（设计：lan-discovery-dual-address §3）。
+	// 失败只降级（手机回落手动填地址），绝不影响 TCP 服务。
+	if *discoveryOn {
+		if d, derr := discovery.Serve(*addr, *discoveryName); derr != nil {
+			log.Printf("局域网发现开启失败（不影响 TCP 服务）: %v", derr)
+		} else {
+			defer d.Close()
+			log.Printf("局域网发现已开启（UDP %s，显示名 %s）", *addr, d.DisplayName())
+		}
 	}
 
 	srv, err := server.NewWithError(server.Config{

@@ -21,6 +21,8 @@ class SettingsActivity : Activity() {
     private lateinit var prefs: SharedPreferences
     private lateinit var store: DeviceStore
     private lateinit var serverEdit: EditText
+    private lateinit var localEdit: EditText
+    private lateinit var btnScan: Button
     private lateinit var aecSwitch: Switch
     private lateinit var handsfreeSwitch: Switch
     private lateinit var devicesBox: LinearLayout
@@ -35,6 +37,8 @@ class SettingsActivity : Activity() {
         val importEdit = findViewById<EditText>(R.id.edit_import)
         val parseBtn = findViewById<Button>(R.id.btn_parse)
         serverEdit = findViewById(R.id.edit_server)
+        localEdit = findViewById(R.id.edit_local)
+        btnScan = findViewById(R.id.btn_scan)
         aecSwitch = findViewById(R.id.switch_aec)
         handsfreeSwitch = findViewById(R.id.switch_handsfree)
         devicesBox = findViewById(R.id.devices_box)
@@ -45,6 +49,8 @@ class SettingsActivity : Activity() {
             prefs.getString(KEY_SERVER, null)?.takeIf { it.isNotBlank() }
                 ?: AudioStreamService.DEFAULT_SERVER
         )
+        // 本地（局域网）服务器：扫描选择或手动填，可空
+        localEdit.setText(prefs.getString(AudioStreamService.KEY_SERVER_LOCAL, "") ?: "")
         aecSwitch.isChecked = prefs.getBoolean(KEY_AEC, false)
         handsfreeSwitch.isChecked = prefs.getBoolean(AudioStreamService.KEY_HANDSFREE, false)
 
@@ -64,6 +70,28 @@ class SettingsActivity : Activity() {
             showAddDeviceDialog()
         }
 
+        // 局域网扫描（后台线程收包，回主线程弹结果）；扫不到时提示回落远程/手动
+        btnScan.setOnClickListener {
+            btnScan.isEnabled = false
+            btnScan.text = "扫描中…"
+            Thread {
+                val found = try {
+                    LanDiscovery.scan()
+                } catch (_: Exception) {
+                    emptyList()
+                }
+                runOnUiThread {
+                    btnScan.isEnabled = true
+                    btnScan.text = getString(R.string.btn_scan)
+                    if (found.isEmpty()) {
+                        Toast.makeText(this, R.string.toast_scan_none, Toast.LENGTH_LONG).show()
+                    } else {
+                        showScanResults(found)
+                    }
+                }
+            }.start()
+        }
+
         backBtn.setOnClickListener {
             saveAll()
             finish()
@@ -73,6 +101,25 @@ class SettingsActivity : Activity() {
     override fun onResume() {
         super.onResume()
         renderDevices()
+    }
+
+    /** 扫描结果列表：选中即保存为本地服务器地址并重连（本地优先，选不中仍走远程）。 */
+    private fun showScanResults(found: List<LanDiscovery.Found>) {
+        val titles = found.map { f ->
+            (f.name.ifBlank { "server" }) + "\n${f.host}:${f.port}"
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("选择局域网服务器")
+            .setItems(titles) { _, which ->
+                val f = found[which]
+                val addr = "${f.host}:${f.port}"
+                localEdit.setText(addr)
+                prefs.edit().putString(AudioStreamService.KEY_SERVER_LOCAL, addr).apply()
+                Toast.makeText(this, "本地服务器已设为 $addr", Toast.LENGTH_SHORT).show()
+                restartRunningService()
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun renderDevices() {
@@ -210,6 +257,7 @@ class SettingsActivity : Activity() {
         val server = serverEdit.text.toString().trim().ifBlank { AudioStreamService.DEFAULT_SERVER }
         prefs.edit()
             .putString(KEY_SERVER, server)
+            .putString(AudioStreamService.KEY_SERVER_LOCAL, localEdit.text.toString().trim())
             .putBoolean(KEY_AEC, aecSwitch.isChecked)
             .putBoolean(AudioStreamService.KEY_HANDSFREE, handsfreeSwitch.isChecked)
             .apply()

@@ -67,3 +67,6 @@
 
 - **2026-09-17 03:45** | [PLAN-012-npm-to-pnpm.md](PLAN-012-npm-to-pnpm.md) → [PLAN-012-npm-to-pnpm-OUTCOME.md](PLAN-012-npm-to-pnpm-OUTCOME.md)
   摘要：Tauri 前端包管理器统一为 pnpm（用户指令"凡涉及 npm 全部改为 pnpm"）。tauri.conf beforeDev/BuildCommand、两个 README、设计文档命令全部切换；package.json 增加 packageManager 固定 pnpm@10.5.2；package-lock.json 删除、pnpm-lock.yaml 入库。验证：pnpm install（offline）、pnpm build、node --check、`pnpm run tauri build` 产出 deb/rpm/AppImage 全部通过。顺带修复开发机环境并记入 HANDOFF：PATH 中旧 cargo 1.75 挡 rustup 1.98；crates.io Fastly CDN 不通，用户级 ~/.cargo/config.toml 配 rsproxy 镜像（不入仓库）；pnpm 在线安装挂起改用 offline store。历史文档保留 npm 记载不改写。
+
+- **2026-09-17 06:05** | [PLAN-013-lan-discovery-dual-address.md](PLAN-013-lan-discovery-dual-address.md) → [PLAN-013-lan-discovery-dual-address-OUTCOME.md](PLAN-013-lan-discovery-dual-address-OUTCOME.md)
+  摘要：①归档 Python Mac 客户端（14590fb，mac-app→backup/mac-app，Tauri 唯一受支持）；②server 新增 UDP 局域网发现应答（internal/discovery，探测串 RV-DISCOVER-v1，同源 1s 节流，-discovery/-name 参数，3 例新测试）；③Android 局域网扫描 + 本地/远程双地址（LanDiscovery.kt、RelayClient 多 Endpoint 拨号本地优先、TOFU 按 host:port 隔离、设置页扫描选择 UI）；④部署公网服务器 118.193.40.160（源码 rsync 至 /home/ubuntu/services，服务器 Go 1.22 构建，systemd remote-voice-server 托管）。验证：go vet/-race 全绿、assembleDebug 通过、服务器本机 fakephone 双角色回环全链路通过（注册→TOFU→认证→399 帧推流→UDP 发现应答正确）。遗留：云安全组未放行 TCP/UDP 9432，公网与真机验收待用户执行；保护了 services 目录下非本项目 ThinkTime/，未清理 8 月旧部署残留。
