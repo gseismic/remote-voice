@@ -65,7 +65,7 @@
 - Go 工具链：`~/go-sdk/go`（go1.22.10），PATH 已写入 `~/.bashrc`，兜底软链 `~/.local/bin/go`
 - Python：miniconda 3.12（`python3`/`pip3` 直用）；mac-app 已 `pip install -e` 安装（26 测试可跑）
 - pnpm：Tauri 前端统一用 pnpm（PLAN-012，pnpm 10.5.2）；在线 install 会被 TUN 代理挂起，用 `pnpm install --offline`（本地 store 已有包）
-- Rust：必须用 rustup 工具链 `export PATH="$HOME/.cargo/bin:$PATH"`（/usr/bin/cargo 1.75 过旧，报 edition2024）；cargo 已配 rsproxy 镜像（`~/.cargo/config.toml`，用户级不入库），crates.io Fastly CDN 直连不通
+- Rust：已修复 PATH（`~/.bashrc`/`~/.profile` 末尾无条件前置 `~/.cargo/bin`），新终端用 rustup cargo 1.98；此前 `/usr/bin/cargo` 1.75 排在前面会报 edition2024。已开着的旧终端需重开或手动 `export PATH="$HOME/.cargo/bin:$PATH"`。cargo 已配 rsproxy 镜像（`~/.cargo/config.toml`，用户级不入库），crates.io Fastly CDN 直连不通
 - 预编译产物（易失）：`/tmp/opencode/server-test`、`/tmp/opencode/fakephone-test`（重编命令见根 README 开发验证段）
 
 ## 关键技术决策速查
