@@ -2,6 +2,7 @@ package com.remotevoice.app
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
 import android.widget.Button
@@ -53,13 +54,9 @@ class SettingsActivity : Activity() {
                 Toast.makeText(this, R.string.toast_import_bad, Toast.LENGTH_LONG).show()
                 return@setOnClickListener
             }
-            val server = "${parsed.host}:${parsed.port}"
+            val server = ConfigParser.format(parsed)
             serverEdit.setText(server)
             prefs.edit().putString(KEY_SERVER, server).apply()
-            // 旧配置串的 f= 只迁移到对应服务器的内部信任记录。
-            if (parsed.fingerprint.isNotEmpty()) {
-                TrustStore.remember(prefs, TrustStore.serverKey(parsed.host, parsed.port), parsed.fingerprint)
-            }
             Toast.makeText(this, R.string.toast_import_ok, Toast.LENGTH_SHORT).show()
         }
 
@@ -123,8 +120,10 @@ class SettingsActivity : Activity() {
                 when (which) {
                     0 -> showEditDeviceDialog(d)
                     1 -> {
+                        val removingActive = store.active()?.id == d.id
                         store.remove(d.id)
                         renderDevices()
+                        if (removingActive) reconnectAfterDeviceRemoval()
                     }
                 }
             }
@@ -156,7 +155,10 @@ class SettingsActivity : Activity() {
                     return@setPositiveButton
                 }
                 store.add(alias.text.toString().trim(), s, typeOf(s))
+                prefs.edit().putBoolean(AudioStreamService.KEY_USER_STOPPED, false).apply()
                 renderDevices()
+                saveAll(showToast = false)
+                if (AudioStreamService.instance == null) finish()
             }
             .setNegativeButton("取消", null)
             .show()
@@ -190,6 +192,10 @@ class SettingsActivity : Activity() {
                 }
                 store.update(d.id, alias.text.toString().trim(), s, typeOf(s))
                 renderDevices()
+                if (store.activeId() == d.id) {
+                    restartRunningService()
+                    if (AudioStreamService.instance == null) finish()
+                }
             }
             .setNegativeButton("取消", null)
             .show()
@@ -200,14 +206,46 @@ class SettingsActivity : Activity() {
         return if (norm.length >= 12) "perm" else "temp"
     }
 
-    private fun saveAll() {
+    private fun saveAll(showToast: Boolean = true) {
         val server = serverEdit.text.toString().trim().ifBlank { AudioStreamService.DEFAULT_SERVER }
         prefs.edit()
             .putString(KEY_SERVER, server)
             .putBoolean(KEY_AEC, aecSwitch.isChecked)
             .putBoolean(AudioStreamService.KEY_HANDSFREE, handsfreeSwitch.isChecked)
             .apply()
-        Toast.makeText(this, R.string.toast_saved, Toast.LENGTH_SHORT).show()
+        if (!prefs.getBoolean(AudioStreamService.KEY_USER_STOPPED, false)) {
+            AudioStreamService.prepareRetry()
+        }
+        restartRunningService()
+        if (showToast) Toast.makeText(this, R.string.toast_saved, Toast.LENGTH_SHORT).show()
+    }
+
+    /** 配置页保存后让正在运行的服务读取最新服务器/设备配置。 */
+    private fun restartRunningService() {
+        if (prefs.getBoolean(AudioStreamService.KEY_USER_STOPPED, false)) return
+        AudioStreamService.prepareRetry()
+        if (AudioStreamService.instance == null) return
+        startService(
+            Intent(this, AudioStreamService::class.java)
+                .setAction(AudioStreamService.ACTION_RESTART)
+        )
+    }
+
+    /** 删除当前设备后切换到剩余设备；没有设备时停止前台服务。 */
+    private fun reconnectAfterDeviceRemoval() {
+        if (store.active() != null) {
+            prefs.edit().putBoolean(AudioStreamService.KEY_USER_STOPPED, false).apply()
+            restartRunningService()
+            if (AudioStreamService.instance == null) finish()
+            return
+        }
+        prefs.edit().putBoolean(AudioStreamService.KEY_USER_STOPPED, true).apply()
+        if (AudioStreamService.instance != null) {
+            startService(
+                Intent(this, AudioStreamService::class.java)
+                    .setAction(AudioStreamService.ACTION_STOP)
+            )
+        }
     }
 
     private companion object {

@@ -1,34 +1,68 @@
 package com.remotevoice.app
 
 /**
- * 一行配置串解析器（协议 v3）：rv://host[:port]
- * 旧版本的 ?f=<指纹> 仍可解析，结果只供内部 TOFU 迁移，不是用户必填项。
+ * 当前 v3 配置串解析器：接受 rv://host[:port] 或 host[:port]。
+ * 服务器身份由客户端内部 TOFU 管理，不进入用户配置。
  */
 object ConfigParser {
 
     data class Parsed(
         val host: String,
         val port: Int,
-        val fingerprint: String,
     )
 
-    private val pattern = Regex(
-        """^rv://([^/:?\s]+)(?::(\d{1,5}))?(?:\?f=([0-9a-fA-F:\-\s]+))?$"""
-    )
     private const val DEFAULT_PORT = 9432
-    private const val FP_LEN = 64
-
     fun parse(raw: String): Parsed? {
-        val m = pattern.find(raw.trim()) ?: return null
-        val port = m.groupValues[2].toIntOrNull()?.takeIf { it in 1..65535 } ?: DEFAULT_PORT
-        val rawFingerprint = m.groupValues[3]
-        val fingerprint = normalizeFingerprint(rawFingerprint)
-        if (rawFingerprint.isNotBlank() && fingerprint.isEmpty()) return null
-        if (fingerprint.isNotEmpty() && fingerprint.length != FP_LEN) return null
-        return Parsed(m.groupValues[1], port, fingerprint)
+        var value = raw.trim()
+        if (value.startsWith("rv://", ignoreCase = true)) {
+            value = value.substring(5)
+        }
+        if (value.isEmpty() || value.any { it.isWhitespace() }) return null
+
+        val queryIndex = value.indexOf('?')
+        val authority = if (queryIndex < 0) value else value.substring(0, queryIndex)
+        if (queryIndex >= 0) return null
+        val endpoint = parseAuthority(authority) ?: return null
+        return Parsed(endpoint.first, endpoint.second)
     }
 
-    /** 指纹归一化：剔除冒号/空格/连字符并转小写。 */
-    fun normalizeFingerprint(s: String): String =
-        s.filter { c -> c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F' }.lowercase()
+    /** 将解析结果格式化为不会歧义的服务器地址，尤其是 IPv6。 */
+    fun format(parsed: Parsed): String =
+        if (parsed.host.contains(':')) "[${parsed.host}]:${parsed.port}"
+        else "${parsed.host}:${parsed.port}"
+
+    /** 解析域名、IPv4、带括号的 IPv6，以及省略端口的地址。 */
+    private fun parseAuthority(authority: String): Pair<String, Int>? {
+        if (authority.isEmpty()) return null
+        val endpoint = if (authority.startsWith('[')) {
+            val end = authority.indexOf(']')
+            if (end <= 1) return null
+            val host = authority.substring(1, end)
+            val suffix = authority.substring(end + 1)
+            val port = when {
+                suffix.isEmpty() -> DEFAULT_PORT
+                suffix.startsWith(":") -> parsePort(suffix.substring(1)) ?: return null
+                else -> return null
+            }
+            host to port
+        } else {
+            when (authority.count { it == ':' }) {
+                0 -> authority to DEFAULT_PORT
+                1 -> {
+                    val split = authority.lastIndexOf(':')
+                    val host = authority.substring(0, split)
+                    val port = parsePort(authority.substring(split + 1)) ?: return null
+                    host to port
+                }
+                else -> authority to DEFAULT_PORT // 未加括号的 IPv6：端口使用默认值
+            }
+        }
+        val host = endpoint.first
+        if (host.isEmpty() || host.any { it.isWhitespace() || it == '/' || it == '?' ||
+                    it == '[' || it == ']' }) return null
+        return endpoint
+    }
+
+    private fun parsePort(raw: String): Int? =
+        raw.toIntOrNull()?.takeIf { it in 1..65535 }
 }

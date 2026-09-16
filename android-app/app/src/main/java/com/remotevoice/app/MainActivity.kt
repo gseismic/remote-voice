@@ -6,7 +6,6 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -32,6 +31,7 @@ class MainActivity : Activity() {
     private lateinit var pttBtn: Button
     private val pollHandler = Handler(Looper.getMainLooper())
     private var pttDownAt = 0L
+    private var permissionRequestInFlight = false
 
     private val pollTask = object : Runnable {
         override fun run() {
@@ -114,8 +114,11 @@ class MainActivity : Activity() {
         val running = AudioStreamService.instance != null
         if (!running) {
             prefs.edit().putBoolean(KEY_USER_STOPPED, false).apply()
-            maybeAutoStart()
+            maybeAutoStart(force = true)
             Toast.makeText(this, R.string.service_started, Toast.LENGTH_SHORT).show()
+        } else if (AudioStreamService.Status.state == StatusState.ERROR) {
+            // 错误状态下，状态条点击的语义是用户明确重试，而不是再次停止。
+            restartForActiveDevice()
         } else {
             startService(
                 Intent(this, AudioStreamService::class.java).setAction(AudioStreamService.ACTION_STOP)
@@ -131,14 +134,10 @@ class MainActivity : Activity() {
         prefs.edit().putBoolean(KEY_USER_STOPPED, false).apply()
         renderDevices()
         Toast.makeText(this, "已切换到 ${d.name.ifBlank { "设备" }}", Toast.LENGTH_SHORT).show()
-        pollHandler.removeCallbacksAndMessages(null)
         if (AudioStreamService.instance != null) {
-            startService(
-                Intent(this, AudioStreamService::class.java).setAction(AudioStreamService.ACTION_STOP)
-            )
-            pollHandler.postDelayed({ maybeAutoStart() }, 600)
+            restartForActiveDevice()
         } else {
-            maybeAutoStart()
+            maybeAutoStart(force = true)
         }
     }
 
@@ -191,8 +190,10 @@ class MainActivity : Activity() {
                 when (which) {
                     0 -> showEditDeviceDialog(d)
                     1 -> {
+                        val removingActive = store.active()?.id == d.id
                         store.remove(d.id)
                         renderDevices()
+                        if (removingActive) reconnectAfterDeviceRemoval()
                     }
                 }
             }
@@ -224,7 +225,9 @@ class MainActivity : Activity() {
                     return@setPositiveButton
                 }
                 store.add(alias.text.toString().trim(), s, typeOf(s))
+                prefs.edit().putBoolean(KEY_USER_STOPPED, false).apply()
                 renderDevices()
+                restartForActiveDevice()
             }
             .setNegativeButton("取消", null)
             .show()
@@ -258,6 +261,7 @@ class MainActivity : Activity() {
                 }
                 store.update(d.id, alias.text.toString().trim(), s, typeOf(s))
                 renderDevices()
+                if (store.activeId() == d.id) restartForActiveDevice()
             }
             .setNegativeButton("取消", null)
             .show()
@@ -267,6 +271,34 @@ class MainActivity : Activity() {
     private fun typeOf(secret: String): String {
         val norm = secret.filter { it != ' ' && it != '-' }
         return if (norm.length >= 12) "perm" else "temp"
+    }
+
+    /** 新增或切换设备后重启服务，让当前激活设备立即接管连接。 */
+    private fun restartForActiveDevice() {
+        prefs.edit().putBoolean(KEY_USER_STOPPED, false).apply()
+        AudioStreamService.prepareRetry()
+        if (AudioStreamService.instance != null) {
+            // 由服务自己串行停止旧 relay 并启动新 relay，避免固定延迟造成竞态。
+            startService(
+                Intent(this, AudioStreamService::class.java).setAction(AudioStreamService.ACTION_RESTART)
+            )
+        } else {
+            maybeAutoStart()
+        }
+    }
+
+    /** 删除当前设备后切换到剩余设备；没有设备时停止前台服务。 */
+    private fun reconnectAfterDeviceRemoval() {
+        if (store.active() != null) {
+            restartForActiveDevice()
+            return
+        }
+        prefs.edit().putBoolean(KEY_USER_STOPPED, true).apply()
+        if (AudioStreamService.instance != null) {
+            startService(
+                Intent(this, AudioStreamService::class.java).setAction(AudioStreamService.ACTION_STOP)
+            )
+        }
     }
 
     // ---- 服务启停（自动连接） ----
@@ -284,10 +316,12 @@ class MainActivity : Activity() {
     }
 
     /** 一键连接：无激活设备→引导添加；有设备且用户未手动停止→自动拉起服务。 */
-    private fun maybeAutoStart() {
+    private fun maybeAutoStart(force: Boolean = false) {
         if (AudioStreamService.instance != null) return
         if (prefs.getBoolean(KEY_USER_STOPPED, false)) return
         if (store.active() == null) return
+        if (!force && AudioStreamService.Status.state == StatusState.ERROR) return
+        if (force) AudioStreamService.prepareRetry()
         requestPermissionsThenStart()
     }
 
@@ -306,16 +340,15 @@ class MainActivity : Activity() {
         }
 
     private fun requestPermissionsThenStart() {
-        val needed = mutableListOf(Manifest.permission.RECORD_AUDIO)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            needed.add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-        val denied = needed.filter {
+        if (permissionRequestInFlight) return
+        // 通知权限只影响状态栏可见性，不能阻断前台采音连接。
+        val denied = listOf(Manifest.permission.RECORD_AUDIO).filter {
             checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
         }
         if (denied.isEmpty()) {
             doStartService()
         } else {
+            permissionRequestInFlight = true
             requestPermissions(denied.toTypedArray(), REQ_PERMS)
         }
     }
@@ -327,16 +360,25 @@ class MainActivity : Activity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQ_PERMS) return
-        if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+        permissionRequestInFlight = false
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             doStartService()
         } else {
+            AudioStreamService.Status.state = StatusState.ERROR
+            AudioStreamService.Status.text = "错误：未授予麦克风权限，无法连接"
             Toast.makeText(this, R.string.err_no_mic_perm, Toast.LENGTH_LONG).show()
         }
     }
 
     private fun doStartService() {
         // 服务内部有 clientThread 存活检查，重复点击安全
-        startForegroundService(Intent(this, AudioStreamService::class.java))
+        try {
+            startForegroundService(Intent(this, AudioStreamService::class.java))
+        } catch (_: RuntimeException) {
+            AudioStreamService.Status.state = StatusState.ERROR
+            AudioStreamService.Status.text = "错误：系统拒绝启动麦克风服务"
+            Toast.makeText(this, "系统拒绝启动麦克风服务，请检查权限", Toast.LENGTH_LONG).show()
+        }
     }
 
     private companion object {

@@ -5,7 +5,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * 多设备存储（v2 多设备单激活）：
+ * 多设备存储（当前 v3 多设备单激活）：
  * prefs[devices] = JSONArray [{id,name,secret,type}]，prefs[active_id] = id。
  * 手机侧保存秘密原文（需要原文连入，与 v1 token 同一存储策略）；
  * name 首次连接成功后由 AUTH_OK 回传的设备名自动补全，用户可改别名。
@@ -73,13 +73,15 @@ class DeviceStore(context: Context) {
             if (arr.getJSONObject(i).getString("id") != id) out.put(arr.getJSONObject(i))
         }
         val activeId = prefs.getString(KEY_ACTIVE_ID, "") ?: ""
+        val nextActiveId = if (activeId == id) {
+            out.optJSONObject(0)?.optString("id", "") ?: ""
+        } else {
+            activeId
+        }
         prefs.edit()
             .putString(KEY_DEVICES, out.toString())
-            .apply {
-                if (activeId == id) {
-                    prefs.edit().putString(KEY_ACTIVE_ID, "").apply()
-                }
-            }
+            .putString(KEY_ACTIVE_ID, nextActiveId)
+            .apply()
     }
 
     fun rename(id: String, name: String) {

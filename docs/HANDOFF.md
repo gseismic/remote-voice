@@ -1,6 +1,6 @@
 # 交接文档 (HANDOFF)
 
-更新时间：2026-08-28 19:00 (UTC+8)
+更新时间：2026-08-28 19:05 (UTC+8)
 
 ## 项目背景（零上下文可读）
 
@@ -12,7 +12,7 @@
 - 设计文档目录：`docs/design/`（协议、交互、仓库重组、多 Mac 自助入网）
 - 计划与结果：`docs/dev/`（PLAN-XXX / -OUTCOME + INDEX.md）
 - 评审文档：`docs/dev/20260826-1540-REVIEW-13aadb1-v2-impl.md`
-- 当前计划：[docs/dev/PLAN-010-tauri-mac-client.md](dev/PLAN-010-tauri-mac-client.md)
+- 当前计划：[docs/dev/PLAN-011-android-connection-followup.md](dev/PLAN-011-android-connection-followup.md)
 - 当前设计：[docs/design/tauri-mac-client-20260828-overview.md](design/tauri-mac-client-20260828-overview.md)
 
 ## 当前状态（2026-08-28 Tauri Mac 客户端后）
@@ -30,14 +30,22 @@
 | `server/` | 公网 Linux | Go 中继服务器（module `remote-voice/server`，产物 `server`/`server-linux`）+ `cmd/fakephone` | ✅ `go test -race` 28 服务端/协议用例全绿 |
 | `mac-app/` | macOS | 可安装 Python 包 `remote-voice-mac`（src/macapp）：`remote-voice-gui`（图形）+ `remote-voice-recv`（CLI） | ✅ 26 测试全绿（含设备自助入网、TOFU、H-1/H-2 回归） |
 | `mac-app-tauri/` | macOS | Rust/Tauri GUI；Tokio/rustls relay + cpal 音频输出；共享身份/秘密存储 | ✅ Rust 17 测试、clippy、前端构建和 Linux bundle 通过；macOS 真机待验收 |
-| `android-app/` | Android | Kotlin：PTT 按住说话、多设备单激活（0.2.0） | ✅ assembleDebug 通过，真机联调待执行 |
+| `android-app/` | Android | Kotlin：PTT 按住说话、多设备单激活（0.2.0） | ✅ PLAN-011 连接链路修复，assembleDebug 通过；真机联调待执行 |
 
-## 本阶段完成的重点（PLAN-010：Rust/Tauri Mac 客户端）
+## 当前阶段完成的重点（PLAN-011：Android 连接链路修复）
+
+1. **自动连接触发**：主页面或设置页添加/切换设备后立即启动或串行重启 Android 前台连接服务。
+2. **错误可见性**：保留认证、网络、TLS、服务器地址和 AudioRecord 错误；正常停止显示已停止；Android 13+ 通知权限不再阻断录音连接。
+3. **连接稳定性**：关闭阻塞中的 TCP/TLS socket，有限等待旧 relay 线程；通过连接代次隔离旧网络/采音回调，避免切换设备时污染新连接。
+4. **当前 v3 输入路径**：Android 只输入 Mac 配对秘密，服务器地址支持 `rv://host:port`，证书身份由内部 TOFU 管理；没有为旧设计增加依赖。
+5. **验证**：`android-app` clean assembleDebug、server Go 测试、Mac Python 测试均通过；当前开发环境没有 Android 实体设备，真机权限、前台服务、公网连接和音频推流仍待用户验收。
+
+## 上一阶段完成的重点（PLAN-010：Rust/Tauri Mac 客户端）
 
 1. **Mac 设备自助入网**：协议 v3 使用随机 `device_id/device_key`；新 Mac 首次连接自动生成身份，优先写 macOS Keychain，失败回落私有文件。
 2. **Tauri 独立客户端**：Rust 核心负责 v3 TLS、TOFU、AUTH→REGISTER、心跳、重连和音频队列；Tauri UI 只接收不含设备密钥的完整状态快照。
 3. **用户路径简化**：Tauri 与 Python GUI/CLI 都不要求输入 regkey 或证书指纹；首次只需服务器地址，窗口显示配对秘密供 Android 使用。
-4. **多 Mac 与兼容**：server 持久化每台 Mac 的设备凭据哈希并独立路由；旧 v2 Mac 仅在 server 配置兼容 regkey 时可用；Android v2/v3 兼容路径保留。
+4. **多 Mac 与兼容**：server 持久化每台 Mac 的设备凭据哈希并独立路由；旧 v2 Mac 仅在 server 配置兼容 regkey 时可用；Android 当前流程仅使用 v3，不保留旧客户端输入流程。
 5. **review 修复**：Tauri 启动恢复连接历史；按当前服务器显式清除 TOFU 并确认后重连；控制器析构时关闭 relay 线程；连接生命周期串行化，避免重复命令启动多条 relay 线程。
 
 ## 下一步（按优先级）

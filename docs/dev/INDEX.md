@@ -61,3 +61,6 @@
 
 - **2026-08-28 19:00** | [PLAN-010-tauri-mac-client.md](PLAN-010-tauri-mac-client.md) → [PLAN-010-tauri-mac-client-OUTCOME.md](PLAN-010-tauri-mac-client-OUTCOME.md)
   评审：[20260828-1900-REVIEW-bfb44b3-tauri-mac-client.md](20260828-1900-REVIEW-bfb44b3-tauri-mac-client.md)。摘要：新增 Rust/Tauri Mac GUI，首次自动生成设备身份，复用 Keychain/文件存储，内部按服务器地址 TOFU，完成 v3 AUTH→REGISTER、心跳、重连、cpal 音频和完整状态 UI；修复重启历史恢复、TOFU 重置恢复、连接生命周期并发问题。验证：Rust 17 项、clippy、前端构建、Linux Tauri bundle、Go race/vet/build、Python 26 项、Android assembleDebug 全部通过。未覆盖：macOS 真机 Keychain/BlackHole、签名公证、实体多 Mac 公网长跑。
+
+- **2026-08-28 19:05** | [PLAN-011-android-connection-followup.md](PLAN-011-android-connection-followup.md) → [PLAN-011-android-connection-followup-OUTCOME.md](PLAN-011-android-connection-followup-OUTCOME.md)
+  摘要：修复 Android 在当前 v3 设计下添加 Mac 秘密后不触发或看似不响应的问题。新增主页面/设置页自动连接与串行重启、可读错误保留、连接与采音代次隔离、拨号 socket 清理；支持 `rv://` 地址、内部 TOFU、仅以麦克风权限作为启动前置条件，并修正多设备删除后的激活切换。验证：Android `clean assembleDebug`、Go 测试、Mac Python 测试、`git diff --check` 通过；无 Android 实体设备，公网/权限/前台服务未实测。

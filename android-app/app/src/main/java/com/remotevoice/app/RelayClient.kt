@@ -24,7 +24,7 @@ import javax.net.ssl.X509TrustManager
  *
  * v3 认证模型：手机只携带 规范化秘密的 SHA-256 hex（长度固定 64），
  * AUTH_OK 附目标 Mac 设备名（app 用于"首次连接自动命名"）。
- * 任何 AUTH_ERR 均视为不可自动恢复（原因码转人性化文案交给 UI）。
+ * 当前流程中任何 AUTH_ERR 均视为不可自动恢复（原因码转人性化文案交给 UI）。
  */
 class RelayClient(
     private val host: String,
@@ -74,11 +74,16 @@ class RelayClient(
     private val readTimeoutMs = 40_000     // 超时判定半开连接
     private val backoffMaxMs = 30_000L     // 重连退避封顶
 
-    @Volatile private var running = false
+    // 在构造后即进入可运行态，避免 stop() 先于网络线程启动时被 runForever() 覆盖。
+    @Volatile private var running = true
     @Volatile private var peerOnline = false
+    /** 每次建立新 TCP/TLS 连接递增，阻止旧采音线程写入重连后的新连接。 */
+    @Volatile private var connectionSerial = 0L
     @Volatile var peerName: String = ""
         private set
-    private var socket: SSLSocket? = null
+    @Volatile private var socket: SSLSocket? = null
+    /** TCP 拨号期间也登记原始 socket，停止服务时可立即打断阻塞的 connect。 */
+    private var connectingSocket: Socket? = null
     private val outLock = Any()
     // 只在连接线程更新；首次握手后固定，后续重连不再重新接受任意证书。
     private var trustedFingerprint = fingerprintHex.trim().lowercase()
@@ -88,9 +93,9 @@ class RelayClient(
      * 在专用线程调用，阻塞直至 [stop]。
      */
     fun runForever() {
-        running = true
         var attempts = 0
         while (running) {
+            connectionSerial++
             try {
                 listener.onState(if (attempts == 0) "连接中…" else "重连中(第${attempts}次)…")
                 connectAndServe()
@@ -105,8 +110,10 @@ class RelayClient(
                 val why = describeError(e)
                 listener.onState(if (attempts == 0) "连接失败: $why" else "重连失败($attempts): $why")
             } finally {
+                val wasPeerOnline = peerOnline
                 closeQuietly()
                 peerOnline = false
+                if (wasPeerOnline) listener.onPeerOffline()
             }
             if (!running) break
             attempts++
@@ -127,10 +134,20 @@ class RelayClient(
     }
 
     /** 由采音线程调用；仅在桥接就绪后真正发送。 */
-    fun sendAudio(payload: ByteArray): Boolean {
-        if (!peerOnline) return false
-        return sendFrame(frameAudio, payload)
+    fun sendAudio(payload: ByteArray, expectedConnectionSerial: Long): Boolean {
+        // 先固定 socket；否则检查通过后若恰好发生自动重连，sendFrame 可能拿到新 socket。
+        val currentSocket = socket ?: return false
+        if (!peerOnline || connectionSerial != expectedConnectionSerial) return false
+        return try {
+            sendFrameTo(currentSocket.getOutputStream(), frameAudio, payload)
+        } catch (e: IOException) {
+            Log.w(TAG, "send audio failed", e)
+            false
+        }
     }
+
+    /** 返回当前 TLS 会话标识，采音线程用它隔离网络自动重连。 */
+    fun currentConnectionSerial(): Long = connectionSerial
 
     private fun connectAndServe() {
         // trustedFingerprint 为空=TOFU（首次连接自动信任并记录）；非空=指纹固定校验
@@ -140,12 +157,50 @@ class RelayClient(
         ctx.init(null, arrayOf(tm), null)
 
         val raw = Socket()
-        raw.connect(InetSocketAddress(host, port), readTimeoutMs)
-        val sock = ctx.socketFactory.createSocket(raw, host, port, true) as SSLSocket
-        synchronized(this) { socket = sock }
-        sock.soTimeout = readTimeoutMs
-        sock.tcpNoDelay = true
-        sock.startHandshake()
+        var connectedSocket: SSLSocket? = null
+        var handedToTls = false
+        synchronized(this) { connectingSocket = raw }
+        try {
+            raw.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
+            if (!running) throw IOException("客户端已停止")
+            val sock = ctx.socketFactory.createSocket(raw, host, port, true) as SSLSocket
+            handedToTls = true
+            synchronized(this) {
+                connectingSocket = null
+                if (!running) {
+                    sock.close()
+                    throw IOException("客户端已停止")
+                }
+                socket = sock
+            }
+            connectedSocket = sock
+            sock.soTimeout = readTimeoutMs
+            sock.tcpNoDelay = true
+            try {
+                sock.startHandshake()
+            } catch (e: SSLHandshakeException) {
+                var cause: Throwable? = e
+                while (cause != null) {
+                    val message = cause.message.orEmpty()
+                    if (message.contains("证书指纹不符")) {
+                        throw FatalProtocolError(message)
+                    }
+                    cause = cause.cause
+                }
+                throw e
+            }
+        } finally {
+            synchronized(this) {
+                if (connectingSocket === raw) connectingSocket = null
+            }
+            if (!handedToTls) {
+                try {
+                    raw.close()
+                } catch (_: IOException) {
+                }
+            }
+        }
+        val sock = connectedSocket ?: throw IOException("TLS 连接未建立")
         if (trustedFingerprint.isEmpty()) {
             // TOFU：握手后记录实际证书指纹，本实例后续重连以之校验
             val chain = sock.session.peerCertificates
@@ -285,8 +340,20 @@ class RelayClient(
         }
 
     private fun closeQuietly() {
+        val tls: SSLSocket?
+        val raw: Socket?
+        synchronized(this) {
+            tls = socket
+            socket = null
+            raw = connectingSocket
+            connectingSocket = null
+        }
         try {
-            synchronized(this) { socket?.close(); socket = null }
+            tls?.close()
+        } catch (_: IOException) {
+        }
+        try {
+            raw?.close()
         } catch (_: IOException) {
         }
     }
@@ -333,6 +400,7 @@ class RelayClient(
 
     private companion object {
         const val TAG = "RelayClient"
+        const val CONNECT_TIMEOUT_MS = 10_000
         const val AUTH_TIMEOUT_MS = 10_000
     }
 }

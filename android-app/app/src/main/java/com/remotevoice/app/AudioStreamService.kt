@@ -24,20 +24,28 @@ enum class StatusState { STOPPED, CONNECTING, WAIT_PEER, STREAMING, ERROR }
 /**
  * 前台采音服务（v3）：持有 RelayClient 与 AudioRecord 生命周期。
  * 前台服务(microphone 类型)保证后台采音不被系统杀死（设计文档 §6.3）。
- * v2 交互：按住说话（PTT）——采音循环常开，但仅在「按住或免提常开」时发送；
+ * 当前交互：按住说话（PTT）——采音循环常开，但仅在「按住或免提常开」时发送；
  * 设备名在认证成功后由 AUTH_OK 回写 [RelayClient.Listener.onPeerName]。
  */
 class AudioStreamService : Service(), RelayClient.Listener {
 
-    private var client: RelayClient? = null
-    private var clientThread: Thread? = null
+    @Volatile private var client: RelayClient? = null
+    @Volatile private var clientThread: Thread? = null
     @Volatile private var captureThread: Thread? = null
     @Volatile private var audioRecord: AudioRecord? = null
+    /** 每次对端上线/掉线递增，隔离同一 relay 自动重连前后的采音线程。 */
+    @Volatile private var captureGeneration = 0L
     private val mainHandler = Handler(Looper.getMainLooper())
 
     /** 免提常开：设置为 true 时相当于 v1 持续推流（默认关闭=仅按住说话）。 */
     @Volatile private var handsfree = false
     @Volatile private var pttHeld = false
+    /** 致命错误停服后保留错误文案，避免 onDestroy 把真正原因覆盖成“未启动”。 */
+    @Volatile private var preserveError = false
+    /** 用于让旧错误的 stopSelfResult 不会误停掉已经重启的新连接。 */
+    @Volatile private var activeStartId = 0
+    /** 每次重启递增；主线程队列中的旧连接回调必须带着旧代次失效。 */
+    @Volatile private var connectionGeneration = 0L
 
     // UI 轮询的状态持有者（零依赖方案：Activity 每 500ms 读取）
     object Status {
@@ -56,10 +64,17 @@ class AudioStreamService : Service(), RelayClient.Listener {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        activeStartId = startId
         when (intent?.action) {
             ACTION_STOP -> {
+                preserveError = false
+                stopStreaming()
                 stopSelf()
                 return START_NOT_STICKY
+            }
+            ACTION_RESTART -> {
+                stopStreaming()
+                startStreaming(startId)
             }
             else -> startStreaming()
         }
@@ -67,39 +82,49 @@ class AudioStreamService : Service(), RelayClient.Listener {
     }
 
     override fun onDestroy() {
+        val keepError = preserveError
         instance = null
         stopStreaming()
-        Status.state = StatusState.STOPPED
-        Status.text = "未启动"
-        Status.talking = false
+        if (!keepError) {
+            Status.state = StatusState.STOPPED
+            Status.text = "已停止"
+            Status.talking = false
+        }
         super.onDestroy()
     }
 
-    private fun startStreaming() {
+    private fun startStreaming(startId: Int = activeStartId) {
         if (clientThread?.isAlive == true) return
+        preserveError = false
+        activeStartId = startId
+        val generation = ++connectionGeneration
+        // 前台服务必须尽早发布通知；即使配置或音频初始化失败，也要让系统知道启动已处理。
+        try {
+            startForegroundWith("启动中…")
+        } catch (_: SecurityException) {
+            failAndStop("系统拒绝启动麦克风服务，请检查权限")
+            return
+        }
 
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         handsfree = prefs.getBoolean(KEY_HANDSFREE, false)
         // 服务器地址：prefs 为空时回落内置默认（需求：默认服务器免输入）
         val server = (prefs.getString(KEY_SERVER, "") ?: "")
             .ifBlank { DEFAULT_SERVER }
-        val host = server.substringBeforeLast(":")
-        val port = server.substringAfterLast(":").toIntOrNull()
-        if (host.isEmpty() || port == null) {
-            Status.state = StatusState.ERROR
-            Status.text = "错误：服务器地址无效（设置中检查）"
-            stopSelf()
+        val parsed = ConfigParser.parse(server)
+        if (parsed == null) {
+            failAndStop("服务器地址无效（设置中检查）")
             return
         }
+        val host = parsed.host
+        val port = parsed.port
         val serverKey = TrustStore.serverKey(host, port)
         val fingerprint = TrustStore.load(prefs, serverKey)
         // 指纹为空 = TOFU：连接时自动信任并记录（用户无需输入）
         // 激活设备：秘密原文（规范化后本地算哈希，只传 hex 给 relay）
         val device = DeviceStore(this).active()
         if (device == null || device.secret.isBlank()) {
-            Status.state = StatusState.ERROR
-            Status.text = "错误：尚无激活设备，请添加 Mac 秘密"
-            stopSelf()
+            failAndStop("尚无激活设备，请添加 Mac 秘密")
             return
         }
         val secretHex = secretHashHex(device.secret)
@@ -107,34 +132,80 @@ class AudioStreamService : Service(), RelayClient.Listener {
         Status.framesSent = 0
         Status.peerName = device.name
         Status.talking = false
-        startForegroundWith("启动中…")
         Status.state = StatusState.CONNECTING
         Status.text = "启动中…"
-        client = RelayClient(host, port, secretHex, fingerprint, this)
-        clientThread = Thread({ client?.runForever() }, "relay-client").apply {
+        lateinit var relay: RelayClient
+        val relayListener = object : RelayClient.Listener {
+            private fun isCurrent(): Boolean = client === relay && connectionGeneration == generation
+
+            private fun postIfCurrent(action: () -> Unit) {
+                mainHandler.post {
+                    if (isCurrent()) action()
+                }
+            }
+
+            override fun onState(text: String) {
+                postIfCurrent { this@AudioStreamService.applyState(text) }
+            }
+
+            override fun onPeerName(name: String) {
+                postIfCurrent { this@AudioStreamService.applyPeerName(name) }
+            }
+
+            override fun onPeerOnline() {
+                postIfCurrent { this@AudioStreamService.startCapture() }
+            }
+
+            override fun onPeerOffline() {
+                postIfCurrent { this@AudioStreamService.stopCapture() }
+            }
+
+            override fun onFatal(message: String) {
+                postIfCurrent { this@AudioStreamService.failAndStop(message) }
+            }
+
+            override fun onPeerFingerprint(fingerprint: String, serverKey: String) {
+                postIfCurrent {
+                    this@AudioStreamService.rememberPeerFingerprint(fingerprint, serverKey)
+                }
+            }
+        }
+        relay = RelayClient(host, port, secretHex, fingerprint, relayListener)
+        client = relay
+        clientThread = Thread({ relay.runForever() }, "relay-client").apply {
             start()
         }
     }
 
     private fun stopStreaming() {
-        captureThread?.interrupt()
-        captureThread = null
-        client?.stop()
+        // 先使已经排队的旧回调失效，再关闭底层连接和采音资源。
+        connectionGeneration++
+        mainHandler.removeCallbacksAndMessages(null)
+        val oldCaptureThread = captureThread
+        captureGeneration++
+        oldCaptureThread?.interrupt()
+        val oldClient = client
+        val oldThread = clientThread
+        client = null
         clientThread = null
-        audioRecord?.let {
-            try {
-                it.stop()
-                it.release()
-            } catch (_: IllegalStateException) {
-            }
-        }
-        audioRecord = null
+        oldClient?.stop()
+        releaseAudioRecord()
+        waitForThread(oldCaptureThread, 1000)
+        if (captureThread === oldCaptureThread) captureThread = null
+        oldThread?.interrupt()
+        waitForThread(oldThread, 1000)
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
-    // ---- RelayClient.Listener：状态回调均来自网络线程，仅做赋值与通知更新 ----
+    // ---- RelayClient.Listener：统一在服务主线程更新状态与采音资源 ----
 
     override fun onState(text: String) {
+        applyState(text)
+    }
+
+    private fun applyState(text: String) {
+        // relay 线程在 fatal 回调后还会发送一次“已停止”，不能覆盖真正的错误原因。
+        if (preserveError && text == "已停止") return
         // 状态归一：RelayClient 的文案 → UI 状态枚举（Activity 据此着色/禁用按钮）
         Status.state = when {
             text == "推流中" || text.startsWith("传输中") -> StatusState.STREAMING
@@ -147,6 +218,10 @@ class AudioStreamService : Service(), RelayClient.Listener {
     }
 
     override fun onPeerName(name: String) {
+        applyPeerName(name)
+    }
+
+    private fun applyPeerName(name: String) {
         if (name.isBlank()) return
         Status.peerName = name
         // 首次连接自动命名：设备条目无别名时用 Mac 回传名补全（开放问题②落地）
@@ -156,6 +231,10 @@ class AudioStreamService : Service(), RelayClient.Listener {
     }
 
     override fun onPeerFingerprint(fingerprint: String, serverKey: String) {
+        rememberPeerFingerprint(fingerprint, serverKey)
+    }
+
+    private fun rememberPeerFingerprint(fingerprint: String, serverKey: String) {
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         TrustStore.remember(prefs, serverKey, fingerprint)
         Log.i(TAG, "tofu: 已建立服务器信任")
@@ -168,7 +247,7 @@ class AudioStreamService : Service(), RelayClient.Listener {
     }
 
     override fun onPeerOnline() {
-        // 回调来自网络线程：采音生命周期变更统一归到主线程，消除跨线程竞态（Review L-3）
+        // 兼容直接调用本监听器的路径；实际 relay 回调由带代次的代理直接调用 startCapture。
         mainHandler.post { startCapture() }
     }
 
@@ -177,11 +256,23 @@ class AudioStreamService : Service(), RelayClient.Listener {
     }
 
     override fun onFatal(message: String) {
+        failAndStop(message)
+    }
+
+    /** 记录可重试的错误并停止服务；错误状态会留在主界面直到用户主动重试。 */
+    private fun failAndStop(message: String) {
+        preserveError = true
+        val startId = activeStartId
+        val text = if (message.startsWith("错误：")) message else "错误：$message"
         Status.state = StatusState.ERROR
-        Status.text = "错误：$message"
+        Status.text = text
+        Status.talking = false
+        // 音频初始化失败或认证失败后立即停止网络重连，避免错误状态被后续连接事件冲掉。
+        client?.stop()
         mainHandler.post {
-            updateNotification("错误：$message")
-            stopSelf()
+            if (!preserveError || activeStartId != startId) return@post
+            updateNotification(text)
+            stopSelfResult(startId)
         }
     }
 
@@ -201,6 +292,11 @@ class AudioStreamService : Service(), RelayClient.Listener {
 
     private fun startCapture() {
         if (captureThread?.isAlive == true) return
+        val generation = connectionGeneration
+        val captureId = ++captureGeneration
+        // 固定本次采音对应的 relay；切换设备后旧线程绝不能重新读取到新 client。
+        val captureClient = client ?: return
+        val connectionSerial = captureClient.currentConnectionSerial()
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val useAec = prefs.getBoolean(KEY_AEC, false)
         val source = if (useAec) MediaRecorder.AudioSource.VOICE_COMMUNICATION
@@ -208,12 +304,24 @@ class AudioStreamService : Service(), RelayClient.Listener {
 
         val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val bufSize = maxOf(minBuf, FRAME_BYTES * 4)
-        val record = AudioRecord(source, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT, bufSize)
+        val record = try {
+            AudioRecord(source, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT, bufSize)
+        } catch (_: IllegalArgumentException) {
+            failAndStop("AudioRecord 参数无效")
+            return
+        } catch (_: SecurityException) {
+            failAndStop("没有麦克风权限")
+            return
+        }
         if (record.state != AudioRecord.STATE_INITIALIZED) {
             record.release()
-            Status.text = "错误：AudioRecord 初始化失败（麦克风被占用？）"
-            stopSelf()
+            failAndStop("AudioRecord 初始化失败（麦克风被占用？）")
+            return
+        }
+        if (connectionGeneration != generation || captureGeneration != captureId ||
+            client !== captureClient) {
+            record.release()
             return
         }
         audioRecord = record
@@ -221,13 +329,40 @@ class AudioStreamService : Service(), RelayClient.Listener {
 
         captureThread = Thread({
             val frame = ByteArray(FRAME_BYTES)
-            record.startRecording()
-            while (!Thread.currentThread().isInterrupted && audioRecord === record) {
-                val n = record.read(frame, 0, FRAME_BYTES)
+            try {
+                record.startRecording()
+            } catch (_: IllegalStateException) {
+                failCaptureIfCurrent(
+                    "AudioRecord 启动失败（麦克风被占用？）",
+                    generation, captureId, captureClient, record,
+                )
+                record.release()
+                return@Thread
+            } catch (_: SecurityException) {
+                failCaptureIfCurrent("没有麦克风权限", generation, captureId, captureClient, record)
+                record.release()
+                return@Thread
+            }
+            while (!Thread.currentThread().isInterrupted &&
+                connectionGeneration == generation && captureGeneration == captureId &&
+                    audioRecord === record) {
+                val n = try {
+                    record.read(frame, 0, FRAME_BYTES)
+                } catch (_: IllegalStateException) {
+                    // 服务停止时会释放 AudioRecord，释放并发发生时在此正常退出。
+                    break
+                } catch (_: SecurityException) {
+                    failCaptureIfCurrent("没有麦克风权限", generation, captureId, captureClient, record)
+                    break
+                }
                 if (n == FRAME_BYTES) {
                     // PTT 门控：未按住且非免提常开时，帧读出即弃（麦克风保持取音，
                     // 数据不出本机；对端掉线时 sendAudio 返回 false，同样不计数）
-                    if (shouldSend() && client?.sendAudio(frame) == true) Status.framesSent++
+                    if (connectionGeneration == generation && captureGeneration == captureId &&
+                        shouldSend() && captureClient.sendAudio(frame, connectionSerial) &&
+                        connectionGeneration == generation && captureGeneration == captureId) {
+                        Status.framesSent++
+                    }
                 } else if (n < 0) {
                     Log.w(TAG, "AudioRecord.read 返回 $n")
                     break
@@ -241,12 +376,31 @@ class AudioStreamService : Service(), RelayClient.Listener {
         }, "audio-capture").apply { start() }
     }
 
+    /** 旧采音线程异常时只允许影响仍属于它的当前连接。 */
+    private fun failCaptureIfCurrent(
+        message: String,
+        generation: Long,
+        captureId: Long,
+        captureClient: RelayClient,
+        record: AudioRecord,
+    ) {
+        if (connectionGeneration == generation && captureGeneration == captureId &&
+            client === captureClient && audioRecord === record) {
+            failAndStop(message)
+        }
+    }
+
     private fun stopCapture() {
         val t = captureThread
-        captureThread = null
+        captureGeneration++
         t?.interrupt()
-        // AudioRecord.read 阻塞调用不响应 interrupt，必须释放实例以解除阻塞；
-        // 释放后采音线程的 audioRecord === record 判断失效，自行收尾退出
+        releaseAudioRecord()
+        waitForThread(t, 1000)
+        if (captureThread === t) captureThread = null
+    }
+
+    /** 释放录音实例以解除阻塞中的 AudioRecord.read。 */
+    private fun releaseAudioRecord() {
         audioRecord?.let {
             try {
                 it.stop()
@@ -255,6 +409,16 @@ class AudioStreamService : Service(), RelayClient.Listener {
             }
         }
         audioRecord = null
+    }
+
+    /** 在服务主线程有限等待工作线程退出，避免重启时旧线程占用音频或网络资源。 */
+    private fun waitForThread(thread: Thread?, timeoutMs: Long) {
+        if (thread == null || thread === Thread.currentThread()) return
+        try {
+            thread.join(timeoutMs)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
     }
 
     // ---- 通知 ----
@@ -297,6 +461,8 @@ class AudioStreamService : Service(), RelayClient.Listener {
     companion object {
         // 供外部组件（MainActivity）使用的动作与规格常量
         const val ACTION_STOP = "com.remotevoice.app.STOP"
+        const val ACTION_RESTART = "com.remotevoice.app.RESTART"
+        const val KEY_USER_STOPPED = "user_stopped"
 
         // 默认服务器（需求指定），prefs 未配置时回落使用
         const val DEFAULT_SERVER = "43.139.226.138:9432"
@@ -315,6 +481,15 @@ class AudioStreamService : Service(), RelayClient.Listener {
             return java.security.MessageDigest.getInstance("SHA-256")
                 .digest(norm.toByteArray(Charsets.UTF_8))
                 .joinToString("") { "%02x".format(it) }
+        }
+
+        /** 用户明确发起重试前清掉上一次错误，避免自动重试覆盖错误原因。 */
+        fun prepareRetry() {
+            if (Status.state == StatusState.ERROR) {
+                Status.state = StatusState.STOPPED
+                Status.text = "准备连接…"
+                Status.talking = false
+            }
         }
 
         // 仅内部使用
