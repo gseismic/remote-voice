@@ -119,6 +119,22 @@ select#audiosel{width:100%;margin-top:10px;background:#141a22;border:1px solid v
   border-top-color:var(--blue);animation:spin 1s linear infinite;flex:none}
 @keyframes spin{to{transform:rotate(360deg)}}
 .scanbar b{color:var(--blue)}
+
+/* ===== 链路选择：本地/远程 两个并行分组（v3.1 用户显式选择） ===== */
+.lineseg{display:flex;gap:8px;margin-bottom:4px}
+.seg{flex:1;display:flex;flex-direction:column;gap:3px;border:1px solid var(--line);border-radius:11px;
+  background:#141a22;padding:10px 13px;cursor:pointer;user-select:none}
+.seg b{font-size:12px;display:flex;align-items:center;gap:6px}
+.seg small{font:9.5px var(--mono);color:var(--tx2);letter-spacing:.4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.seg .rd{width:12px;height:12px;border-radius:50%;border:1.5px solid #4d5561;flex:none;margin-left:auto}
+.seg.on.lan{border-color:#274a2d;background:rgba(63,185,80,.07)}
+.seg.on.lan b{color:var(--green)}
+.seg.on.lan .rd{border-color:var(--green);background:radial-gradient(circle,var(--green) 42%,transparent 47%)}
+.seg.on.wan{border-color:#2b4a68;background:rgba(88,166,255,.07)}
+.seg.on.wan b{color:var(--blue)}
+.seg.on.wan .rd{border-color:var(--blue);background:radial-gradient(circle,var(--blue) 42%,transparent 47%)}
+.signal .srv .src.wan{color:var(--blue);border-color:#2b4a68}
+.target .t1 .tag.wan{color:var(--blue);border-color:#2b4a68}
 @media (prefers-reduced-motion:reduce){.led.g,.meter i,.scanbar .sp{animation:none}}
 </style>
 </head>
@@ -128,8 +144,8 @@ select#audiosel{width:100%;margin-top:10px;background:#141a22;border:1px solid v
   <span class="mark">remote-voice <em>·</em> MAC 交互原型 V3（可点击）</span>
   <a href="./index.html">← 返回总览</a>
 </header>
-<div class="tip">试一下：<b>点右上状态胶囊</b> → 自动扫描 → 注册出秘密 → 3 秒后模拟手机上线桥接；
-<b>重新生成</b>换秘密；<b>复制</b>可复制；音频下拉选「外接声卡（未接入）」看音频缺失态；<b>再点状态胶囊</b>=断开。</div>
+<div class="tip">试一下：<b>先在连接卡里选「本地/远程」链路</b>——只有本地才扫描，远程直连配置地址；<b>点右上状态胶囊</b>连接 → 注册出秘密 → 3 秒后模拟手机上线桥接；
+<b>重新生成</b>换秘密；<b>复制</b>可复制；音频下拉选「外接声卡（未接入）」看音频缺失态；<b>再点状态胶囊</b>=断开；连接中点另一条链路=换线重连。</div>
 
 <div class="stage">
   <div class="halo"></div>
@@ -145,7 +161,7 @@ select#audiosel{width:100%;margin-top:10px;background:#141a22;border:1px solid v
     </div>
 
     <div class="content">
-      <div class="scanbar" id="scanbar"><span class="sp"></span><span>正在扫描局域网 server…（<b>本地优先</b>，扫不到回落配置地址）</span></div>
+      <div class="scanbar" id="scanbar"><span class="sp"></span><span>本地链路：正在扫描局域网 server…（远程链路不扫描，直连配置地址）</span></div>
 
       <div class="card signal">
         <div class="sect">PAIRING SIGNAL</div>
@@ -163,7 +179,17 @@ select#audiosel{width:100%;margin-top:10px;background:#141a22;border:1px solid v
       </div>
 
       <div class="card target">
-        <div class="sect">CONNECTION &amp; OUTPUT</div>
+        <div class="sect">CONNECTION &amp; OUTPUT · 两条并行链路，点选切换</div>
+        <div class="lineseg">
+          <span class="seg lan on" id="seg-lan">
+            <b>本地（局域网）<span class="rd"></span></b>
+            <small id="seg-lan-a">192.168.1.103:9432</small>
+          </span>
+          <span class="seg wan" id="seg-wan">
+            <b>远程（公网）<span class="rd"></span></b>
+            <small>118.193.40.160:9432</small>
+          </span>
+        </div>
         <div class="row">
           <span class="ico lan">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1" fill="currentColor" stroke="none"/></svg>
@@ -229,6 +255,19 @@ const $=id=>document.getElementById(id);
 const ALPHA='23456789ABCDEFGHJKMNPQRSTUVWXYZ';
 const rand=n=>Array.from({length:n},()=>ALPHA[Math.floor(Math.random()*ALPHA.length)]).join('');
 let st='stopped',expT=0,logT=[],bridgeT=null,bridgeTick=null;
+let line='lan';   // 用户选择的当前链路：'lan' | 'wan'
+
+function setLine(l,fromUser){
+  line=l;
+  $('seg-lan').classList.toggle('on',l==='lan');
+  $('seg-wan').classList.toggle('on',l==='wan');
+  if(fromUser){
+    log('info','当前链路切换为：'+(l==='lan'?'本地（局域网）':'远程（公网）'));
+    if(st!=='stopped'){disconnect();connect();}   // 连接中切换 = 换线重连
+  }
+}
+$('seg-lan').addEventListener('click',()=>setLine('lan',true));
+$('seg-wan').addEventListener('click',()=>setLine('wan',true));
 
 function log(cls,msg){
   logT.push({t:new Date().toTimeString().slice(0,8),cls,msg});
@@ -250,32 +289,29 @@ $('stbox').addEventListener('click',()=>{
 });
 function connect(){
   st='scan';
-  setLed('blue','扫描局域网…');
-  $('scanbar').style.display='flex';
-  $('srvline').textContent='扫描中…';
-  $('srvsrc').style.display='none';
   $('bigcode').textContent='--------';
   $('peerline').innerHTML='';
   $('audiost').textContent='等待手机上线';
-  log('info','发起连接：扫描局域网（本地优先）');
-  setTimeout(()=>{
+
+  const finish=()=>{
     if(st!=='scan')return;
     $('scanbar').style.display='none';
-    $('srvline').textContent='192.168.1.103:9432';
-    $('srvsrc').style.display='';
-    $('srv-t1').innerHTML='中继服务器<span class="tag">局域网发现</span>';
-    $('srv-t2').textContent='192.168.1.103:9432 · 回落远程 118.193.40.160:9432';
-    $('rtt').textContent='RTT 3ms';
-    const secret=rand(4)+'-'+rand(4);
-    $('bigcode').textContent=secret;
-    expT=8*3600;
-    clearInterval(window._exp);
-    window._exp=setInterval(()=>{
-      if(st==='stopped'){clearInterval(window._exp);return;}
-      expT=Math.max(0,expT-1);$('exp').textContent='有效期 '+fmt(expT);
-    },1000);
     st='registered';setLed('amber','已注册 · 等待手机');
-    log('ok','已注册 联合测试Mac（局域网发现 192.168.1.103:9432）');
+    if(line==='lan'){
+      $('srvline').textContent='192.168.1.103:9432';
+      $('srvsrc').style.display='';$('srvsrc').className='src';$('srvsrc').textContent='局域网发现';
+      $('srv-t1').innerHTML='中继服务器<span class="tag">局域网发现</span>';
+      $('srv-t2').textContent='192.168.1.103:9432 · 切到远程请点上方链路卡';
+      $('rtt').textContent='RTT 3ms';
+      log('ok','已注册 联合测试Mac（局域网发现 192.168.1.103:9432）');
+    }else{
+      $('srvline').textContent='118.193.40.160:9432';
+      $('srvsrc').style.display='';$('srvsrc').className='src wan';$('srvsrc').textContent='远程配置';
+      $('srv-t1').innerHTML='中继服务器<span class="tag wan">远程配置</span>';
+      $('srv-t2').textContent='118.193.40.160:9432 · 切到本地请点上方链路卡';
+      $('rtt').textContent='RTT 42ms';
+      log('ok','已注册 联合测试Mac（远程 118.193.40.160:9432，未扫描）');
+    }
     log('warn','等待手机上线…');
     bridgeT=setTimeout(()=>{
       if(st!=='registered')return;
@@ -290,7 +326,25 @@ function connect(){
       },1000);
       applyAudio();
     },3000);
-  },1600);
+  };
+
+  if(line==='lan'){
+    // 只有本地链路才扫描
+    setLed('blue','扫描局域网…');
+    $('scanbar').style.display='flex';
+    $('srvline').textContent='扫描中…';
+    $('srvsrc').style.display='none';
+    log('info','本地链路：扫描局域网 server…');
+    setTimeout(finish,1600);
+  }else{
+    // 远程链路：直连配置地址，永不扫描
+    setLed('blue','连接远程…');
+    $('scanbar').style.display='none';
+    $('srvline').textContent='118.193.40.160:9432';
+    $('srvsrc').style.display='none';
+    log('info','远程链路：直连配置地址（不扫描）');
+    setTimeout(finish,1000);
+  }
 }
 function disconnect(){
   st='stopped';setLed('gray','未连接 · 点击连接');
