@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>remote-voice · Mac 接收端交互原型 · V3</title>
+<style>
+:root{
+  --bg:#0e1116; --panel:#161b22; --card:#1a212b; --line:#2a313c;
+  --tx:#e6e9ee; --tx2:#8b949e; --amber:#f5b83d; --green:#3fb950; --red:#f85149; --blue:#58a6ff;
+  --mono:"IBM Plex Mono","JetBrains Mono",ui-monospace,SFMono-Regular,Consolas,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  min-height:100vh;background:var(--bg);
+  background-image:radial-gradient(circle,#1c232e 1px,transparent 1px);
+  background-size:24px 24px;
+  color:var(--tx);font-family:"Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+  display:flex;flex-direction:column;align-items:center;padding:26px 20px 40px;
+}
+.pghead{width:min(900px,100%);display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.pghead .mark{font:12px var(--mono);letter-spacing:2px;color:var(--tx2)}
+.pghead .mark em{font-style:normal;color:var(--amber)}
+.pghead a{font:12px var(--mono);color:var(--tx2);text-decoration:none}
+.pghead a:hover{color:var(--amber)}
+.tip{font-size:11.5px;color:var(--tx2);margin-bottom:16px}
+.tip b{color:var(--amber)}
+
+.stage{position:relative;display:flex;justify-content:center}
+.halo{position:absolute;top:50%;left:50%;width:640px;height:640px;transform:translate(-50%,-50%);
+  background:radial-gradient(closest-side,rgba(245,184,61,.06),transparent 72%);pointer-events:none}
+.macwin{position:relative;width:520px;height:790px;background:var(--panel);border:1px solid #3a4452;
+  border-radius:12px;overflow:hidden;display:flex;flex-direction:column;
+  box-shadow:0 30px 80px rgba(0,0,0,.65),inset 0 1px 0 rgba(255,255,255,.06)}
+.tbar{height:42px;background:#11151b;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;padding:0 13px;gap:6px;flex:none}
+.tbar .d{width:11px;height:11px;border-radius:50%}
+.tbar .d.r{background:#ff5f57}.tbar .d.y{background:#febc2e}.tbar .d.g{background:#28c840}
+.tbar .t{flex:1;text-align:center;font:12px var(--mono);color:var(--tx2)}
+
+.topbar{flex:none;display:flex;align-items:center;justify-content:space-between;padding:14px 18px 0}
+.brand{display:flex;align-items:center;gap:10px}
+.brand .bm{width:36px;height:36px;border-radius:10px;background:linear-gradient(150deg,#f5b83d,#d99a26);
+  color:#14100a;font:800 13px var(--mono);display:flex;align-items:center;justify-content:center}
+.brand .eyebrow{font:9px var(--mono);letter-spacing:2.5px;color:var(--tx2)}
+.brand h1{font-size:16px;letter-spacing:.5px;margin-top:2px}
+.stbox{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:999px;
+  padding:7px 14px;font-size:12.5px;background:rgba(20,26,35,.85);cursor:pointer;user-select:none}
+.stbox:active{border-color:#3d4654}
+.led{width:9px;height:9px;border-radius:50%;flex:none}
+.led.g{background:var(--green);box-shadow:0 0 8px var(--green);animation:breath 2.6s ease-in-out infinite}
+.led.gray{background:#3d444d}
+.led.amber{background:var(--amber);box-shadow:0 0 8px var(--amber)}
+.led.red{background:var(--red);box-shadow:0 0 10px var(--red)}
+.led.blue{background:var(--blue);box-shadow:0 0 8px var(--blue);animation:breath 1.2s ease-in-out infinite}
+@keyframes breath{50%{opacity:.55}}
+
+.content{flex:1;overflow-y:auto;padding:14px 18px 18px;display:flex;flex-direction:column;gap:12px}
+.content::-webkit-scrollbar{width:0}
+.sect{font:10px var(--mono);color:var(--tx2);letter-spacing:2.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+
+.signal{border-color:#4a3b1c;background:linear-gradient(170deg,#1d1a12,#1a212b 60%)}
+.signal .srv{font:11px var(--mono);color:var(--tx2);margin-top:3px;display:flex;align-items:center;gap:7px}
+.signal .srv .src{font-size:9.5px;letter-spacing:1px;border-radius:5px;padding:3px 7px;border:1px solid #274a2d;color:var(--green)}
+.bigcode{font:38px/1 var(--mono);letter-spacing:6px;color:var(--amber);text-align:center;
+  background:#141008;border:1px dashed #4a3b1c;border-radius:10px;padding:18px 12px;margin-top:12px}
+.sigmeta{display:flex;justify-content:space-between;align-items:center;margin-top:12px}
+.sigmeta .exp{font:11px var(--mono);color:var(--tx2)}
+.sigmeta .acts{display:flex;gap:8px}
+.btn{display:inline-flex;align-items:center;gap:6px;cursor:pointer;border:1px solid var(--line);
+  background:#212936;color:var(--tx);border-radius:7px;font-size:11.5px;padding:7px 12px;user-select:none}
+.btn:active{border-color:#4a5462}
+.btn.pri{background:var(--amber);border-color:var(--amber);color:#14100a;font-weight:bold}
+.peerline{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12px;color:var(--tx2);min-height:16px}
+.peerline b{color:var(--green)}
+
+.target .row{display:flex;align-items:center;gap:10px;margin-top:11px}
+.target .ico{width:34px;height:34px;border-radius:9px;border:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;color:var(--tx2);flex:none}
+.target .ico.lan{color:var(--green);border-color:#274a2d;background:rgba(63,185,80,.07)}
+.target .tt{flex:1;min-width:0}
+.target .t1{font-size:12.5px;font-weight:600}
+.target .t1 .tag{font:9px var(--mono);letter-spacing:1px;color:var(--green);border:1px solid #274a2d;
+  border-radius:4px;padding:2px 6px;margin-left:7px;vertical-align:1px}
+.target .t2{font:10px var(--mono);color:var(--tx2);margin-top:3px}
+.target .r{margin-left:auto;font:10.5px var(--mono);color:var(--tx2)}
+.hr{height:1px;background:var(--line);margin:13px 0}
+select#audiosel{width:100%;margin-top:10px;background:#141a22;border:1px solid var(--line);border-radius:9px;
+  padding:10px 12px;color:var(--tx);font-size:12px;outline:none}
+.meter{display:flex;align-items:flex-end;gap:3px;height:34px;margin-top:12px}
+.meter i{flex:1;border-radius:2px 2px 0 0;background:linear-gradient(180deg,var(--green),#1d5c26);height:14%;
+  animation:mtr 1s ease-in-out infinite alternate}
+.meter i:nth-child(2n){animation-delay:.2s}.meter i:nth-child(3n){animation-delay:.45s}
+@keyframes mtr{to{height:var(--h)}}
+.meter.off i{animation:none;height:6%;background:#27303d}
+.audiost{font-size:11px;color:var(--tx2);margin-top:8px}
+.audiost b{color:var(--green)}
+.audiost.err b{color:var(--red)}
+
+.perm .prow{display:flex;align-items:center;justify-content:space-between;margin-top:8px}
+.perm .masked{font:13px var(--mono);letter-spacing:2px;color:var(--tx2)}
+.perm .sttag{font:9.5px var(--mono);border:1px solid var(--line);border-radius:5px;padding:3px 8px;color:var(--tx2)}
+.fold{font:10px var(--mono);color:var(--tx2);letter-spacing:1px;cursor:pointer;user-select:none}
+.fold:hover{color:var(--amber)}
+.permbody{display:none;margin-top:12px}
+.perm.open .permbody{display:block}
+.perm input{width:100%;background:#141a22;border:1px solid var(--line);border-radius:9px;padding:10px 12px;
+  color:var(--tx);font-size:12px;outline:none}
+.perm .pbtns{display:flex;gap:8px;margin-top:10px}
+
+.log{font:10.5px/1.9 var(--mono);color:var(--tx2)}
+.log .t{color:#4d5561}
+.log .ok{color:var(--green)}.log .warn{color:var(--amber)}.log .err{color:var(--red)}.log .info{color:var(--blue)}
+
+.scanbar{display:none;align-items:center;gap:10px;border:1px dashed #2b4a68;border-radius:11px;
+  padding:11px 14px;background:rgba(88,166,255,.05);font-size:12px;color:var(--tx2)}
+.scanbar .sp{width:14px;height:14px;border-radius:50%;border:2px solid rgba(88,166,255,.3);
+  border-top-color:var(--blue);animation:spin 1s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+.scanbar b{color:var(--blue)}
+@media (prefers-reduced-motion:reduce){.led.g,.meter i,.scanbar .sp{animation:none}}
+</style>
+</head>
+<body>
+
+<header class="pghead">
+  <span class="mark">remote-voice <em>·</em> MAC 交互原型 V3（可点击）</span>
+  <a href="./index.html">← 返回总览</a>
+</header>
+<div class="tip">试一下：<b>点右上状态胶囊</b> → 自动扫描 → 注册出秘密 → 3 秒后模拟手机上线桥接；
+<b>重新生成</b>换秘密；<b>复制</b>可复制；音频下拉选「外接声卡（未接入）」看音频缺失态；<b>再点状态胶囊</b>=断开。</div>
+
+<div class="stage">
+  <div class="halo"></div>
+  <div class="macwin">
+    <div class="tbar"><span class="d r"></span><span class="d y"></span><span class="d g"></span><span class="t">Remote Voice / Mac</span></div>
+
+    <div class="topbar">
+      <div class="brand">
+        <span class="bm">RV</span>
+        <div><div class="eyebrow">REMOTE VOICE</div><h1>Mac 接收端</h1></div>
+      </div>
+      <div class="stbox" id="stbox" title="点击 连接/断开"><span class="led gray" id="led"></span><span id="st">未连接 · 点击连接</span></div>
+    </div>
+
+    <div class="content">
+      <div class="scanbar" id="scanbar"><span class="sp"></span><span>正在扫描局域网 server…（<b>本地优先</b>，扫不到回落配置地址）</span></div>
+
+      <div class="card signal">
+        <div class="sect">PAIRING SIGNAL</div>
+        <div style="font-size:14.5px;font-weight:700;margin-top:4px">临时配对秘密</div>
+        <div class="srv"><span id="srvline">尚未连接</span><span class="src" id="srvsrc" style="display:none">局域网发现</span></div>
+        <div class="bigcode" id="bigcode">--------</div>
+        <div class="sigmeta">
+          <span class="exp" id="exp">有效期 --:--:--</span>
+          <span class="acts">
+            <span class="btn" id="btn-copy">复制</span>
+            <span class="btn" id="btn-regen">重新生成</span>
+          </span>
+        </div>
+        <div class="peerline" id="peerline"></div>
+      </div>
+
+      <div class="card target">
+        <div class="sect">CONNECTION &amp; OUTPUT</div>
+        <div class="row">
+          <span class="ico lan">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1" fill="currentColor" stroke="none"/></svg>
+          </span>
+          <div class="tt">
+            <div class="t1" id="srv-t1">中继服务器</div>
+            <div class="t2" id="srv-t2">连接后显示（自动发现局域网，回落配置地址）</div>
+          </div>
+          <span class="r" id="rtt"></span>
+        </div>
+        <div class="hr"></div>
+        <div class="row">
+          <span class="ico">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M17 2l-5 5-5-5"/></svg>
+          </span>
+          <div class="tt" style="flex:1">
+            <div class="t1">音频输出</div>
+            <div class="t2">会议软件麦克风选 BlackHole 2ch</div>
+          </div>
+        </div>
+        <select id="audiosel">
+          <option value="bh" selected>BlackHole 2ch（已安装）</option>
+          <option value="spk">Mac 扬声器（试听用）</option>
+          <option value="miss">外接声卡（未接入）</option>
+        </select>
+        <div class="meter" id="meter">
+          <i style="--h:52%"></i><i style="--h:78%"></i><i style="--h:34%"></i><i style="--h:88%"></i><i style="--h:60%"></i><i style="--h:95%"></i><i style="--h:42%"></i><i style="--h:70%"></i><i style="--h:30%"></i><i style="--h:64%"></i><i style="--h:80%"></i><i style="--h:38%"></i>
+        </div>
+        <div class="audiost" id="audiost">等待手机上线</div>
+      </div>
+
+      <div class="card perm" id="perm">
+        <div class="prow">
+          <div>
+            <div class="sect">LONG-LIVED ACCESS</div>
+            <div style="font-size:13px;font-weight:600;margin-top:4px">永久秘密</div>
+          </div>
+          <span class="fold" id="btn-fold">展开管理 ▾</span>
+        </div>
+        <div class="prow">
+          <span class="masked">••••-••••-••••</span>
+          <span class="sttag" id="perm-st">未设置</span>
+        </div>
+        <div class="permbody">
+          <input id="perm-in" placeholder="输入至少 12 位新秘密，留空不修改">
+          <div class="pbtns">
+            <span class="btn pri" id="btn-perm-save">保存并注册</span>
+            <span class="btn" id="btn-perm-off">停用永久秘密</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="sect" style="margin-bottom:8px">SESSION LOG</div>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const ALPHA='23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+const rand=n=>Array.from({length:n},()=>ALPHA[Math.floor(Math.random()*ALPHA.length)]).join('');
+let st='stopped',expT=0,logT=[],bridgeT=null,bridgeTick=null;
+
+function log(cls,msg){
+  logT.push({t:new Date().toTimeString().slice(0,8),cls,msg});
+  if(logT.length>6)logT.shift();
+  $('log').innerHTML=logT.map(l=>'<div><span class="t">'+l.t+'</span> <span class="'+l.cls+'">'+l.msg+'</span></div>').join('');
+}
+function fmt(sec){const h=String(Math.floor(sec/3600)).padStart(2,'0'),
+  m=String(Math.floor(sec%3600/60)).padStart(2,'0'),s=String(sec%60).padStart(2,'0');
+  return h+':'+m+':'+s;}
+function setLed(c,txt){$('led').className='led '+c;$('st').textContent=txt;}
+function audioName(){
+  const v=$('audiosel').value;
+  return v==='bh'?'BlackHole 2ch':v==='spk'?'Mac 扬声器':'外接声卡';
+}
+
+/* 状态机：stopped → scan → registered → bridged（音频缺失为桥接子态） */
+$('stbox').addEventListener('click',()=>{
+  if(st==='stopped')connect();else disconnect();
+});
+function connect(){
+  st='scan';
+  setLed('blue','扫描局域网…');
+  $('scanbar').style.display='flex';
+  $('srvline').textContent='扫描中…';
+  $('srvsrc').style.display='none';
+  $('bigcode').textContent='--------';
+  $('peerline').innerHTML='';
+  $('audiost').textContent='等待手机上线';
+  log('info','发起连接：扫描局域网（本地优先）');
+  setTimeout(()=>{
+    if(st!=='scan')return;
+    $('scanbar').style.display='none';
+    $('srvline').textContent='192.168.1.103:9432';
+    $('srvsrc').style.display='';
+    $('srv-t1').innerHTML='中继服务器<span class="tag">局域网发现</span>';
+    $('srv-t2').textContent='192.168.1.103:9432 · 回落远程 118.193.40.160:9432';
+    $('rtt').textContent='RTT 3ms';
+    const secret=rand(4)+'-'+rand(4);
+    $('bigcode').textContent=secret;
+    expT=8*3600;
+    clearInterval(window._exp);
+    window._exp=setInterval(()=>{
+      if(st==='stopped'){clearInterval(window._exp);return;}
+      expT=Math.max(0,expT-1);$('exp').textContent='有效期 '+fmt(expT);
+    },1000);
+    st='registered';setLed('amber','已注册 · 等待手机');
+    log('ok','已注册 联合测试Mac（局域网发现 192.168.1.103:9432）');
+    log('warn','等待手机上线…');
+    bridgeT=setTimeout(()=>{
+      if(st!=='registered')return;
+      st='bridged';setLed('g','已桥接');
+      $('peerline').innerHTML='<b>●</b><span>手机已连接 · <b style="color:var(--tx)">客厅 Mac</b></span><span style="margin-left:auto" class="exp">传输 00:00</span>';
+      log('ok','已桥接 · 音频写入 '+audioName());
+      bridgeTick=setInterval(()=>{
+        if(st!=='bridged'){clearInterval(bridgeTick);return;}
+        const el=$('peerline').querySelector('.exp');
+        if(el){const n=parseInt(el.textContent.slice(3))+1;
+          el.textContent='传输 '+String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');}
+      },1000);
+      applyAudio();
+    },3000);
+  },1600);
+}
+function disconnect(){
+  st='stopped';setLed('gray','未连接 · 点击连接');
+  $('scanbar').style.display='none';
+  $('bigcode').textContent='--------';
+  $('exp').textContent='有效期 --:--:--';
+  clearInterval(window._exp);clearTimeout(bridgeT);clearInterval(bridgeTick);
+  $('srvline').textContent='尚未连接';$('srvsrc').style.display='none';
+  $('srv-t1').textContent='中继服务器';
+  $('srv-t2').textContent='连接后显示（自动发现局域网，回落配置地址）';
+  $('rtt').textContent='';
+  $('peerline').innerHTML='';
+  $('meter').classList.add('off');
+  $('audiost').className='audiost';
+  $('audiost').textContent='未连接';
+  log('','已断开');
+}
+
+/* 音频输出（选择缺失设备触发错误子态） */
+function applyAudio(){
+  const miss=$('audiosel').value==='miss';
+  $('meter').classList.toggle('off',miss);
+  if(st==='bridged'){
+    setLed(miss?'amber':'g',miss?'已桥接 · 音频未启动':'已桥接');
+    $('audiost').className='audiost'+(miss?' err':'');
+    $('audiost').innerHTML=miss
+      ?'<b>音频输出不可用</b>：设备未接入，网络连接保持'
+      :'实时接收中 · <b>0 丢帧</b> · 队列 120ms';
+    log(miss?'err':'ok',miss?'音频设备不可用（网络保持）':'音频写入 '+audioName());
+  }else{
+    $('audiost').className='audiost';
+  }
+}
+$('audiosel').addEventListener('change',applyAudio);
+
+/* 秘密操作 */
+$('btn-copy').addEventListener('click',()=>{
+  const code=$('bigcode').textContent.trim();
+  if(code==='--------'){log('warn','没有可复制的秘密（未注册）');return;}
+  if(navigator.clipboard)navigator.clipboard.writeText(code).catch(()=>{});
+  const b=$('btn-copy'),old=b.textContent;b.textContent='已复制 ✓';
+  setTimeout(()=>b.textContent=old,1200);
+  log('ok','秘密已复制到剪贴板');
+});
+$('btn-regen').addEventListener('click',()=>{
+  if(st==='stopped'){log('warn','尚未连接服务器');return;}
+  const secret=rand(4)+'-'+rand(4);
+  $('bigcode').textContent=secret;
+  expT=8*3600;$('exp').textContent='有效期 '+fmt(expT);
+  log('warn','临时秘密已重新生成 '+secret);
+});
+
+/* 永久秘密折叠 */
+$('btn-fold').addEventListener('click',()=>{
+  $('perm').classList.toggle('open');
+  $('btn-fold').textContent=$('perm').classList.contains('open')?'收起 ▴':'展开管理 ▾';
+});
+$('btn-perm-save').addEventListener('click',()=>{
+  const v=$('perm-in').value.trim();
+  if(v.length<12){log('warn','永久秘密至少 12 位');return;}
+  $('perm-st').textContent='已设置';$('perm-st').style.color='var(--green)';
+  $('perm-in').value='';log('ok','永久秘密已注册');
+});
+$('btn-perm-off').addEventListener('click',()=>{
+  $('perm-st').textContent='未设置';$('perm-st').style.color='';
+  log('warn','永久秘密已停用');
+});
+
+log('','客户端就绪 · 点击右上角状态胶囊开始');
+</script>
+</body>
+</html>

@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>remote-voice · Android 交互原型 · V3</title>
+<style>
+:root{
+  --bg:#0e1116; --panel:#161b22; --card:#1a212b; --line:#2a313c;
+  --tx:#e6e9ee; --tx2:#8b949e; --amber:#f5b83d; --green:#3fb950; --red:#f85149; --blue:#58a6ff;
+  --mono:"IBM Plex Mono","JetBrains Mono",ui-monospace,SFMono-Regular,Consolas,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  min-height:100vh;background:var(--bg);
+  background-image:radial-gradient(circle,#1c232e 1px,transparent 1px);
+  background-size:24px 24px;
+  color:var(--tx);font-family:"Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+  display:flex;flex-direction:column;align-items:center;padding:26px 20px 40px;
+}
+.pghead{width:min(860px,100%);display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.pghead .mark{font:12px var(--mono);letter-spacing:2px;color:var(--tx2)}
+.pghead .mark em{font-style:normal;color:var(--amber)}
+.pghead a{font:12px var(--mono);color:var(--tx2);text-decoration:none}
+.pghead a:hover{color:var(--amber)}
+.tip{font-size:11.5px;color:var(--tx2);margin-bottom:16px}
+.tip b{color:var(--amber)}
+
+.stage{position:relative;display:flex;justify-content:center}
+.halo{position:absolute;top:50%;left:50%;width:560px;height:560px;transform:translate(-50%,-50%);
+  background:radial-gradient(closest-side,rgba(245,184,61,.07),transparent 72%);pointer-events:none}
+.phone{position:relative;width:372px;height:764px;border-radius:48px;background:#05070a;
+  border:1px solid #3a4452;
+  box-shadow:0 30px 80px rgba(0,0,0,.65),0 4px 14px rgba(0,0,0,.5),
+    inset 0 1px 1px rgba(255,255,255,.10),inset 0 -1px 1px rgba(0,0,0,.6);
+  padding:11px}
+.side{position:absolute;right:-3px;width:3px;background:#39434f;border-radius:0 3px 3px 0;box-shadow:1px 0 2px rgba(0,0,0,.5)}
+.side.pwr{top:196px;height:66px}.side.vol{top:118px;height:96px}
+.screen{position:relative;width:100%;height:100%;border-radius:38px;overflow:hidden;
+  background:linear-gradient(168deg,#12171f 0%,#0c1016 46%,#090c11 100%);
+  display:flex;flex-direction:column}
+.grain{position:absolute;inset:0;z-index:9;pointer-events:none;opacity:.05;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E")}
+.sheen{position:absolute;inset:0;z-index:8;pointer-events:none;
+  background:linear-gradient(115deg,rgba(255,255,255,.05) 0%,rgba(255,255,255,.015) 26%,transparent 42%)}
+.punch{position:absolute;top:13px;left:50%;transform:translateX(-50%);width:15px;height:15px;border-radius:50%;
+  background:radial-gradient(circle at 36% 32%,#1d2530,#000 62%);border:1px solid #161c25;z-index:7;
+  box-shadow:inset 0 0 3px rgba(88,166,255,.25)}
+.sbar{flex:none;height:44px;display:flex;align-items:center;justify-content:space-between;padding:6px 26px 0}
+.sbar .time{font-size:13.5px;font-weight:600;letter-spacing:.4px}
+.sicons{display:flex;align-items:center;gap:7px}
+.batt{position:relative;width:24px;height:12px;border:1px solid rgba(230,233,238,.55);border-radius:3.5px;padding:1.5px}
+.batt i{display:block;height:100%;width:68%;background:var(--tx);border-radius:1.5px}
+.batt::after{content:"";position:absolute;right:-3.5px;top:3px;width:2px;height:4.5px;border-radius:0 2px 2px 0;background:rgba(230,233,238,.55)}
+
+/* 视图容器 */
+.view{position:absolute;inset:0;display:none;flex-direction:column;z-index:5}
+.view.on{display:flex;animation:vin .22s ease}
+@keyframes vin{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:none}}
+
+/* ===== 主界面 ===== */
+.brand{flex:none;display:flex;align-items:center;justify-content:space-between;margin:10px 22px 0}
+.brand .lockup{display:flex;align-items:center;gap:10px}
+.brand .bm{width:34px;height:34px;border-radius:9px;background:linear-gradient(150deg,#f5b83d,#d99a26);
+  color:#14100a;font:800 13px var(--mono);display:flex;align-items:center;justify-content:center}
+.brand .bn{font-size:16px;font-weight:700;letter-spacing:.5px}
+.brand .bn small{display:block;font:9px var(--mono);letter-spacing:2.5px;color:var(--tx2);margin-top:2px}
+.gear{width:38px;height:38px;border-radius:10px;border:1px solid var(--line);background:rgba(20,26,35,.82);
+  display:flex;align-items:center;justify-content:center;color:var(--tx2);cursor:pointer}
+.gear:active{color:var(--amber)}
+.conn{flex:none;margin:14px 22px 0;display:flex;align-items:center;gap:9px;
+  background:rgba(20,26,35,.82);border:1px solid var(--line);border-radius:999px;
+  padding:10px 12px 10px 17px;font-size:13.5px;cursor:pointer;user-select:none}
+.conn:active{border-color:#3d4654}
+.conn .led{width:9px;height:9px;border-radius:50%;flex:none}
+.led.g{background:var(--green);box-shadow:0 0 8px var(--green);animation:breath 2.6s ease-in-out infinite}
+.led.gray{background:#3d444d}
+.led.red{background:var(--red);box-shadow:0 0 10px var(--red)}
+.led.amber{background:var(--amber);box-shadow:0 0 8px var(--amber)}
+.led.blue{background:var(--blue);box-shadow:0 0 8px var(--blue);animation:breath 1.2s ease-in-out infinite}
+@keyframes breath{50%{opacity:.55}}
+.conn .txt{flex:1;min-width:0}
+.conn .st{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.conn .sub{font:10.5px var(--mono);color:var(--tx2);margin-top:2px}
+.src{flex:none;font:10px var(--mono);letter-spacing:1px;border-radius:5px;padding:4px 8px;border:1px solid}
+.src.lan{color:var(--green);border-color:#274a2d;background:rgba(63,185,80,.08)}
+.src.err{color:var(--red);border-color:#5a2b29;background:rgba(248,81,73,.08)}
+
+.center{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;position:relative}
+.radar{position:relative;width:190px;height:190px;border-radius:50%;display:none;
+  background:radial-gradient(circle,rgba(88,166,255,.05),transparent 70%)}
+.radar::before,.radar::after{content:"";position:absolute;border-radius:50%;border:1px solid rgba(88,166,255,.18)}
+.radar::before{inset:0}.radar::after{inset:34px;border-color:rgba(88,166,255,.12)}
+.radar .sweep{position:absolute;inset:0;border-radius:50%;
+  background:conic-gradient(from 0deg,rgba(88,166,255,.35),transparent 70deg,transparent);
+  animation:spin 1.6s linear infinite}
+.radar .dot{position:absolute;width:10px;height:10px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 10px var(--green);animation:blink 1.6s ease-in-out infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes blink{0%,55%{opacity:0}65%,80%{opacity:1}90%,100%{opacity:0}}
+.rlabel{font:11px var(--mono);letter-spacing:2px;color:var(--tx2);display:none}
+.wave{display:flex;align-items:center;gap:7px;height:96px;display:none}
+.wave i{width:4px;height:4px;border-radius:2px;background:#27303d}
+.wave.live i{background:var(--green);animation:wv ease-in-out infinite alternate;box-shadow:0 0 6px rgba(63,185,80,.45)}
+@keyframes wv{from{height:4px}to{height:var(--h)}}
+.tmr{font:14px var(--mono);letter-spacing:3px;color:var(--green);display:none}
+.frames{font:10.5px var(--mono);color:var(--tx2);letter-spacing:1px;display:none}
+.bigst{display:none;text-align:center}
+.bigst .t1{font-size:22px;font-weight:700;letter-spacing:2px}
+.bigst .t2{font:11px var(--mono);letter-spacing:2px;color:var(--tx2);margin-top:8px;line-height:1.9}
+.errpanel{display:none;width:280px;background:rgba(30,20,22,.9);border:1px solid #5a2b29;border-radius:14px;padding:18px;text-align:center}
+.errpanel .et{color:var(--red);font-weight:700;font-size:14px}
+.errpanel .ed{font-size:12px;color:var(--tx2);line-height:1.7;margin-top:8px}
+.errpanel .eh{display:inline-flex;margin-top:14px;font:12px var(--mono);color:var(--tx);
+  border:1px solid var(--line);border-radius:7px;padding:8px 14px;cursor:pointer;background:#212936}
+.errpanel .eh:active{color:var(--amber)}
+
+.devices{flex:none;display:flex;gap:8px;align-items:center;padding:0 22px 6px;overflow-x:auto}
+.devices::-webkit-scrollbar{width:0}
+.dchip{flex:none;display:flex;align-items:center;gap:7px;border-radius:999px;padding:8px 14px;
+  border:1px solid var(--line);background:rgba(20,26,35,.82);font-size:12.5px;color:var(--tx2);cursor:pointer}
+.dchip.on{border-color:#274a2d;color:var(--tx);background:rgba(63,185,80,.07)}
+.dchip .led{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);display:none}
+.dchip.on .led{display:block}
+.dchip.add{border-style:dashed}
+.pttdock{flex:none;display:flex;justify-content:center;padding-bottom:24px}
+.ptt{position:relative;width:172px;height:172px;border-radius:50%;flex:none;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;
+  cursor:pointer;user-select:none;-webkit-user-select:none;touch-action:none;
+  background:radial-gradient(circle at 50% 32%,#28313f,#151b24 70%);
+  border:1px solid #3d475666;color:var(--tx);
+  box-shadow:0 16px 38px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.05);
+  transition:transform .08s,box-shadow .18s,border-color .18s}
+.ptt::before{content:"";position:absolute;inset:15px;border-radius:50%;border:1px solid rgba(255,255,255,.055);pointer-events:none}
+.ptt .zh{font-size:19px;font-weight:bold;letter-spacing:5px;text-indent:5px}
+.ptt .en{font:9px var(--mono);letter-spacing:3px;color:var(--tx2)}
+.ptt.hold{transform:scale(.958);border-color:var(--green);
+  box-shadow:0 0 0 9px rgba(63,185,80,.10),0 0 64px rgba(63,185,80,.30),0 16px 38px rgba(0,0,0,.5)}
+.ptt.hold .zh,.ptt.hold .en{color:var(--green)}
+.ring{position:absolute;inset:-10px;border-radius:50%;border:1.5px solid rgba(63,185,80,.55);opacity:0;pointer-events:none}
+.ptt.hold .ring{animation:ripple 1.5s ease-out infinite}
+.ptt.hold .ring.r2{animation-delay:.75s}
+@keyframes ripple{0%{transform:scale(.94);opacity:.85}100%{transform:scale(1.34);opacity:0}}
+.ptt.dis{opacity:.55}
+.gest{flex:none;display:flex;justify-content:center;padding:0 0 9px}
+.gest i{width:108px;height:4px;border-radius:2px;background:rgba(230,233,238,.32)}
+
+/* ===== 设置视图 ===== */
+.nav{flex:none;display:flex;align-items:center;gap:12px;margin:10px 22px 0}
+.nav .back{width:36px;height:36px;border-radius:10px;border:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;color:var(--tx2);cursor:pointer}
+.nav .tt{font-size:16px;font-weight:700}
+.scroll{flex:1;overflow-y:auto;padding:14px 18px 18px;display:flex;flex-direction:column;gap:12px}
+.scroll::-webkit-scrollbar{width:0}
+.card{background:rgba(20,26,35,.85);border:1px solid var(--line);border-radius:16px;padding:16px}
+.card .sect{font:10px var(--mono);letter-spacing:2.5px;color:var(--tx2)}
+.card h3{font-size:14.5px;margin-top:4px}
+.hr{height:1px;background:var(--line);margin:13px 0}
+.autodis{display:flex;align-items:center;gap:12px;border:1px dashed #2b4a68;border-radius:12px;padding:12px;margin-top:12px;
+  background:rgba(88,166,255,.04)}
+.autodis .aring{position:relative;width:44px;height:44px;border-radius:50%;flex:none;
+  border:1px solid rgba(88,166,255,.25);display:flex;align-items:center;justify-content:center}
+.autodis .aring::before{content:"";position:absolute;inset:8px;border-radius:50%;border:1px solid rgba(88,166,255,.18)}
+.autodis .aring i{width:8px;height:8px;border-radius:50%;background:var(--blue);box-shadow:0 0 8px var(--blue);
+  animation:blink 1.4s ease-in-out infinite}
+.autodis.res{border-color:#274a2d;background:rgba(63,185,80,.05)}
+.autodis.res .aring{border-color:rgba(63,185,80,.3)}
+.autodis.res .aring i{background:var(--green);box-shadow:0 0 8px var(--green);animation:none}
+.autodis .atx{flex:1;min-width:0}
+.autodis .t1{font-size:12.5px;font-weight:600}
+.autodis .t2{font-size:10.5px;color:var(--tx2);margin-top:3px;line-height:1.6}
+.foundrow{display:flex;align-items:center;gap:9px;margin-top:10px;background:#141a22;border:1px solid #274a2d;
+  border-radius:10px;padding:10px 12px;cursor:pointer}
+.foundrow:active{background:#1a212b}
+.foundrow .led{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}
+.foundrow .fn{font-size:12.5px;font-weight:600}
+.foundrow .fa{font:10px var(--mono);color:var(--tx2);margin-top:2px}
+.foundrow .pick{margin-left:auto;font:10px var(--mono);color:var(--green);border:1px solid #274a2d;border-radius:6px;padding:4px 8px}
+.rescan{font:10px var(--mono);color:var(--blue);cursor:pointer;letter-spacing:1px}
+label.fl{display:block;font-size:11px;color:var(--tx2);margin:13px 0 6px}
+label.fl b{color:var(--tx);font-weight:600}
+.field{display:flex;align-items:center;gap:8px;background:#141a22;border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+.field input{flex:1;background:transparent;border:none;outline:none;color:var(--tx);font-size:13px;min-width:0}
+.field input::placeholder{color:#4d5561}
+.field .tag{flex:none;font:9.5px var(--mono);letter-spacing:1px;border-radius:5px;padding:3px 7px;border:1px solid}
+.field .tag.lan{color:var(--green);border-color:#274a2d}
+.field .tag.wan{color:var(--blue);border-color:#2b4a68}
+.field .clr{color:var(--tx2);cursor:pointer;font-size:13px}
+.hint{font-size:10.5px;color:var(--tx2);line-height:1.7;margin-top:7px}
+.hint b{color:var(--amber)}
+.row{display:flex;align-items:center;gap:10px;margin-top:12px}
+.row .rt{flex:1;font-size:12.5px}
+.row .rt small{display:block;font-size:10px;color:var(--tx2);margin-top:2px}
+.tgl{width:42px;height:24px;border-radius:12px;background:#2a313c;position:relative;flex:none;cursor:pointer;transition:.2s}
+.tgl::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#8b949e;transition:.2s}
+.tgl.on{background:rgba(63,185,80,.25)}
+.tgl.on::after{left:21px;background:var(--green);box-shadow:0 0 8px rgba(63,185,80,.5)}
+.dev{display:flex;align-items:center;gap:10px;margin-top:11px;background:#141a22;border:1px solid var(--line);border-radius:11px;padding:11px 13px;cursor:pointer}
+.dev.on{border-color:#274a2d}
+.dev .dt{flex:1;min-width:0}
+.dev .dn{font-size:13px;font-weight:600}
+.dev .ds{font:10px var(--mono);color:var(--tx2);margin-top:3px;letter-spacing:1px}
+.dev .act{font:9px var(--mono);color:var(--green);border:1px solid #274a2d;border-radius:5px;padding:3px 7px}
+.adddev{width:100%;margin-top:11px;border:1px dashed var(--line);background:transparent;color:var(--tx2);
+  border-radius:11px;padding:11px;font-size:12px;cursor:pointer}
+.savebar{flex:none;padding:12px 18px 20px}
+.save{width:100%;border:none;border-radius:13px;padding:14px;background:linear-gradient(150deg,#f5b83d,#d99a26);
+  color:#14100a;font-size:14px;font-weight:700;letter-spacing:2px;cursor:pointer}
+
+/* 弹层与吐司 */
+.mask{position:absolute;inset:0;background:rgba(4,6,9,.66);z-index:20;display:none;align-items:flex-end;justify-content:center}
+.mask.on{display:flex}
+.sheet{width:100%;background:#1a212b;border-radius:22px 22px 0 0;padding:20px 20px 26px;animation:up .22s ease}
+@keyframes up{from{transform:translateY(30px);opacity:.4}to{transform:none;opacity:1}}
+.sheet .stt{font-size:15px;font-weight:700;margin-bottom:14px}
+.sheet input{width:100%;background:#141a22;border:1px solid var(--line);border-radius:10px;padding:12px 13px;
+  color:var(--tx);font-size:13px;outline:none;margin-bottom:10px}
+.sheet input:focus{border-color:#3d4654}
+.sheet .btns{display:flex;gap:10px;margin-top:6px}
+.sheet .sbtn{flex:1;border:none;border-radius:11px;padding:12px;font-size:13px;cursor:pointer}
+.sheet .sbtn.pri{background:linear-gradient(150deg,#f5b83d,#d99a26);color:#14100a;font-weight:700}
+.sheet .sbtn.ghost{background:#212936;color:var(--tx2);border:1px solid var(--line)}
+.sheet .sbtn.del{background:transparent;border:1px solid #5a2b29;color:var(--red)}
+.toast{position:absolute;left:50%;bottom:120px;transform:translateX(-50%) translateY(8px);z-index:30;
+  background:rgba(10,13,17,.92);border:1px solid var(--line);border-radius:999px;padding:9px 18px;
+  font-size:12px;opacity:0;pointer-events:none;transition:.25s;white-space:nowrap}
+.toast.on{opacity:1;transform:translateX(-50%)}
+@media (prefers-reduced-motion:reduce){.wave.live i,.ptt.hold .ring,.led.g,.led.blue,.radar .sweep{animation:none}}
+</style>
+</head>
+<body>
+
+<header class="pghead">
+  <span class="mark">remote-voice <em>·</em> ANDROID 交互原型 V3（可点击）</span>
+  <a href="./index.html">← 返回总览</a>
+</header>
+<div class="tip">试一下：<b>点状态胶囊</b>走完「扫描→连接→传输」；<b>按住说话</b>；<b>点右上齿轮</b>进设置（扫描选用/开关/设备增删）；<b>点设备芯片</b>切换激活设备。</div>
+
+<div class="stage">
+  <div class="halo"></div>
+  <div class="phone">
+    <span class="side vol"></span><span class="side pwr"></span>
+    <div class="screen">
+      <div class="grain"></div><div class="sheen"></div>
+      <div class="punch"></div>
+      <div class="sbar">
+        <span class="time">9:41</span>
+        <span class="sicons">
+          <svg width="17" height="12" viewBox="0 0 17 12" fill="#e6e9ee"><rect x="0" y="7.5" width="3" height="4" rx="1"/><rect x="4.5" y="5.5" width="3" height="6" rx="1"/><rect x="9" y="3" width="3" height="8.5" rx="1"/><rect x="13.5" y="0.5" width="3" height="11" rx="1"/></svg>
+          <svg width="16" height="12" viewBox="0 0 16 12" fill="none" stroke="#e6e9ee" stroke-width="1.6" stroke-linecap="round"><path d="M1.5 4.2a9.4 9.4 0 0 1 13 0"/><path d="M4 7a5.8 5.8 0 0 1 8 0"/><circle cx="8" cy="10" r="1.3" fill="#e6e9ee" stroke="none"/></svg>
+          <span class="batt"><i></i></span>
+        </span>
+      </div>
+
+      <!-- ================= 主界面视图 ================= -->
+      <div class="view on" id="view-home">
+        <div class="brand">
+          <div class="lockup">
+            <span class="bm">RV</span>
+            <div class="bn">远程麦克风<small>REMOTE MIC</small></div>
+          </div>
+          <span class="gear" id="btn-gear" title="设置">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </span>
+        </div>
+
+        <div class="conn" id="conn">
+          <span class="led gray" id="led"></span>
+          <div class="txt">
+            <div class="st" id="st">未启动 · 点按连接</div>
+            <div class="sub" id="sub">打开 App 将自动连接附近服务器</div>
+          </div>
+          <span class="src" id="src" style="display:none"></span>
+        </div>
+
+        <div class="center">
+          <div class="radar" id="radar"><span class="sweep"></span><span class="dot" style="top:44px;right:52px"></span><span class="dot" style="bottom:38px;left:66px;animation-delay:.5s"></span></div>
+          <div class="rlabel" id="rlabel">SCANNING LAN</div>
+          <div class="bigst" id="bigst"><div class="t1" id="bt1">准备就绪</div><div class="t2" id="bt2">添加 Mac 的配对秘密后<br>即自动连接附近服务器</div></div>
+          <div class="wave" id="wave">
+            <i style="--h:22px"></i><i style="--h:46px;animation-delay:.1s"></i><i style="--h:72px;animation-delay:.2s"></i><i style="--h:96px;animation-delay:.3s"></i><i style="--h:60px;animation-delay:.4s"></i><i style="--h:84px;animation-delay:.5s"></i><i style="--h:38px;animation-delay:.6s"></i><i style="--h:64px;animation-delay:.7s"></i><i style="--h:90px;animation-delay:.8s"></i><i style="--h:48px;animation-delay:.9s"></i>
+          </div>
+          <div class="tmr" id="tmr">00:00</div>
+          <div class="frames" id="frames">已发送 0 帧 · 48kHz</div>
+          <div class="errpanel" id="errpanel">
+            <div class="et">连接失败</div>
+            <div class="ed">局域网未发现服务器，远程服务器也未响应。<br>检查网络后重试。</div>
+            <span class="eh" id="btn-retry">重试连接</span>
+          </div>
+        </div>
+
+        <div class="devices" id="devices"></div>
+
+        <div class="pttdock"><div class="ptt" id="ptt">
+          <span class="ring"></span><span class="ring r2"></span>
+          <div class="zh">按住 说话</div><div class="en">HOLD TO TALK</div>
+        </div></div>
+        <div class="gest"><i></i></div>
+      </div>
+
+      <!-- ================= 设置视图 ================= -->
+      <div class="view" id="view-settings">
+        <div class="nav">
+          <span class="back" id="btn-back"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg></span>
+          <span class="tt">设置</span>
+        </div>
+        <div class="scroll">
+          <div class="card">
+            <div class="sect">SERVER</div>
+            <h3>服务器（本地优先 · 远程兜底）</h3>
+            <div class="autodis" id="autodis">
+              <span class="aring"><i></i></span>
+              <div class="atx">
+                <div class="t1" id="ad-t1">正在扫描局域网…</div>
+                <div class="t2" id="ad-t2">同一 Wi-Fi 下的 server 会自动出现</div>
+              </div>
+              <span class="rescan" id="btn-rescan">重新扫描</span>
+            </div>
+            <div id="found-box"></div>
+            <label class="fl"><b>本地服务器</b>（局域网，扫描或手动填写）</label>
+            <div class="field">
+              <input id="in-local" value="192.168.1.103:9432" spellcheck="false">
+              <span class="tag lan">LAN</span>
+              <span class="clr" id="clr-local">✕</span>
+            </div>
+            <label class="fl"><b>远程服务器</b>（公网 IP:端口）</label>
+            <div class="field">
+              <input id="in-remote" value="118.193.40.160:9432" spellcheck="false">
+              <span class="tag wan">WAN</span>
+            </div>
+            <div class="hint">连接顺序：<b>本地 → 远程</b>。每次发起连接都会自动扫描局域网，扫到即优先使用。</div>
+          </div>
+
+          <div class="card">
+            <div class="sect">DEVICES</div>
+            <h3>我的设备（秘密保存在本机）</h3>
+            <div id="dev-list"></div>
+            <button class="adddev" id="btn-adddev">＋ 添加设备（粘贴 Mac 端秘密）</button>
+          </div>
+
+          <div class="card">
+            <div class="sect">ADVANCED</div>
+            <h3>采音与信任</h3>
+            <div class="row">
+              <span class="rt">免提常开<small>开启后不需按住即持续传输（会议场景）</small></span>
+              <span class="tgl on" id="tg-hf"></span>
+            </div>
+            <div class="row">
+              <span class="rt">回声消除<small>Mac 外放时建议开启</small></span>
+              <span class="tgl" id="tg-aec"></span>
+            </div>
+            <div class="hr"></div>
+            <div class="row">
+              <span class="rt">清除服务器信任<small>证书更换等场景；清除后首次连接重新建立</small></span>
+              <span class="tgl" id="tg-trust"></span>
+            </div>
+          </div>
+        </div>
+        <div class="savebar"><button class="save" id="btn-save">保存并返回</button></div>
+      </div>
+
+      <!-- 编辑/添加设备弹层 -->
+      <div class="mask" id="mask">
+        <div class="sheet">
+          <div class="stt" id="sheet-title">添加设备</div>
+          <input id="in-name" placeholder="设备名（选填，连接后自动补全）">
+          <input id="in-secret" placeholder="Mac 端显示的临时/永久秘密">
+          <div class="btns">
+            <span class="sbtn del" id="btn-del" style="display:none">删除</span>
+            <span class="sbtn ghost" id="btn-cancel">取消</span>
+            <span class="sbtn pri" id="btn-ok">保存</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="toast" id="toast"></div>
+    </div>
+  </div>
+</div>
+
+<p class="tip" style="margin-top:18px">状态机：<b>点胶囊 → 扫描(雷达) → 发现→已连中继 → Mac 上线→传输中</b>；免提关时仅按住 PTT 传输；再点胶囊 = 停止。</p>
+
+<script>
+/* ============ 公共 ============ */
+const $=id=>document.getElementById(id);
+let toastT;
+function toast(msg){const t=$('toast');t.textContent=msg;t.classList.add('on');
+  clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('on'),1800);}
+function showView(v){document.querySelectorAll('.view').forEach(x=>x.classList.remove('on'));
+  $('view-'+v).classList.add('on');}
+
+/* ============ 数据 ============ */
+const devices=[
+  {name:'客厅 Mac',secret:'2TWU-KF8U',active:true},
+  {name:'书房 Mac',secret:'9QQA-M3RT',active:false},
+];
+const active=()=>devices.find(d=>d.active);
+
+/* ============ 主界面状态机 ============ */
+let st='idle',timer=null,sec=0,frames=0,tick=null;
+const led=$('led'),stEl=$('st'),subEl=$('sub'),srcEl=$('src');
+
+function render(){
+  $('radar').style.display=st==='scan'?'block':'none';
+  $('rlabel').style.display=st==='scan'?'block':'none';
+  $('wave').style.display=(st==='live'||st==='hold')?'flex':'none';
+  $('wave').classList.toggle('live',st==='live'||st==='hold');
+  $('tmr').style.display=(st==='live'||st==='hold')?'block':'none';
+  $('frames').style.display=(st==='live'||st==='hold')?'block':'none';
+  $('errpanel').style.display=st==='err'?'block':'none';
+  const big=st==='idle'||st==='wait';
+  $('bigst').style.display=big?'block':'none';
+  $('bt1').textContent=st==='idle'?'准备就绪':'已连中继';
+  $('bt2').innerHTML=st==='idle'?'添加 Mac 的配对秘密后<br>即自动连接附近服务器'
+    :'等待 Mac 上线<br>在 Mac 端确认配对秘密';
+  $('ptt').classList.toggle('dis',!(st==='live'||st==='hold'));
+  const map={
+    idle:['led gray','未启动 · 点按连接','打开 App 将自动连接附近服务器',''],
+    scan:['led blue','扫描局域网服务器…','最多约 2 秒，扫到自动连接',['LAN','lan']],
+    wait:['led amber','已连中继 · 等待 Mac','192.168.1.103:9432',['局域网','lan']],
+    live:['led g','传输中 · '+(active()?active().name:''),'',  ['局域网','lan']],
+    hold:['led g','按住传输 · '+(active()?active().name:''),'',['局域网','lan']],
+    err:['led red','连接失败 · 点按重试','局域网与远程均未响应',['远程','err']],
+  }[st];
+  led.className='led '+map[0];stEl.textContent=map[1];subEl.textContent=map[2];
+  if(map[3]){srcEl.style.display='';srcEl.textContent=map[3][0];srcEl.className='src '+map[3][1];}
+  else srcEl.style.display='none';
+}
+function setStates(s){st=s;render();}
+
+function startConnect(){
+  if(timer)clearInterval(timer);
+  setStates('scan');
+  setTimeout(()=>{                    // 扫描完成
+    if(st!=='scan')return;
+    setStates('wait');toast('发现本地服务器 192.168.1.103:9432');
+    setTimeout(()=>{                  // Mac 上线
+      if(st!=='wait')return;
+      setStates('live');sec=0;frames=0;
+      timer=setInterval(()=>{
+        sec++;if(st==='live'||st==='hold')frames+=10;
+        const m=String(Math.floor(sec/60)).padStart(2,'0'),s=String(sec%60).padStart(2,'0');
+        $('tmr').textContent=m+':'+s;
+        $('frames').textContent='已发送 '+frames+' 帧 · 48kHz';
+      },200);
+    },2200);
+  },1800);
+}
+function stopAll(){if(timer)clearInterval(timer);setStates('idle');}
+$('conn').addEventListener('click',()=>{
+  if(st==='idle'||st==='err')startConnect();
+  else if(st==='live'||st==='hold'||st==='wait'){stopAll();toast('已停止 · 点按状态胶囊恢复');}
+});
+$('btn-retry').addEventListener('click',e=>{e.stopPropagation();startConnect();});
+
+/* PTT */
+const ptt=$('ptt');
+ptt.addEventListener('pointerdown',()=>{
+  if(st!=='live')return;
+  ptt.classList.add('hold');setStates('hold');
+});
+addEventListener('pointerup',()=>{
+  if(st==='hold'){ptt.classList.remove('hold');setStates('live');}
+});
+
+/* 设备芯片 */
+function renderDevices(){
+  const box=$('devices');box.innerHTML='';
+  devices.forEach((d,i)=>{
+    const c=document.createElement('span');
+    c.className='dchip'+(d.active?' on':'');
+    c.innerHTML='<span class="led"></span>'+d.name;
+    c.addEventListener('click',()=>{
+      devices.forEach(x=>x.active=false);d.active=true;
+      renderDevices();toast('已切换到 '+d.name);
+      if(st==='live'||st==='hold')render();
+    });
+    box.appendChild(c);
+  });
+  const add=document.createElement('span');
+  add.className='dchip add';add.textContent='＋ 添加';
+  add.addEventListener('click',()=>openSheet(null));
+  box.appendChild(add);
+}
+renderDevices();
+
+/* ============ 设置视图 ============ */
+$('btn-gear').addEventListener('click',()=>{showView('settings');runScanDemo();});
+$('btn-back').addEventListener('click',()=>showView('home'));
+$('btn-save').addEventListener('click',()=>{showView('home');toast('已保存');});
+
+function runScanDemo(){
+  const box=$('autodis'),fb=$('found-box');
+  box.classList.remove('res');
+  $('ad-t1').textContent='正在扫描局域网…';
+  $('ad-t2').textContent='同一 Wi-Fi 下的 server 会自动出现';
+  fb.innerHTML='';
+  setTimeout(()=>{
+    if(!$('view-settings').classList.contains('on'))return;
+    box.classList.add('res');
+    $('ad-t1').textContent='发现 1 台局域网服务器';
+    $('ad-t2').textContent='点选后自动设为本地服务器，主界面立即优先连接';
+    const row=document.createElement('div');row.className='foundrow';
+    row.innerHTML='<span class="led"></span><div><div class="fn">联合测试服务器</div><div class="fa">192.168.1.103:9432</div></div><span class="pick">选用</span>';
+    row.addEventListener('click',()=>{
+      $('in-local').value='192.168.1.103:9432';
+      toast('本地服务器已设为 192.168.1.103:9432');
+    });
+    fb.appendChild(row);
+  },1400);
+}
+$('btn-rescan').addEventListener('click',runScanDemo);
+$('clr-local').addEventListener('click',()=>{$('in-local').value='';toast('已清除本地地址，将只连远程');});
+
+['tg-hf','tg-aec','tg-trust'].forEach(id=>{
+  $(id).addEventListener('click',()=>{
+    $(id).classList.toggle('on');
+    if(id==='tg-trust'&&$(id).classList.contains('on'))
+      setTimeout(()=>{$(id).classList.remove('on');toast('已清除信任，下次连接重新建立');},600);
+  });
+});
+
+/* 设备管理（列表 + 弹层） */
+let editIdx=null;
+function renderDevList(){
+  const box=$('dev-list');box.innerHTML='';
+  devices.forEach((d,i)=>{
+    const el=document.createElement('div');
+    el.className='dev'+(d.active?' on':'');
+    el.innerHTML='<div class="dt"><div class="dn">'+(d.name||'未命名')+'</div>'+
+      '<div class="ds">秘密 ••••-•••• · 点击编辑</div></div>'+(d.active?'<span class="act">当前</span>':'');
+    el.addEventListener('click',()=>openSheet(i));
+    box.appendChild(el);
+  });
+}
+function openSheet(i){
+  editIdx=i;
+  $('sheet-title').textContent=i===null?'添加设备':'编辑设备';
+  $('in-name').value=i===null?'':devices[i].name;
+  $('in-secret').value=i===null?'':devices[i].secret;
+  $('btn-del').style.display=i===null?'none':'';
+  $('mask').classList.add('on');
+}
+$('btn-adddev').addEventListener('click',()=>openSheet(null));
+$('btn-cancel').addEventListener('click',()=>$('mask').classList.remove('on'));
+$('btn-del').addEventListener('click',()=>{
+  const wasActive=devices[editIdx].active;
+  devices.splice(editIdx,1);
+  if(wasActive&&devices.length)devices[0].active=true;
+  $('mask').classList.remove('on');renderDevList();renderDevices();toast('已删除');
+});
+$('btn-ok').addEventListener('click',()=>{
+  const name=$('in-name').value.trim(),secret=$('in-secret').value.trim();
+  if(!secret){toast('秘密不能为空');return;}
+  if(editIdx===null){
+    devices.forEach(x=>x.active=false);
+    devices.push({name,secret,active:true});
+    toast('已添加并激活');renderDevices();
+  }else{
+    devices[editIdx].name=name;devices[editIdx].secret=secret;
+    toast('已保存');
+  }
+  $('mask').classList.remove('on');renderDevList();render();
+});
+renderDevList();
+render();
+</script>
+</body>
+</html>
