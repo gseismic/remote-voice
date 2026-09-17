@@ -252,6 +252,24 @@ label.fl b{color:var(--tx);font-weight:600}
   background:rgba(10,13,17,.92);border:1px solid var(--line);border-radius:999px;padding:9px 18px;
   font-size:12px;opacity:0;pointer-events:none;transition:.25s;white-space:nowrap}
 .toast.on{opacity:1;transform:translateX(-50%)}
+/* ===== 服务器选择列表（蓝牙式：在线可选 / 历史离线灰显标注） ===== */
+.slbl{font-size:10.5px;color:var(--tx2);margin:12px 0 6px}
+.slbl b{color:var(--tx)}
+.slist{border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.srow{display:flex;align-items:center;gap:10px;padding:11px 13px;background:#141a22;cursor:pointer;border-bottom:1px solid #20262f}
+.srow:last-child{border-bottom:none}
+.srow:active{background:#1a212b}
+.srow .led{width:8px;height:8px;border-radius:50%;flex:none}
+.srow .led.g{background:var(--green);box-shadow:0 0 8px var(--green)}
+.srow .led.gray{background:#3d444d}
+.srow .st{flex:1;min-width:0}
+.srow .sn{font-size:12.5px;font-weight:600}
+.srow .sa{font:9.5px var(--mono);color:var(--tx2);margin-top:2px}
+.srow .pick{font:10px var(--mono);color:var(--green);border:1px solid #274a2d;border-radius:6px;padding:4px 9px;flex:none}
+.srow .offtag{font:9px var(--mono);color:var(--tx2);border:1px solid var(--line);border-radius:5px;padding:3px 7px;flex:none}
+.srow.off{opacity:.55;cursor:not-allowed}
+.srow.sel{background:rgba(63,185,80,.06)}
+.srow.sel .sn::after{content:" ✓";color:var(--green)}
 @media (prefers-reduced-motion:reduce){.wave.live i,.ptt.hold .ring,.led.g,.led.blue,.radar .sweep{animation:none}}
 </style>
 </head>
@@ -360,8 +378,11 @@ label.fl b{color:var(--tx);font-weight:600}
                 </div>
                 <span class="rescan" id="btn-rescan">重新扫描</span>
               </div>
-              <div id="found-box"></div>
-              <label class="fl"><b>本地服务器地址</b>（扫描或手动填写）</label>
+              <div class="slbl"><b>可用服务器</b> · 点选即为连接目标</div>
+              <div class="slist" id="srv-list"></div>
+              <div class="slbl">历史连接 · 不在线</div>
+              <div class="slist" id="srv-hist"></div>
+              <label class="fl"><b>本地服务器地址</b>（当前选中，可手动改）</label>
               <div class="field">
                 <input id="in-local" value="192.168.1.103:9432" spellcheck="false">
                 <span class="tag lan">LAN</span>
@@ -421,6 +442,14 @@ label.fl b{color:var(--tx);font-weight:600}
             <span class="sbtn ghost" id="btn-cancel">取消</span>
             <span class="sbtn pri" id="btn-ok">保存</span>
           </div>
+        </div>
+      </div>
+
+      <div class="mask" id="pickmask">
+        <div class="sheet">
+          <div class="stt">发现多台局域网服务器，选择一台</div>
+          <div id="pick-list"></div>
+          <div class="btns"><span class="sbtn ghost" id="btn-pick-cancel">取消连接</span></div>
         </div>
       </div>
 
@@ -520,24 +549,46 @@ function setStates(s){st=s;render();}
 
 function startConnect(){
   if(timer)clearInterval(timer);
-  setStates('scan');
-  const needScan=line==='lan';           // 扫描只属于本地组
-  setTimeout(()=>{
-    if(st!=='scan')return;
-    setStates('wait');
-    if(needScan)toast('发现本地服务器 '+lanAddr());
+  if(line==='lan'){
+    // 本地链路：先扫描，多台则弹列表让用户选（蓝牙式）
+    setStates('scan');
     setTimeout(()=>{
-      if(st!=='wait')return;
-      setStates('live');sec=0;frames=0;
-      timer=setInterval(()=>{
-        sec++;if(st==='live'||st==='hold')frames+=10;
-        const m=String(Math.floor(sec/60)).padStart(2,'0'),s=String(sec%60).padStart(2,'0');
-        $('tmr').textContent=m+':'+s;
-        $('frames').textContent='已发送 '+frames+' 帧 · 48kHz';
-      },200);
-    },needScan?2200:1400);
-  },needScan?1800:1200);
+      if(st!=='scan')return;
+      if(discovered.length===0){setStates('err');return;}
+      const auto=discovered.find(d=>d.addr===selSrv);
+      if(discovered.length===1||auto){proceed(auto?auto.addr:discovered[0].addr);return;}
+      showPicker(discovered,target=>{if(!target){stopAll();return;}proceed(target);});
+    },1600);
+  }else{
+    // 远程链路：直连，永不扫描
+    setStates('scan');
+    setTimeout(()=>{if(st==='scan')proceed(wanAddr());},1200);
+  }
 }
+function proceed(target){
+  setStates('wait');
+  setTimeout(()=>{
+    if(st!=='wait')return;
+    setStates('live');sec=0;frames=0;
+    timer=setInterval(()=>{
+      sec++;if(st==='live'||st==='hold')frames+=10;
+      const m=String(Math.floor(sec/60)).padStart(2,'0'),s=String(sec%60).padStart(2,'0');
+      $('tmr').textContent=m+':'+s;
+      $('frames').textContent='已发送 '+frames+' 帧 · 48kHz';
+    },200);
+  },line==='lan'?1600:1400);
+}
+function showPicker(items,cb){
+  const list=$('pick-list');list.innerHTML='';
+  items.forEach(d=>{
+    const r=document.createElement('div');r.className='srow';
+    r.innerHTML='<span class="led g"></span><div class="st"><div class="sn">'+d.name+'</div><div class="sa">'+d.addr+'</div></div><span class="pick">连接</span>';
+    r.addEventListener('click',()=>{$('pickmask').classList.remove('on');cb(d.addr);});
+    list.appendChild(r);
+  });
+  $('pickmask').classList.add('on');
+}
+$('btn-pick-cancel').addEventListener('click',()=>{$('pickmask').classList.remove('on');stopAll();});
 function stopAll(silent){
   if(timer)clearInterval(timer);
   st='idle';render();
@@ -588,31 +639,54 @@ $('btn-gear').addEventListener('click',()=>{showView('settings');runScanDemo();}
 $('btn-back').addEventListener('click',()=>showView('home'));
 $('btn-save').addEventListener('click',()=>{showView('home');toast('已保存');});
 
+/* 局域网多台服务器：在线列表 + 历史离线标注（蓝牙式） */
+const discovered=[
+  {name:'联合测试服务器',addr:'192.168.1.103:9432'},
+  {name:'书房服务器',addr:'192.168.1.106:9432'},
+];
+const remembered=[
+  {name:'客厅旧服务器',addr:'192.168.1.102:9432'},
+  {name:'办公室服务器',addr:'10.8.0.5:9432'},
+];
+let selSrv='192.168.1.103:9432';
+const isOnline=s=>discovered.some(d=>d.addr===s.addr);
+
+function renderSrvLists(){
+  const box=$('srv-list');box.innerHTML='';
+  discovered.forEach(d=>{
+    const r=document.createElement('div');
+    r.className='srow'+(selSrv===d.addr?' sel':'');
+    r.innerHTML='<span class="led g"></span><div class="st"><div class="sn">'+d.name+'</div><div class="sa">'+d.addr+'</div></div>'+(selSrv===d.addr?'':'<span class="pick">选择</span>');
+    r.addEventListener('click',()=>{
+      selSrv=d.addr;$('in-local').value=d.addr;$('seg-lan-a').textContent=d.addr;
+      renderSrvLists();render();toast('连接目标：'+d.addr);
+    });
+    box.appendChild(r);
+  });
+  const hb=$('srv-hist');hb.innerHTML='';
+  remembered.filter(s=>!isOnline(s)).forEach(s=>{
+    const r=document.createElement('div');r.className='srow off';
+    r.innerHTML='<span class="led gray"></span><div class="st"><div class="sn">'+s.name+'</div><div class="sa">'+s.addr+'</div></div><span class="offtag">离线</span>';
+    r.addEventListener('click',()=>toast(s.name+' 当前不在线'));
+    hb.appendChild(r);
+  });
+}
 function runScanDemo(){
-  const box=$('autodis'),fb=$('found-box');
+  const box=$('autodis');
   box.classList.remove('res');
   $('ad-t1').textContent='正在扫描局域网…';
   $('ad-t2').textContent='发现结果只填入本组地址，不改变你的选择';
-  fb.innerHTML='';
   setTimeout(()=>{
     if(!$('view-settings').classList.contains('on'))return;
     box.classList.add('res');
-    $('ad-t1').textContent='发现 1 台局域网服务器';
-    $('ad-t2').textContent='点选填入本地组地址；要用它请在主界面切到「本地」';
-    const row=document.createElement('div');row.className='foundrow';
-    row.innerHTML='<span class="led"></span><div><div class="fn">联合测试服务器</div><div class="fa">192.168.1.103:9432</div></div><span class="pick">填入</span>';
-    row.addEventListener('click',()=>{
-      $('in-local').value='192.168.1.103:9432';
-      $('seg-lan-a').textContent='192.168.1.103:9432';
-      toast('已填入本地组地址');
-      render();
-    });
-    fb.appendChild(row);
+    $('ad-t1').textContent='发现 '+discovered.length+' 台局域网服务器';
+    $('ad-t2').textContent='点选即为连接目标；历史连接但不在线的已标注「离线」';
+    renderSrvLists();
   },1400);
 }
 $('btn-rescan').addEventListener('click',runScanDemo);
-$('clr-local').addEventListener('click',()=>{$('in-local').value='';$('seg-lan-a').textContent='未设置';toast('本地地址已清除');});
-$('in-local').addEventListener('input',()=>{$('seg-lan-a').textContent=$('in-local').value.trim()||'未设置';});
+$('clr-local').addEventListener('click',()=>{$('in-local').value='';$('seg-lan-a').textContent='未设置';selSrv='';toast('本地地址已清除');});
+$('in-local').addEventListener('input',()=>{const v=$('in-local').value.trim();$('seg-lan-a').textContent=v||'未设置';selSrv=v;});
 
 ['tg-hf','tg-aec','tg-trust'].forEach(id=>{
   $(id).addEventListener('click',()=>{

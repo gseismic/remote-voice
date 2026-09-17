@@ -135,6 +135,27 @@ select#audiosel{width:100%;margin-top:10px;background:#141a22;border:1px solid v
 .seg.on.wan .rd{border-color:var(--blue);background:radial-gradient(circle,var(--blue) 42%,transparent 47%)}
 .signal .srv .src.wan{color:var(--blue);border-color:#2b4a68}
 .target .t1 .tag.wan{color:var(--blue);border-color:#2b4a68}
+
+/* 多服务器选择弹窗（蓝牙式） */
+.mmask{position:absolute;inset:0;background:rgba(4,6,9,.6);z-index:20;display:none;align-items:center;justify-content:center}
+.mmask.on{display:flex}
+.mmodal{width:88%;background:#1a212b;border:1px solid var(--line);border-radius:14px;padding:18px}
+.mmodal .mt{font-size:14px;font-weight:700}
+.mmodal .mh{font:10px var(--mono);color:var(--tx2);letter-spacing:1px;margin:8px 0 10px}
+.srow{display:flex;align-items:center;gap:10px;padding:11px 13px;background:#141a22;cursor:pointer;border-bottom:1px solid #20262f;border-radius:8px;margin-bottom:6px}
+.srow:last-child{margin-bottom:0}
+.srow:active{background:#1a212b}
+.srow .led{width:8px;height:8px;border-radius:50%;flex:none}
+.srow .led.g{background:var(--green);box-shadow:0 0 8px var(--green)}
+.srow .led.gray{background:#3d444d}
+.srow .st{flex:1;min-width:0}
+.srow .sn{font-size:12.5px;font-weight:600}
+.srow .sa{font:9.5px var(--mono);color:var(--tx2);margin-top:2px}
+.srow .pick{font:10px var(--mono);color:var(--green);border:1px solid #274a2d;border-radius:6px;padding:4px 9px;flex:none}
+.srow .offtag{font:9px var(--mono);color:var(--tx2);border:1px solid var(--line);border-radius:5px;padding:3px 7px;flex:none}
+.srow.off{opacity:.55;cursor:not-allowed}
+.mcancel{margin-top:6px;font:11px var(--mono);color:var(--tx2);cursor:pointer;text-align:center;user-select:none}
+.mcancel:hover{color:var(--tx)}
 @media (prefers-reduced-motion:reduce){.led.g,.meter i,.scanbar .sp{animation:none}}
 </style>
 </head>
@@ -242,9 +263,18 @@ select#audiosel{width:100%;margin-top:10px;background:#141a22;border:1px solid v
         </div>
       </div>
 
-      <div class="card">
+        <div class="card">
         <div class="sect" style="margin-bottom:8px">SESSION LOG</div>
         <div class="log" id="log"></div>
+      </div>
+    </div>
+
+    <div class="mmask" id="mmask">
+      <div class="mmodal">
+        <div class="mt">发现多台局域网服务器</div>
+        <div class="mh">点选一台作为连接目标 · 历史连接但不在线的已标注「离线」</div>
+        <div id="mlist"></div>
+        <div class="mcancel" id="btn-mcancel">取消连接</div>
       </div>
     </div>
   </div>
@@ -293,24 +323,24 @@ function connect(){
   $('peerline').innerHTML='';
   $('audiost').textContent='等待手机上线';
 
-  const finish=()=>{
+  const finish=(addr)=>{
     if(st!=='scan')return;
     $('scanbar').style.display='none';
     st='registered';setLed('amber','已注册 · 等待手机');
     if(line==='lan'){
-      $('srvline').textContent='192.168.1.103:9432';
+      $('srvline').textContent=addr;
       $('srvsrc').style.display='';$('srvsrc').className='src';$('srvsrc').textContent='局域网发现';
       $('srv-t1').innerHTML='中继服务器<span class="tag">局域网发现</span>';
-      $('srv-t2').textContent='192.168.1.103:9432 · 切到远程请点上方链路卡';
+      $('srv-t2').textContent=addr+' · 切换链路请点上方链路卡';
       $('rtt').textContent='RTT 3ms';
-      log('ok','已注册 联合测试Mac（局域网发现 192.168.1.103:9432）');
+      log('ok','已注册 联合测试Mac（局域网发现 '+addr+'）');
     }else{
-      $('srvline').textContent='118.193.40.160:9432';
+      $('srvline').textContent=addr;
       $('srvsrc').style.display='';$('srvsrc').className='src wan';$('srvsrc').textContent='远程配置';
       $('srv-t1').innerHTML='中继服务器<span class="tag wan">远程配置</span>';
-      $('srv-t2').textContent='118.193.40.160:9432 · 切到本地请点上方链路卡';
+      $('srv-t2').textContent=addr+' · 切换链路请点上方链路卡';
       $('rtt').textContent='RTT 42ms';
-      log('ok','已注册 联合测试Mac（远程 118.193.40.160:9432，未扫描）');
+      log('ok','已注册 联合测试Mac（远程 '+addr+'，未扫描）');
     }
     log('warn','等待手机上线…');
     bridgeT=setTimeout(()=>{
@@ -335,7 +365,11 @@ function connect(){
     $('srvline').textContent='扫描中…';
     $('srvsrc').style.display='none';
     log('info','本地链路：扫描局域网 server…');
-    setTimeout(finish,1600);
+    setTimeout(()=>{
+      if(st!=='scan')return;
+      $('scanbar').style.display='none';
+      showLanPicker();
+    },1300);
   }else{
     // 远程链路：直连配置地址，永不扫描
     setLed('blue','连接远程…');
@@ -343,9 +377,34 @@ function connect(){
     $('srvline').textContent='118.193.40.160:9432';
     $('srvsrc').style.display='none';
     log('info','远程链路：直连配置地址（不扫描）');
-    setTimeout(finish,1000);
+    setTimeout(()=>finish('118.193.40.160:9432'),1000);
   }
 }
+function showLanPicker(){
+  const list=$('mlist');list.innerHTML='';
+  mdsv.forEach(d=>{
+    const r=document.createElement('div');r.className='srow';
+    r.innerHTML='<span class="led g"></span><div class="st"><div class="sn">'+d.name+'</div><div class="sa">'+d.addr+'</div></div><span class="pick">连接</span>';
+    r.addEventListener('click',()=>{$('mmask').classList.remove('on');finish(d.addr);});
+    list.appendChild(r);
+  });
+  mhist.forEach(s=>{
+    const r=document.createElement('div');r.className='srow off';
+    r.innerHTML='<span class="led gray"></span><div class="st"><div class="sn">'+s.name+'</div><div class="sa">'+s.addr+'</div></div><span class="offtag">离线</span>';
+    r.addEventListener('click',()=>log('warn',s.name+' 当前不在线'));
+    list.appendChild(r);
+  });
+  $('mmask').classList.add('on');
+  log('info','发现 '+mdsv.length+' 台局域网服务器，请选择一台');
+}
+$('btn-mcancel').addEventListener('click',()=>{$('mmask').classList.remove('on');disconnect();});
+const mdsv=[
+  {name:'联合测试服务器',addr:'192.168.1.103:9432'},
+  {name:'书房服务器',addr:'192.168.1.106:9432'},
+];
+const mhist=[
+  {name:'办公室服务器',addr:'10.8.0.5:9432'},
+];
 function disconnect(){
   st='stopped';setLed('gray','未连接 · 点击连接');
   $('scanbar').style.display='none';
