@@ -106,3 +106,10 @@
   中央态区大字/转圈/装饰波形+计时+帧数/错误面板+重试、PTT 大钮）；设置页三卡
   SERVER/DEVICES/ADVANCED，rv:// 直接粘贴归一化。协议/采音/心跳/退避重连零改动。
   验证：assembleDebug 通过、残留零命中；真机联测后置（用户指示）。
+
+- **2026-09-18 13:17** | [PLAN-018-mac-v32-final-align.md](PLAN-018-mac-v32-final-align.md) → [PLAN-018-mac-v32-final-align-OUTCOME.md](PLAN-018-mac-v32-final-align-OUTCOME.md)
+  摘要：Mac 端 V3.2 剩余对齐（收尾 PLAN-016）。右上状态胶囊可点（连接/断开/重试，与底部
+  按钮同语义）；永久秘密改折叠卡（掩码常驻、管理行默认收起）；音频卡新增装饰电平表
+  （bridged 时动画）与状态行三分支文案，audio_error 时提示异常。真振幅数据源仍为开放问题。
+  验证：pnpm build 通过；headless Chrome 截图默认态/展开态正常；临时截图改动已还原。
+  至此 V3.2 设计完整落地两端代码（Mac=PLAN-016+018，Android=PLAN-017），联测按用户指示后置。

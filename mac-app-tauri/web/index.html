@@ -85,28 +85,38 @@
               <span>输出设备</span>
               <select id="audio-device"></select>
             </label>
+            <div class="meter" id="meter" id="meter" aria-hidden="true">
+              <i style="--h:52%"></i><i style="--h:78%"></i><i style="--h:34%"></i><i style="--h:88%"></i><i style="--h:60%"></i><i style="--h:95%"></i><i style="--h:42%"></i><i style="--h:70%"></i><i style="--h:30%"></i><i style="--h:64%"></i><i style="--h:80%"></i><i style="--h:38%"></i>
+            </div>
+            <p class="audiost" id="audiost">等待手机上线</p>
             <p class="audio-alert" id="audio-alert" hidden></p>
           </section>
 
-          <section class="panel panel-permanent panel-span" aria-labelledby="permanent-title">
+          <section class="panel panel-permanent panel-span" id="perm-panel" aria-labelledby="permanent-title">
             <div class="panel-heading">
               <div>
                 <p class="eyebrow">LONG-LIVED ACCESS</p>
                 <h2 id="permanent-title">永久秘密</h2>
               </div>
-              <span class="state-tag" id="permanent-state">未设置</span>
+              <div class="panel-actions">
+                <span class="state-tag" id="permanent-state">未设置</span>
+                <button class="text-button" id="btn-fold">展开管理 ▾</button>
+              </div>
             </div>
-            <div class="permanent-row">
-              <label class="field grow">
-                <span>新秘密</span>
-                <input id="permanent-input" type="password" autocomplete="new-password" placeholder="至少 12 位" />
-              </label>
-              <button class="icon-button" id="set-permanent" title="保存永久秘密" aria-label="保存永久秘密">
-                <i data-lucide="key-round" aria-hidden="true"></i>
-              </button>
-              <button class="icon-button danger" id="clear-permanent" title="停用永久秘密" aria-label="停用永久秘密">
-                <i data-lucide="trash-2" aria-hidden="true"></i>
-              </button>
+            <p class="masked-row" id="masked-secret">••••-••••-••••</p>
+            <div class="perm-body"id="perm-body">
+              <div class="permanent-row">
+                <label class="field grow">
+                  <span>新秘密</span>
+                  <input id="permanent-input" type="password" autocomplete="new-password" placeholder="至少 12 位" />
+                </label>
+                <button class="icon-button" id="set-permanent" title="保存永久秘密" aria-label="保存永久秘密">
+                  <i data-lucide="key-round" aria-hidden="true"></i>
+                </button>
+                <button class="icon-button danger" id="clear-permanent" title="停用永久秘密" aria-label="停用永久秘密">
+                  <i data-lucide="trash-2" aria-hidden="true"></i>
+                </button>
+              </div>
             </div>
           </section>
         </div>

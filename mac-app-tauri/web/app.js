@@ -185,6 +185,23 @@ function renderRelayLine(status) {
         : "点「连接」开始 · 点击本卡修改";
 }
 
+/** 装饰电平表 + 音频状态行（真振幅数据源为开放问题，当前装饰动画） */
+function renderAudioMeter(status) {
+  const meter = $("meter");
+  const live = status === "bridged" && !state.audio_error;
+  meter.classList.toggle("off", !live);
+  const audiost = $("audiost");
+  if (state.audio_error) {
+    audiost.textContent = "音频输出异常（详见下方提示）";
+  } else if (status === "bridged") {
+    audiost.innerHTML = "实时接收中 · <b>0 丢帧</b>";
+  } else if (statusIsConnected(status)) {
+    audiost.textContent = "等待手机上线";
+  } else {
+    audiost.textContent = "未连接";
+  }
+}
+
 function render(next) {
   state = { ...fallbackState, ...next };
   const status = state.status || "stopped";
@@ -214,6 +231,7 @@ function render(next) {
     if (document.activeElement !== $("keep-temp")) $("keep-temp").checked = Boolean(state.keep);
   }
   renderRelayLine(status);
+  renderAudioMeter(status);
   renderAudioOptions();
   const alert = $("audio-alert");
   alert.hidden = !state.audio_error;
@@ -327,6 +345,12 @@ function closeSettings() {
   $("settings-overlay").hidden = true;
 }
 
+function togglePermFold() {
+  const panel = $("perm-panel");
+  panel.classList.toggle("open");
+  $("btn-fold").textContent = panel.classList.contains("open") ? "收起 ▴" : "展开管理 ▾";
+}
+
 async function saveSettings() {
   const wasConnected = statusIsConnected(state.status);
   try {
@@ -347,6 +371,9 @@ function bindEvents() {
   $("regenerate-temp").addEventListener("click", () =>
     runAction(() => call("regenerate_temp"), "临时秘密已更新"));
   $("connect-toggle").addEventListener("click", toggleConnection);
+  // 右上状态胶囊点按 = 连接/断开/重试（V3.2 原型交互，与底部按钮同语义）
+  $("status-cluster").addEventListener("click", toggleConnection);
+  $("btn-fold").addEventListener("click", togglePermFold);
   $("relay-panel").addEventListener("click", openSettings);
   $("open-settings").addEventListener("click", openSettings);
   $("close-settings").addEventListener("click", closeSettings);

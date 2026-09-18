@@ -91,7 +91,10 @@ h2 { margin-bottom: 0; font-size: 17px; line-height: 1.2; letter-spacing: 0; }
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
 }
+.status-cluster:active { border-color: rgba(242, 182, 77, 0.5); }
 
 .status-dot {
   width: 7px;
@@ -187,6 +190,22 @@ input:focus, select:focus { border-color: rgba(242, 182, 77, 0.75); }
 .toggle-field input:checked + .toggle-track::after { transform: translateX(12px); background: #171a17; }
 .audio-alert { margin: 13px 0 0; padding: 9px 10px; border-left: 2px solid var(--coral); color: var(--coral); background: rgba(245, 143, 120, 0.08); font-size: 11px; line-height: 1.45; }
 
+/* 装饰电平表 + 音频状态行（真振幅数据源为开放问题，当前为装饰动画） */
+.meter { height: 34px; margin-top: 14px; display: flex; align-items: flex-end; gap: 3px; }
+.meter i { flex: 1; height: var(--h, 14%); border-radius: 2px 2px 0 0; background: linear-gradient(180deg, var(--green), #1d5c26); animation: mtr 1s ease-in-out infinite alternate; }
+.meter i:nth-child(2n) { animation-delay: 0.2s; }
+.meter i:nth-child(3n) { animation-delay: 0.45s; }
+.meter i:nth-child(4n) { animation-delay: 0.65s; }
+@keyframes mtr { to { height: 14%; } }
+.meter.off i { animation: none; height: 6%; background: var(--wave-off, #27303d); }
+.audiost { margin: 8px 0 0; color: var(--muted); font-size: 11px; }
+.audiost b { color: var(--green); font-weight: 600; }
+
+/* 永久秘密折叠 */
+.perm-body { display: none; }
+.panel-permanent.open .perm-body { display: block; }
+.masked-row { margin: 0; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; letter-spacing: 0.18em; }
+
 .modal-overlay { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 20px; background: rgba(8, 10, 8, 0.66); }
 .modal-overlay[hidden] { display: none; }
 .modal-dialog { width: min(440px, 100%); max-height: calc(100vh - 40px); padding: 22px; overflow: auto; border: 1px solid rgba(244, 241, 233, 0.14); border-radius: 8px; background: var(--panel); box-shadow: 0 28px 70px rgba(0, 0, 0, 0.55); display: flex; flex-direction: column; gap: 15px; }
@@ -245,6 +264,10 @@ input:focus, select:focus { border-color: rgba(242, 182, 77, 0.75); }
   .secret-code { font-size: 29px; }
   .signal-actions { justify-content: flex-start; }
   .content-grid { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meter i { animation: none; }
 }
 
 @media (max-width: 420px) {
