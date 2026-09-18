@@ -115,6 +115,12 @@ select#audiosel{width:100%;margin-top:10px;background:#141a22;border:1px solid v
 .spin{width:16px;height:16px;border-radius:50%;border:2px solid rgba(88,166,255,.25);
   border-top-color:var(--blue);animation:spin 1s linear infinite;flex:none;display:none}
 @keyframes spin{to{transform:rotate(360deg)}}
+.fl{display:block;font-size:11px;color:var(--tx2);margin:12px 0 6px}
+.fl b{color:var(--tx);font-weight:600}
+.field{display:flex;align-items:center;gap:8px;background:#141a22;border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+.field input{flex:1;background:transparent;border:none;outline:none;color:var(--tx);font-size:13px;min-width:0}
+.field input:focus{border-color:#3d4654}
+.svnote{font-size:10px;color:var(--tx2);line-height:1.6}
 @media (prefers-reduced-motion:reduce){.led.g,.meter i,.spin{animation:none}}
 </style>
 </head>
@@ -157,14 +163,23 @@ select#audiosel{width:100%;margin-top:10px;background:#141a22;border:1px solid v
       </div>
 
       <div class="card target">
-        <div class="sect">CONNECTION &amp; OUTPUT</div>
+        <div class="sect">CONNECTION SETTINGS · 中继服务器</div>
+        <label class="fl"><b>服务器地址</b>（IP:端口，本地测试可填局域网 IP）</label>
+        <div class="field"><input id="in-server" value="118.193.40.160:9432" spellcheck="false"></div>
+        <label class="fl"><b>设备名</b>（手机端看到的本机名字）</label>
+        <div class="field"><input id="in-name" value="联合测试Mac" spellcheck="false"></div>
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <span class="btn pri" id="btn-save">保存设置</span>
+          <span class="svnote">已连接时保存会自动换线重连</span>
+        </div>
+        <div class="hr"></div>
         <div class="row">
           <span class="ico lan">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1" fill="currentColor" stroke="none"/></svg>
           </span>
           <div class="tt">
-            <div class="t1" id="srv-t1">中继服务器</div>
-            <div class="t2" id="srv-t2">连接后显示（连接设置中配置）</div>
+            <div class="t1" id="srv-t1">未连接</div>
+            <div class="t2" id="srv-t2">保存后点右上状态胶囊连接</div>
           </div>
           <span class="r" id="rtt"></span>
         </div>
@@ -223,7 +238,7 @@ const $=id=>document.getElementById(id);
 const ALPHA='23456789ABCDEFGHJKMNPQRSTUVWXYZ';
 const rand=n=>Array.from({length:n},()=>ALPHA[Math.floor(Math.random()*ALPHA.length)]).join('');
 let st='stopped',expT=0,logT=[],bridgeT=null,bridgeTick=null;
-const SERVER='118.193.40.160:9432';
+let serverAddr='118.193.40.160:9432',deviceName='联合测试Mac';
 
 function log(cls,msg){
   logT.push({t:new Date().toTimeString().slice(0,8),cls,msg});
@@ -250,15 +265,15 @@ function connect(){
   $('peerline').innerHTML='';
   $('audiost').textContent='等待手机上线';
   setLed('blue','连接中…');
-  log('info','连接服务器 '+SERVER+' …');
+  log('info','连接服务器 '+serverAddr+' …');
   setTimeout(()=>{
     if(st!=='connecting')return;
     $('spin').style.display='none';
     st='registered';setLed('amber','已注册 · 等待手机');
-    $('srvline').textContent=SERVER;
+    $('srvline').textContent=serverAddr;
     $('srvsrc').style.display='';
-    $('srv-t1').innerHTML='中继服务器<span class="tag">配置地址</span>';
-    $('srv-t2').textContent=SERVER+'（连接设置中可修改）';
+    $('srv-t1').innerHTML=serverAddr+'<span class="tag">已连接</span>';
+    $('srv-t2').textContent='配置地址 · 修改后保存会自动重连';
     $('rtt').textContent='RTT 42ms';
     const secret=rand(4)+'-'+rand(4);
     $('bigcode').textContent=secret;
@@ -268,12 +283,12 @@ function connect(){
       if(st==='stopped'){clearInterval(window._exp);return;}
       expT=Math.max(0,expT-1);$('exp').textContent='有效期 '+fmt(expT);
     },1000);
-    log('ok','已注册 联合测试Mac（'+SERVER+'）');
+    log('ok','已注册 '+deviceName+'（'+serverAddr+'）');
     log('warn','等待手机上线…');
     bridgeT=setTimeout(()=>{
       if(st!=='registered')return;
       st='bridged';setLed('g','已桥接');
-      $('peerline').innerHTML='<b>●</b><span>手机已连接 · <b style="color:var(--tx)">客厅 Mac</b></span><span style="margin-left:auto" class="exp">传输 00:00</span>';
+      $('peerline').innerHTML='<b>●</b><span>手机已连接</span><span style="margin-left:auto" class="exp">传输 00:00</span>';
       log('ok','已桥接 · 音频写入 '+audioName());
       bridgeTick=setInterval(()=>{
         if(st!=='bridged'){clearInterval(bridgeTick);return;}
@@ -301,6 +316,21 @@ function disconnect(){
   $('audiost').textContent='未连接';
   log('','已断开');
 }
+
+/* 连接设置保存：校验 → 生效；已连接则换线重连 */
+$('btn-save').addEventListener('click',()=>{
+  const v=$('in-server').value.trim(),n=$('in-name').value.trim()||'Mac';
+  if(!/^[\w.\-]+(:\d+)?$/.test(v)){log('err','服务器地址格式无效（应为 host:port）');return;}
+  const changed=v!==serverAddr;
+  serverAddr=v;deviceName=n;
+  if(st==='stopped'){
+    log('ok','连接设置已保存（'+serverAddr+'）；点右上状态胶囊连接');
+  }else{
+    log('ok','连接设置已保存（'+serverAddr+'），正在重连…');
+    disconnect();connect();
+  }
+  if(!changed)log('info','地址未变化，仅设备名更新');
+});
 
 /* 音频输出（选择缺失设备触发错误子态） */
 function applyAudio(){
