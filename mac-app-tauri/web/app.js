@@ -56,6 +56,12 @@ let editingSettings = false;
 // 连接按钮图标/文案只随「已连接与否」变化；桥接期间 app-state 约 2Hz 到达，
 // 状态未变时跳过重建与全文档 SVG 图标重建，避免无谓的前端开销（PLAN-020）
 let lastConnectIconState = null;
+// 高频 app-state（音频统计等）只更新文本；列表/下拉/告警只在相关字段变化时重建
+// （PLAN-021：音频输出失败时曾出现按帧重复推送，前端不应每事件重建 DOM）
+let lastEventsSignature = null;
+let lastAudioOptionsSignature = null;
+let lastAudioAlertText = null;
+let lastMeterHtml = null;
 
 function formatBytes(value) {
   if (!Number.isFinite(value) || value < 1024) return `${Math.max(0, value || 0)} B`;
@@ -118,13 +124,22 @@ async function call(command, args = {}) {
 }
 
 function setValueIfIdle(element, value) {
-  if (document.activeElement !== element) element.value = value ?? "";
+  const text = value ?? "";
+  if (document.activeElement !== element && element.value !== text) element.value = text;
+}
+
+function setText(element, value) {
+  const text = value === null || value === undefined ? "" : String(value);
+  if (element.textContent !== text) element.textContent = text;
 }
 
 function renderAudioOptions() {
   const select = $("audio-device");
   const current = state.audio_device || "BlackHole";
   const values = [...new Set([current, ...audioDevices].filter(Boolean))];
+  const signature = `${current}\u0000${values.join("\u0000")}`;
+  if (signature === lastAudioOptionsSignature) return;
+  lastAudioOptionsSignature = signature;
   select.replaceChildren();
   if (!values.length) {
     const option = new Option("暂无可用设备", "");
@@ -137,8 +152,11 @@ function renderAudioOptions() {
 }
 
 function renderEvents() {
-  const list = $("event-list");
   const events = Array.isArray(state.events) ? state.events : [];
+  const signature = JSON.stringify(events.slice(0, 50));
+  if (signature === lastEventsSignature) return;
+  lastEventsSignature = signature;
+  const list = $("event-list");
   list.replaceChildren();
   events.slice(0, 50).forEach((event) => {
     const item = document.createElement("li");
@@ -182,15 +200,19 @@ function renderRelayLine(status) {
   const lineState = connected
     ? (status === "connecting" || status === "reconnecting" ? "progress" : "true")
     : status === "fatal" ? "fatal" : "false";
-  $("relay-line").dataset.connected = lineState;
-  $("relay-summary").textContent = state.server || "未配置服务器";
-  $("relay-detail").textContent = !state.server
-    ? "点击填写服务器地址"
-    : status === "fatal"
-      ? "连接失败 · 点击本卡检查设置"
-      : connected
-        ? "保存修改将自动换线重连"
-        : "点「连接」开始 · 点击本卡修改";
+  const line = $("relay-line");
+  if (line.dataset.connected !== lineState) line.dataset.connected = lineState;
+  setText($("relay-summary"), state.server || "未配置服务器");
+  setText(
+    $("relay-detail"),
+    !state.server
+      ? "点击填写服务器地址"
+      : status === "fatal"
+        ? "连接失败 · 点击本卡检查设置"
+        : connected
+          ? "保存修改将自动换线重连"
+          : "点「连接」开始 · 点击本卡修改",
+  );
 }
 
 /** 装饰电平表 + 音频状态行（真振幅数据源为开放问题，当前装饰动画） */
@@ -198,19 +220,23 @@ function renderAudioMeter(status) {
   const meter = $("meter");
   const live = status === "bridged" && !state.audio_error;
   meter.classList.toggle("off", !live || !state.talking);
-  const audiost = $("audiost");
+  let meterHtml;
   if (state.audio_error) {
-    audiost.textContent = "音频输出异常（详见下方提示）";
+    meterHtml = "音频输出异常（详见下方提示）";
   } else if (status === "bridged" && state.talking) {
-    audiost.innerHTML = state.dictation_enabled
+    meterHtml = state.dictation_enabled
       ? "对端说话中 · <b>模拟 Fn</b> · <b>0 丢帧</b>"
       : "对端说话中 · <b>0 丢帧</b>";
   } else if (status === "bridged") {
-    audiost.textContent = "已就绪 · 按住手机按钮开始说话";
+    meterHtml = "已就绪 · 按住手机按钮开始说话";
   } else if (statusIsConnected(status)) {
-    audiost.textContent = "等待手机上线";
+    meterHtml = "等待手机上线";
   } else {
-    audiost.textContent = "未连接";
+    meterHtml = "未连接";
+  }
+  if (meterHtml !== lastMeterHtml) {
+    lastMeterHtml = meterHtml;
+    $("audiost").innerHTML = meterHtml;
   }
   // 手动解除兜底：模拟 Fn 期间可见（断线悬空时点按或按一次物理 Fn 均可放下）
   $("release-fn").hidden = !(state.talking && state.dictation_enabled);
@@ -220,46 +246,71 @@ function render(next) {
   state = { ...fallbackState, ...next };
   const status = state.status || "stopped";
   const cluster = $("status-cluster");
-  cluster.dataset.status = status;
-  $("status-label").textContent = displayStatus(status);
-  $("server-summary").textContent = state.server || "尚未配置服务器";
-  $("connection-detail").textContent = state.detail || statusDetail[status] || "等待连接";
-  $("peer-summary").textContent = state.peer_name
-    ? `${state.peer_name} 已连接`
-    : status === "bridged" ? "手机已连接" : "手机未连接";
-  $("temp-secret").textContent = state.temp_secret || "--------";
-  $("permanent-state").textContent = state.permanent_enabled ? "已启用" : "未设置";
-  $("permanent-state").dataset.enabled = state.permanent_enabled ? "true" : "false";
-  $("device-status").textContent = state.name ? `设备：${state.name}` : "身份：首次连接自动建立";
-  $("audio-frames").textContent = Number(state.audio_frames || 0).toLocaleString("zh-CN");
-  $("audio-bytes").textContent = formatBytes(Number(state.audio_bytes || 0));
-  $("dropped-frames").textContent = Number(state.dropped_audio_frames || 0).toLocaleString("zh-CN");
+  if (cluster.dataset.status !== status) cluster.dataset.status = status;
+  setText($("status-label"), displayStatus(status));
+  setText($("server-summary"), state.server || "尚未配置服务器");
+  setText($("connection-detail"), state.detail || statusDetail[status] || "等待连接");
+  setText(
+    $("peer-summary"),
+    state.peer_name
+      ? `${state.peer_name} 已连接`
+      : status === "bridged" ? "手机已连接" : "手机未连接",
+  );
+  setText($("temp-secret"), state.temp_secret || "--------");
+  setText($("permanent-state"), state.permanent_enabled ? "已启用" : "未设置");
+  const permanentEnabled = state.permanent_enabled ? "true" : "false";
+  if ($("permanent-state").dataset.enabled !== permanentEnabled) {
+    $("permanent-state").dataset.enabled = permanentEnabled;
+  }
+  setText($("device-status"), state.name ? `设备：${state.name}` : "身份：首次连接自动建立");
+  renderCounters();
 
   // 弹窗打开期间不回填连接设置，避免高频 app-state 事件冲掉用户未提交的编辑
   if (!editingSettings) {
     setValueIfIdle($("server"), state.server);
     setValueIfIdle($("device-name"), state.name);
-    if (document.activeElement !== $("temp-expiry-choice")) {
-      $("temp-expiry-choice").value = String(state.temp_duration || 28800);
+    const expiryChoice = String(state.temp_duration || 28800);
+    const expirySelect = $("temp-expiry-choice");
+    if (document.activeElement !== expirySelect && expirySelect.value !== expiryChoice) {
+      expirySelect.value = expiryChoice;
     }
-    if (document.activeElement !== $("keep-temp")) $("keep-temp").checked = Boolean(state.keep);
+    const keepChecked = Boolean(state.keep);
+    const keepInput = $("keep-temp");
+    if (document.activeElement !== keepInput && keepInput.checked !== keepChecked) {
+      keepInput.checked = keepChecked;
+    }
   }
   renderRelayLine(status);
   renderAudioMeter(status);
   renderAudioOptions();
-  const alert = $("audio-alert");
-  alert.hidden = !state.audio_error;
-  alert.textContent = state.audio_error || "";
+  renderAudioAlert();
   renderEvents();
   renderConnectButton();
   renderStarted = true;
 }
 
+/** 音频统计是最高频字段，只走轻量文本更新 */
+function renderCounters() {
+  setText($("audio-frames"), Number(state.audio_frames || 0).toLocaleString("zh-CN"));
+  setText($("audio-bytes"), formatBytes(Number(state.audio_bytes || 0)));
+  setText($("dropped-frames"), Number(state.dropped_audio_frames || 0).toLocaleString("zh-CN"));
+}
+
+function renderAudioAlert() {
+  const text = state.audio_error || "";
+  if (text === lastAudioAlertText) return;
+  lastAudioAlertText = text;
+  const alert = $("audio-alert");
+  alert.hidden = !text;
+  alert.textContent = text;
+}
+
 function renderCountdown() {
   const seconds = Number(state.temp_exp || 0) - Math.floor(Date.now() / 1000);
   const expiry = $("temp-expiry");
-  expiry.textContent = seconds > 0 ? formatTime(seconds) : "已过期";
-  expiry.dataset.expired = seconds > 0 ? "false" : "true";
+  setText(expiry, seconds > 0 ? formatTime(seconds) : "已过期");
+  const expired = seconds > 0 ? "false" : "true";
+  if (expiry.dataset.expired !== expired) expiry.dataset.expired = expired;
   if (
     seconds <= 0 &&
     state.temp_exp > 0 &&

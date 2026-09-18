@@ -1,4 +1,4 @@
-use crate::audio::{AudioSink, SinkStats};
+use crate::audio::{AudioError, AudioSink, SinkStats};
 use crate::config;
 use crate::protocol::{self, ProtocolError};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -22,6 +22,8 @@ const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const PING_INTERVAL: Duration = Duration::from_secs(10);
 const MAX_BACKOFF: u64 = 30;
+/// 音频输出失败后的自愈重试间隔：瞬时 CoreAudio 错误不应导致整场会话静音
+const AUDIO_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Default)]
 pub struct Registration {
@@ -33,20 +35,43 @@ pub struct Registration {
 
 #[derive(Debug, Clone)]
 pub enum RelayEvent {
-    Connecting { server: String },
-    Reconnecting { detail: String },
+    Connecting {
+        server: String,
+    },
+    Reconnecting {
+        detail: String,
+    },
     TofuEstablished,
     Registered,
-    PeerName { name: String },
+    PeerName {
+        name: String,
+    },
     PeerOnline,
     PeerOffline,
     /// 手机 PTT 按下/松开（FRAME_TALK 透传），用于模拟 Fn 触发语音输入
-    PeerTalking { on: bool },
-    AuthAccepted { ip: String, kind: String },
-    AuthFailed { ip: String, reason: String },
-    AudioStats { stats: SinkStats },
-    AudioError { message: String },
-    Fatal { code: String, message: String },
+    PeerTalking {
+        on: bool,
+    },
+    AuthAccepted {
+        ip: String,
+        kind: String,
+    },
+    AuthFailed {
+        ip: String,
+        reason: String,
+    },
+    AudioStats {
+        stats: SinkStats,
+    },
+    AudioError {
+        message: String,
+    },
+    /// 音频输出恢复可用（启动成功或从错误中自愈），控制器据此清除 audio_error
+    AudioReady,
+    Fatal {
+        code: String,
+        message: String,
+    },
     Stopped,
 }
 
@@ -63,6 +88,39 @@ enum RelayFailure {
 enum ClientCommand {
     Register,
     Stop,
+}
+
+/// 音频输出错误锁存：同一错误消息只上报一次，失败期间按固定间隔允许重试。
+/// 没有它时，输出失败后的每个音频帧都会触发一次 UI 状态推送（约 50 次/秒）。
+#[derive(Debug, Default)]
+struct AudioErrorLatch {
+    message: Option<String>,
+    last_retry: Option<Instant>,
+}
+
+impl AudioErrorLatch {
+    /// 记录错误消息；返回是否为「新错误」（需要上报）
+    fn note_error(&mut self, message: &str) -> bool {
+        let changed = self.message.as_deref() != Some(message);
+        self.message = Some(message.to_string());
+        changed
+    }
+
+    /// 清除错误锁存；返回之前是否有错误（需要通知恢复）
+    fn note_ok(&mut self) -> bool {
+        self.message.take().is_some()
+    }
+
+    /// 重试门槛：距上次重试不足 interval 时返回 false
+    fn retry_due(&mut self, now: Instant, interval: Duration) -> bool {
+        match self.last_retry {
+            Some(last) if now.duration_since(last) < interval => false,
+            _ => {
+                self.last_retry = Some(now);
+                true
+            }
+        }
+    }
 }
 
 pub type RelayEventHandler = Arc<dyn Fn(RelayEvent) + Send + Sync + 'static>;
@@ -90,6 +148,7 @@ pub struct RelayClient {
     initial_fingerprint: Option<String>,
     registration: Arc<RwLock<Registration>>,
     sink: Arc<dyn AudioSink>,
+    audio_error: Mutex<AudioErrorLatch>,
     events: RelayEventHandler,
     tofu_store: TofuStoreHandler,
     commands: UnboundedSender<ClientCommand>,
@@ -130,6 +189,7 @@ impl RelayClient {
             initial_fingerprint: (!options.fingerprint.is_empty()).then_some(options.fingerprint),
             registration: Arc::new(RwLock::new(options.registration)),
             sink: options.sink,
+            audio_error: Mutex::new(AudioErrorLatch::default()),
             events: options.events,
             tofu_store: options.tofu_store,
             commands,
@@ -427,6 +487,55 @@ impl RelayClient {
         }
     }
 
+    /// 上报音频输出失败；同一消息只发一次，防止每帧刷屏（约 50 次/秒）
+    fn report_audio_failure(&self, error: AudioError) {
+        let message = error.to_string();
+        let changed = self
+            .audio_error
+            .lock()
+            .map(|mut latch| latch.note_error(&message))
+            .unwrap_or(true);
+        if changed {
+            (self.events)(RelayEvent::AudioError { message });
+        }
+    }
+
+    /// 音频输出可用：清除错误锁存并通知控制器（低频事件，可直接发）
+    fn report_audio_ready(&self) {
+        if let Ok(mut latch) = self.audio_error.lock() {
+            latch.note_ok();
+        }
+        (self.events)(RelayEvent::AudioReady);
+    }
+
+    /// feed 成功说明输出确实可用；此前锁存过错误时才补发恢复通知
+    fn clear_audio_error_if_needed(&self) {
+        let cleared = self
+            .audio_error
+            .lock()
+            .map(|mut latch| latch.note_ok())
+            .unwrap_or(false);
+        if cleared {
+            (self.events)(RelayEvent::AudioReady);
+        }
+    }
+
+    /// 输出失败期间按 AUDIO_RETRY_INTERVAL 限频重建流，使瞬时错误可自愈
+    fn retry_audio_start(&self) {
+        let due = self
+            .audio_error
+            .lock()
+            .map(|mut latch| latch.retry_due(Instant::now(), AUDIO_RETRY_INTERVAL))
+            .unwrap_or(false);
+        if !due {
+            return;
+        }
+        match self.sink.start() {
+            Ok(()) => self.report_audio_ready(),
+            Err(error) => self.report_audio_failure(error),
+        }
+    }
+
     async fn handle_frame<W: AsyncWrite + Unpin>(
         &self,
         writer: &mut W,
@@ -441,23 +550,27 @@ impl RelayClient {
             protocol::FRAME_PONG => Ok(()),
             protocol::FRAME_PEER_STATE => {
                 if payload.first() == Some(&protocol::PEER_ONLINE) {
-                    if let Err(error) = self.sink.start() {
-                        (self.events)(RelayEvent::AudioError {
-                            message: error.to_string(),
-                        });
+                    match self.sink.start() {
+                        Ok(()) => self.report_audio_ready(),
+                        Err(error) => self.report_audio_failure(error),
                     }
                     (self.events)(RelayEvent::PeerOnline);
                 } else if payload.first() == Some(&protocol::PEER_OFFLINE) {
                     self.sink.stop();
+                    if let Ok(mut latch) = self.audio_error.lock() {
+                        latch.note_ok();
+                    }
                     (self.events)(RelayEvent::PeerOffline);
                 }
                 Ok(())
             }
             protocol::FRAME_AUDIO => {
-                if let Err(error) = self.sink.feed(payload) {
-                    (self.events)(RelayEvent::AudioError {
-                        message: error.to_string(),
-                    });
+                match self.sink.feed(payload) {
+                    Ok(()) => self.clear_audio_error_if_needed(),
+                    Err(error) => {
+                        self.report_audio_failure(error);
+                        self.retry_audio_start();
+                    }
                 }
                 let stats = self.sink.stats();
                 if stats.frames > 0 && stats.frames % 25 == 0 {
@@ -601,6 +714,7 @@ mod tests {
     use crate::audio::NullSink;
     use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
     use serde_json::Value;
+    use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex as StdMutex;
     use tokio::io::split;
     use tokio::net::TcpListener;
@@ -618,6 +732,21 @@ mod tests {
         let message = auth_reason(protocol::REASON_DEVICE_BUSY);
         assert!(message.contains("已经在线"));
         assert!(!message.contains("device_key"));
+    }
+
+    #[test]
+    fn audio_error_latch_dedupes_messages_and_gates_retries() {
+        // 测试目的：同一错误只上报一次；重试受固定间隔约束；恢复只通知一次。
+        let mut latch = AudioErrorLatch::default();
+        let start = Instant::now();
+        assert!(latch.note_error("A"));
+        assert!(!latch.note_error("A"));
+        assert!(latch.note_error("B"));
+        assert!(latch.retry_due(start, Duration::from_secs(5)));
+        assert!(!latch.retry_due(start + Duration::from_secs(1), Duration::from_secs(5)));
+        assert!(latch.retry_due(start + Duration::from_secs(6), Duration::from_secs(5)));
+        assert!(latch.note_ok());
+        assert!(!latch.note_ok());
     }
 
     #[test]
@@ -697,6 +826,110 @@ mod tests {
         server_task.await.unwrap();
         reader_task.abort();
         let _ = reader_task.await;
+    }
+
+    /// 恒失败的音频 sink：验证失败错误去重与重试门槛，不依赖真实声卡。
+    #[derive(Default)]
+    struct FailingSink {
+        starts: AtomicUsize,
+        feeds: AtomicUsize,
+    }
+
+    impl AudioSink for FailingSink {
+        fn start(&self) -> Result<(), AudioError> {
+            self.starts.fetch_add(1, Ordering::Relaxed);
+            Err(AudioError::Device("测试音频输出不可用".to_string()))
+        }
+
+        fn stop(&self) {}
+
+        fn feed(&self, _payload: &[u8]) -> Result<(), AudioError> {
+            self.feeds.fetch_add(1, Ordering::Relaxed);
+            Err(AudioError::Device("测试音频输出不可用".to_string()))
+        }
+
+        fn stats(&self) -> SinkStats {
+            SinkStats::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn repeated_audio_failures_are_reported_once_and_retry_is_gated() {
+        // 测试目的：输出失败后每帧都会 feed 失败，但 UI 事件只应发一次（回归防护）；
+        // 自愈重试按门槛限频——本用例 3 帧音频只触发 1 次额外 start。
+        let sink = Arc::new(FailingSink::default());
+        let failing_sink: Arc<dyn AudioSink> = sink.clone();
+        let events_log = Arc::new(StdMutex::new(Vec::<RelayEvent>::new()));
+        let events_capture = Arc::clone(&events_log);
+        let client = RelayClient::new(
+            "127.0.0.1:9432".to_string(),
+            String::new(),
+            "mac-test".to_string(),
+            "a".repeat(64),
+            Registration {
+                name: "Test Mac".to_string(),
+                ..Default::default()
+            },
+            failing_sink,
+            Arc::new(move |event| events_capture.lock().unwrap().push(event)),
+        );
+        let (client_io, mut server_io) = tokio::io::duplex(4096);
+        let (client_reader, mut client_writer) = split(client_io);
+        let (frame_sender, mut frames) = mpsc::channel(8);
+        let reader_task = tokio::spawn(read_frames(client_reader, frame_sender));
+        let (command_sender, mut commands) = mpsc::unbounded_channel();
+        let (release_sender, release_receiver) = tokio::sync::oneshot::channel();
+        let server_task = tokio::spawn(async move {
+            let (frame_type, _) = protocol::read_frame(&mut server_io).await.unwrap();
+            assert_eq!(frame_type, protocol::FRAME_AUTH);
+            protocol::write_frame(&mut server_io, protocol::FRAME_AUTH_OK, b"{}")
+                .await
+                .unwrap();
+            let (frame_type, _) = protocol::read_frame(&mut server_io).await.unwrap();
+            assert_eq!(frame_type, protocol::FRAME_REGISTER);
+            protocol::write_frame(
+                &mut server_io,
+                protocol::FRAME_PEER_STATE,
+                &[protocol::PEER_ONLINE],
+            )
+            .await
+            .unwrap();
+            for _ in 0..3 {
+                protocol::write_frame(&mut server_io, protocol::FRAME_AUDIO, &[0, 0, 1, 0])
+                    .await
+                    .unwrap();
+            }
+            // PING/PONG 作为处理屏障：读到 PONG 即说明 3 帧音频都已处理完
+            protocol::write_frame(&mut server_io, protocol::FRAME_PING, &[])
+                .await
+                .unwrap();
+            let (frame_type, _) = protocol::read_frame(&mut server_io).await.unwrap();
+            assert_eq!(frame_type, protocol::FRAME_PONG);
+            command_sender.send(ClientCommand::Stop).unwrap();
+            let _ = release_receiver.await;
+        });
+
+        let result = timeout(
+            Duration::from_secs(2),
+            client.drive_connection(&mut client_writer, &mut frames, &mut commands),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(result, Err(RelayFailure::Stopped)));
+        release_sender.send(()).unwrap();
+        server_task.await.unwrap();
+        reader_task.abort();
+        let _ = reader_task.await;
+
+        let audio_errors = events_log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event, RelayEvent::AudioError { .. }))
+            .count();
+        assert_eq!(audio_errors, 1);
+        assert_eq!(sink.feeds.load(Ordering::Relaxed), 3);
+        assert_eq!(sink.starts.load(Ordering::Relaxed), 2);
     }
 
     #[tokio::test]

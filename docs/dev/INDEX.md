@@ -155,3 +155,19 @@
   （height 恒定、transform 变化）、cargo test 18 例、clippy 0 警告。待真机复核
   说话期间 WebView 进程 CPU（见 OUTCOME 待真机复核节，含非本因时的排查顺序）。
   文件：PLAN-020-mac-meter-cpu.md / PLAN-020-mac-meter-cpu-OUTCOME.md。
+
+- **2026-09-19 00:32** | PLAN-021 Mac 音频输出失败链路优化（错误风暴去重 + 自愈重试 + 前端轻量化）
+  摘要：承接 PLAN-020 与 review 核对结论，处理「音频输出失败时每帧报错 → 每错误全量
+  UI 推送（约 50 次/秒）」放大链。①后端根治：AppState/UiEvent 加 PartialEq，
+  update_state 值未变不 emit（controller.rs:717-733）；②失败自愈：relay 新增
+  AudioErrorLatch（同错只报一次）+ 5s 限频重试 start + AudioReady 恢复事件，
+  PeerOffline 重置锁存；audio.rs 修正 last_error 粘滞（流存活但出错时重建，
+  原来一次瞬时 CoreAudio 错误=整场静音）；③前端：统计只更新 3 个文本节点，
+  事件列表/设备下拉/告警/状态行按签名守卫跳过重建。计划外修正（重要）：
+  keyinject.rs 裸指针跨线程非 Send，macOS 上根本编译不过（PLAN-019 后所有 Mac
+  构建实际失败、/Applications 仍是 01:53 旧包），转 usize 修复并修正该模块测试
+  的 macOS 可移植性；cargo fmt 规范化既有未格式化行。验证：cargo fmt/clippy
+  首次在 macOS 全量通过、cargo test 21 例（+3）、pnpm build、release 编译成功、
+  playwright + Tauri IPC stub 断言全部前端守卫生效。待真机复核错误风暴复现
+  实验（设备名填错 → CPU 不升高、≤5s 自愈恢复）。
+  文件：PLAN-021-mac-audio-error-storm.md / PLAN-021-mac-audio-error-storm-OUTCOME.md。

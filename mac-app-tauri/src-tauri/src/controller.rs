@@ -29,14 +29,14 @@ impl CommandError {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct UiEvent {
     pub at: i64,
     pub level: String,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AppState {
     pub status: String,
     pub detail: String,
@@ -374,7 +374,8 @@ impl AppController {
         });
         // 配置切换（关闭功能/换模式）时强制释放，避免旧模式下的 Fn 悬空
         self.injector.release();
-        self.inject_warned.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.inject_warned
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         if active {
             self.connect_inner()?;
         }
@@ -658,6 +659,7 @@ impl AppController {
             RelayEvent::AudioError { message } => {
                 self.update_state(|state| state.audio_error = message.clone())
             }
+            RelayEvent::AudioReady => self.update_state(|state| state.audio_error.clear()),
             RelayEvent::Fatal { code, message } => {
                 self.update_state(|state| {
                     state.status = "fatal".to_string();
@@ -712,6 +714,8 @@ impl AppController {
         });
     }
 
+    /// 状态真正变化才推送给前端：音频输出失败时同一错误可能按帧重复上报
+    /// （约 50 次/秒），值未变就不应触发全量 UI 重绘
     fn update_state<F>(&self, update: F)
     where
         F: FnOnce(&mut AppState),
@@ -719,7 +723,11 @@ impl AppController {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
+        let before = state.clone();
         update(&mut state);
+        if *state == before {
+            return;
+        }
         let snapshot = state.clone();
         drop(state);
         self.emit(snapshot);
@@ -946,5 +954,22 @@ mod tests {
         assert_eq!(events[0].level, "warning");
         assert!(events[0].message.contains("203.0.113.2"));
         assert_eq!(events[1].level, "success");
+    }
+
+    #[test]
+    fn repeated_audio_error_keeps_state_unchanged() {
+        // 测试目的：update_state 的 emit 门依赖 PartialEq——同一错误重复写入
+        // 不产生状态差异（否则音频失败时约 50 次/秒全量 UI 推送），清除能识别。
+        let mut config = AppConfig::default();
+        config.apply_defaults();
+        let mut state = AppState::from_config(&config, "TEMP-PASSWORD".to_string(), 1, false);
+        let idle = state.clone();
+        state.audio_error = "音频输出尚未启动".to_string();
+        assert_ne!(state, idle);
+        let failed = state.clone();
+        state.audio_error = "音频输出尚未启动".to_string();
+        assert_eq!(state, failed);
+        state.audio_error.clear();
+        assert_ne!(state, failed);
     }
 }

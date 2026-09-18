@@ -152,6 +152,14 @@ impl CpalSink {
         Ok(stream)
     }
 
+    /// 记录启动/播放失败原因，使后续 feed 返回同一消息（配合 relay 侧去重，避免刷屏）
+    fn remember_error(&self, error: AudioError) -> AudioError {
+        if let Ok(mut slot) = self.last_error.lock() {
+            *slot = Some(error.to_string());
+        }
+        error
+    }
+
     pub fn last_error(&self) -> Option<String> {
         self.last_error.lock().ok().and_then(|slot| slot.clone())
     }
@@ -163,16 +171,27 @@ impl AudioSink for CpalSink {
             .stream
             .lock()
             .map_err(|_| AudioError::Device("音频状态锁已损坏".to_string()))?;
-        if stream_slot.is_some() {
+        let had_error = self
+            .last_error
+            .lock()
+            .map(|error| error.is_some())
+            .unwrap_or(true);
+        if stream_slot.is_some() && !had_error {
             return Ok(());
         }
+        // 流存活但 last_error 粘滞（CoreAudio 瞬时错误）时必须重建，
+        // 否则 feed 会一直命中 last_error，整个会话都无法恢复
+        *stream_slot = None;
         if let Ok(mut error) = self.last_error.lock() {
             *error = None;
         }
-        let stream = self.build_stream()?;
-        stream
-            .play()
-            .map_err(|error| AudioError::Device(error.to_string()))?;
+        let stream = match self.build_stream() {
+            Ok(stream) => stream,
+            Err(error) => return Err(self.remember_error(error)),
+        };
+        if let Err(error) = stream.play() {
+            return Err(self.remember_error(AudioError::Device(error.to_string())));
+        }
         *stream_slot = Some(stream);
         Ok(())
     }

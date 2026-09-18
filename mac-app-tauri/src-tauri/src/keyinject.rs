@@ -85,8 +85,7 @@ mod ffi {
     pub const K_HEAD_INSERT: u32 = 0;
     pub const K_TAP_LISTEN_ONLY: u32 = 1;
 
-    pub type TapCallback =
-        extern "C" fn(*mut c_void, u32, *mut c_void, *mut c_void) -> *mut c_void;
+    pub type TapCallback = extern "C" fn(*mut c_void, u32, *mut c_void, *mut c_void) -> *mut c_void;
 
     extern "C" {
         fn CGEventCreateKeyboardEvent(
@@ -155,7 +154,9 @@ mod ffi {
             );
             if tap.is_null() {
                 // 失败路径回收 Arc，避免泄漏
-                drop(std::sync::Arc::from_raw(user_info as *const crate::keyinject::KeyInjector));
+                drop(std::sync::Arc::from_raw(
+                    user_info as *const crate::keyinject::KeyInjector,
+                ));
                 return Err(
                     "无法监听物理 Fn 键（需要辅助功能权限）：手动解除请用界面的「放下 Fn」按钮"
                         .to_string(),
@@ -164,12 +165,20 @@ mod ffi {
             let source = CFMachPortCreateRunLoopSource(std::ptr::null_mut(), tap, 0);
             if source.is_null() {
                 CFRelease(tap);
-                drop(std::sync::Arc::from_raw(user_info as *const crate::keyinject::KeyInjector));
+                drop(std::sync::Arc::from_raw(
+                    user_info as *const crate::keyinject::KeyInjector,
+                ));
                 return Err("创建 Fn 监听 runloop source 失败".to_string());
             }
+            // 裸指针不是 Send，转 usize 传入线程再还原；tap/source 生命周期为进程级，
+            // 不会释放，线程内还原是安全的
+            let source_addr = source as usize;
+            let tap_addr = tap as usize;
             std::thread::Builder::new()
                 .name("fn-keyup-tap".to_string())
-                .spawn(move || unsafe {
+                .spawn(move || {
+                    let source = source_addr as *mut c_void;
+                    let tap = tap_addr as *mut c_void;
                     let rl = CFRunLoopGetCurrent();
                     CFRunLoopAddSource(rl, source, kCFRunLoopCommonModes);
                     CGEventTapEnable(tap, true);
@@ -202,7 +211,8 @@ mod ffi {
 
 #[cfg(target_os = "macos")]
 impl KeyInjector {
-    const PERMISSION_HINT: &str = "模拟 Fn 需要辅助功能权限：系统设置 → 隐私与安全性 → 辅助功能，勾选本应用后重试";
+    const PERMISSION_HINT: &str =
+        "模拟 Fn 需要辅助功能权限：系统设置 → 隐私与安全性 → 辅助功能，勾选本应用后重试";
 
     fn set_talking_impl(&self, on: bool, mode: InjectMode) -> Result<(), String> {
         use std::sync::atomic::Ordering;
@@ -278,14 +288,22 @@ mod tests {
 
     #[test]
     fn mode_parse_and_stub_are_safe() {
-        // 测试目的：模式解析收敛 + 非 macOS stub 在真机上可直接验证调用安全。
+        // 测试目的：模式解析收敛 + 调用安全（不 panic）。
         assert_eq!(InjectMode::parse("hold"), InjectMode::Hold);
         assert_eq!(InjectMode::parse("double"), InjectMode::Double);
         assert_eq!(InjectMode::parse("unknown"), InjectMode::Hold);
         let injector = KeyInjector::new();
-        injector.set_talking(true, InjectMode::Hold).unwrap();
-        injector.set_talking(true, InjectMode::Hold).unwrap();
-        injector.set_talking(false, InjectMode::Double).unwrap();
+        // macOS 测试进程通常未获辅助功能权限，返回中文提示属预期；
+        // 非 macOS stub 恒成功——两种结果都合法，只要求错误文案可读
+        if let Err(message) = injector.set_talking(true, InjectMode::Hold) {
+            assert!(message.contains("辅助功能"));
+        }
         injector.release();
+        #[cfg(not(target_os = "macos"))]
+        {
+            // macOS 上不调用 double：若测试进程恰好已授权会真的敲击系统按键
+            injector.set_talking(false, InjectMode::Double).unwrap();
+            injector.release();
+        }
     }
 }
