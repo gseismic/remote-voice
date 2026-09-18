@@ -27,13 +27,12 @@ import javax.net.ssl.X509TrustManager
  * 当前流程中任何 AUTH_ERR 均视为不可自动恢复（原因码转人性化文案交给 UI）。
  */
 class RelayClient(
-    private val endpoints: List<Endpoint>,
+    private val host: String,
+    private val port: Int,
     private val secretHex: String,
     private val fingerprintFor: (host: String, port: Int) -> String,
     private val listener: Listener,
 ) {
-    /** 一个可尝试的 relay 服务器地址；label 用于状态文案（如「本地」「远程」）。 */
-    data class Endpoint(val host: String, val port: Int, val label: String)
     interface Listener {
         /** 状态文本变化（已本地化，可直接展示）。 */
         fun onState(text: String)
@@ -86,17 +85,15 @@ class RelayClient(
     /** TCP 拨号期间也登记原始 socket，停止服务时可立即打断阻塞的 connect。 */
     private var connectingSocket: Socket? = null
     private val outLock = Any()
-    // 按 endpoint 记录 TOFU/固定指纹（key = TrustStore.serverKey），本地/远程互不污染。
+    // TOFU/固定指纹（key = TrustStore.serverKey）
     private val trusted = HashMap<String, String>()
 
     init {
-        for (e in endpoints) {
-            val key = TrustStore.serverKey(e.host, e.port)
-            if (!trusted.containsKey(key)) {
-                trusted[key] = fingerprintFor(e.host, e.port).trim().lowercase()
-            }
-        }
+        val known = fingerprintFor(host, port).trim().lowercase()
+        if (known.isNotEmpty()) trusted[serverKey()] = known
     }
+
+    private fun serverKey(): String = TrustStore.serverKey(host, port)
 
     /**
      * 连接主循环：连接 → 认证 → 读事件 → 断线退避重连。
@@ -160,27 +157,11 @@ class RelayClient(
     fun currentConnectionSerial(): Long = connectionSerial
 
     private fun connectAndServe() {
-        // 双地址本地优先（PLAN-013）：按顺序尝试，网络级失败切下一个；
-        // 认证/指纹类 FatalProtocolError 直接抛出（换地址也不会对）。
-        val ordered = endpoints.distinctBy { TrustStore.serverKey(it.host, it.port) }
-        var lastError: Exception? = null
-        for (e in ordered) {
-            if (!running) throw IOException("客户端已停止")
-            try {
-                connectOne(e)
-                return
-            } catch (fatal: FatalProtocolError) {
-                throw fatal
-            } catch (io: IOException) {
-                lastError = io
-                Log.w(TAG, "endpoint ${e.label} ${e.host}:${e.port} 连接失败: ${io.message}")
-            }
-        }
-        throw lastError ?: IOException("无可用服务器地址")
+        connectOne()
     }
 
-    private fun connectOne(e: Endpoint) {
-        val serverKey = TrustStore.serverKey(e.host, e.port)
+    private fun connectOne() {
+        val serverKey = serverKey()
         val knownFingerprint = trusted[serverKey].orEmpty()
         // 已知指纹=固定校验；空=TOFU（首次连接自动信任并记录）
         val tm = if (knownFingerprint.isNotEmpty()) {
@@ -191,16 +172,16 @@ class RelayClient(
         val ctx = SSLContext.getInstance("TLS")
         // 信任根来自指纹而非 CA：跳过默认信任链，由 FingerprintTrustManager 校验
         ctx.init(null, arrayOf(tm), null)
-        listener.onState("连接 ${e.label} ${e.host}…")
+        listener.onState("连接 $host…")
 
         val raw = Socket()
         var connectedSocket: SSLSocket? = null
         var handedToTls = false
         synchronized(this) { connectingSocket = raw }
         try {
-            raw.connect(InetSocketAddress(e.host, e.port), CONNECT_TIMEOUT_MS)
+            raw.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
             if (!running) throw IOException("客户端已停止")
-            val sock = ctx.socketFactory.createSocket(raw, e.host, e.port, true) as SSLSocket
+            val sock = ctx.socketFactory.createSocket(raw, host, port, true) as SSLSocket
             handedToTls = true
             synchronized(this) {
                 connectingSocket = null
@@ -246,7 +227,7 @@ class RelayClient(
             listener.onPeerFingerprint(fp, serverKey)
             Log.i(TAG, "tofu trusted fingerprint=$fp")
         }
-        Log.i(TAG, "tls connected (${e.label} ${e.host})")
+        Log.i(TAG, "tls connected ($host)")
 
         // AUTH 必须是首帧（服务器 10s 内等待）：v3 手机只带秘密哈希
         sock.soTimeout = AUTH_TIMEOUT_MS

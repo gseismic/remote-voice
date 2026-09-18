@@ -3,34 +3,43 @@
     <string name="app_name">远程麦克风</string>
 
     <!-- 主界面 -->
-    <string name="label_devices">设备：</string>
-    <string name="ptt_hint">按住 说话</string>
-    <string name="ptt_tip">打开即自动连接 · 按住说话即传输，松开即停（会议场景可在设置里开「免提常开」）</string>
-    <string name="status_default">未连接</string>
-    <string name="menu_settings">设置</string>
+    <string name="brand_name">远程麦克风</string>
+    <string name="brand_sub">REMOTE MIC</string>
+    <string name="ptt_hint">按住 说话\nHOLD TO TALK</string>
+    <string name="ptt_sub">HOLD TO TALK</string>
+    <string name="status_default">未启动 · 点按连接</string>
     <string name="err_no_mic_perm">未授予麦克风权限，无法推流</string>
-    <string name="service_started">已连接中继</string>
-    <string name="toast_stopped">已停止 · 点按状态条恢复连接</string>
+    <string name="service_started">连接中…</string>
+    <string name="toast_stopped">已停止 · 点按状态胶囊恢复</string>
+    <string name="big_idle_t1">准备就绪</string>
+    <string name="big_idle_t2">点状态胶囊连接服务器\n秘密配对决定接哪台 Mac</string>
+    <string name="big_wait_t1">已连中继</string>
+    <string name="big_wait_t2">等待 Mac 上线…\n在 Mac 端确认配对秘密</string>
+    <string name="text_err_title">连接失败</string>
+    <string name="btn_retry">重试</string>
+    <string name="label_settings">设置</string>
 
     <!-- 设置页 -->
     <string name="title_settings">设置</string>
-    <string name="label_import">导入配置串</string>
-    <string name="hint_import_desc">粘贴 server 启动时打印的 rv:// 地址；首次连接会自动建立服务器信任</string>
-    <string name="hint_import">rv://服务器IP:9432</string>
-    <string name="btn_parse">解析并填入</string>
-    <string name="label_server_section">服务器（本地优先，远程兜底）</string>
-    <string name="label_server_local">本地服务器（局域网，扫描后自动填入）</string>
-    <string name="hint_local">留空只用远程 · 例 192.168.1.8:9432</string>
-    <string name="btn_scan">扫描局域网服务器</string>
-    <string name="label_server">远程服务器地址（公网 IP:端口）</string>
-    <string name="hint_server">默认 43.139.226.138:9432</string>
-    <string name="toast_scan_none">未发现局域网服务器：确认 server 已启动、手机与其同一 Wi-Fi；可直接填远程地址</string>
-    <string name="label_aec">回声消除（Mac 外放时建议开启）</string>
-    <string name="label_handsfree">免提常开（不开则仅按住说话时传输）</string>
-    <string name="label_devices_section">我的设备（秘密保存于本机，仅元数据可见）</string>
-    <string name="btn_add_device">＋ 添加设备（输入 Mac 的秘密）</string>
+    <string name="sect_server">SERVER</string>
+    <string name="label_server">中继服务器地址</string>
+    <string name="hint_server">IP:端口 或 rv://IP:端口</string>
+    <string name="hint_server_desc">填公网服务器地址；本地测试时也可填局域网 IP（同一 Wi-Fi 下直达，不经公网）。</string>
+    <string name="toast_addr_bad">格式无效：应为 IP:端口 或 rv://IP:端口</string>
+    <string name="sect_devices">DEVICES</string>
+    <string name="label_devices_section">我的设备（秘密保存在本机）</string>
+    <string name="btn_add_device">＋ 添加设备（粘贴 Mac 端秘密）</string>
+    <string name="sect_advanced">ADVANCED</string>
+    <string name="label_advanced_title">采音与信任</string>
+    <string name="label_handsfree">免提常开</string>
+    <string name="label_handsfree_desc">开启后不需按住即持续传输（会议场景）</string>
+    <string name="label_aec">回声消除</string>
+    <string name="label_aec_desc">Mac 外放时建议开启</string>
+    <string name="label_trust">清除服务器信任</string>
+    <string name="label_trust_desc">证书更换等场景；清除后首次连接重新建立</string>
+    <string name="btn_trust_clear">清除</string>
+    <string name="toast_trust_cleared">已清除，下次连接重新建立信任</string>
     <string name="btn_save_back">保存并返回</string>
-    <string name="toast_import_ok">已导入远程服务器地址</string>
-    <string name="toast_import_bad">格式无效：应为 rv://主机:端口</string>
     <string name="toast_saved">已保存</string>
+    <string name="toast_no_device">尚无激活设备，请添加 Mac 秘密</string>
 </resources>

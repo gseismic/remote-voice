@@ -36,6 +36,17 @@ object TrustStore {
         prefs.edit().putString(KEY_FINGERPRINTS, records.toString()).apply()
     }
 
+    /** 用户主动清除某服务器的信任记录；下次连接重新 TOFU。 */
+    fun clear(prefs: SharedPreferences, serverKey: String) {
+        val records = try {
+            org.json.JSONObject(prefs.getString(KEY_FINGERPRINTS, "{}") ?: "{}")
+        } catch (_: org.json.JSONException) {
+            return
+        }
+        records.remove(serverKey)
+        prefs.edit().putString(KEY_FINGERPRINTS, records.toString()).apply()
+    }
+
     private fun normalize(value: String): String =
         value.filter { !it.isWhitespace() && it != ':' && it != '-' }
             .lowercase(Locale.ROOT)

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- V3.2 暗色控制台 tokens（docs/ui-design/v3/index.html，Android 放弃 DayNight 浅色） -->
+<resources>
+    <color name="rv_bg">#0E1116</color>
+    <color name="rv_panel">#161B22</color>
+    <color name="rv_card">#1A212B</color>
+    <color name="rv_field">#141A22</color>
+    <color name="rv_line">#2A313C</color>
+    <color name="rv_tx">#E6E9EE</color>
+    <color name="rv_tx2">#8B949E</color>
+    <color name="rv_tx3">#4D5561</color>
+    <color name="rv_amber">#F5B83D</color>
+    <color name="rv_amber_dim">#4A3B1C</color>
+    <color name="rv_green">#3FB950</color>
+    <color name="rv_green_dim">#274A2D</color>
+    <color name="rv_red">#F85149</color>
+    <color name="rv_red_dim">#5A2B29</color>
+    <color name="rv_blue">#58A6FF</color>
+    <color name="rv_blue_dim">#2B4A68</color>
+    <color name="rv_led_gray">#3D444D</color>
+    <color name="rv_wave_off">#27303D</color>
+</resources>

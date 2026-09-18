@@ -13,16 +13,16 @@ import android.widget.TextView
 import android.widget.Toast
 
 /**
- * 设置页（v3）：服务器地址（含默认值）、回声消除、免提常开、
- * 设备条目管理（查看/删除），以及 rv:// 一行配置串导入。
+ * 设置页（V3.2 原型 docs/ui-design/v3/android.html）：
+ * SERVER 单一服务器地址（IP:端口 或 rv://，本地测试填局域网 IP）、
+ * DEVICES 设备条目管理（添加/编辑/删除，秘密保存本机）、
+ * ADVANCED 免提/回声消除/清除服务器信任。
  */
 class SettingsActivity : Activity() {
 
     private lateinit var prefs: SharedPreferences
     private lateinit var store: DeviceStore
     private lateinit var serverEdit: EditText
-    private lateinit var localEdit: EditText
-    private lateinit var btnScan: Button
     private lateinit var aecSwitch: Switch
     private lateinit var handsfreeSwitch: Switch
     private lateinit var devicesBox: LinearLayout
@@ -34,65 +34,43 @@ class SettingsActivity : Activity() {
         store = DeviceStore(this)
         setContentView(R.layout.activity_settings)
 
-        val importEdit = findViewById<EditText>(R.id.edit_import)
-        val parseBtn = findViewById<Button>(R.id.btn_parse)
         serverEdit = findViewById(R.id.edit_server)
-        localEdit = findViewById(R.id.edit_local)
-        btnScan = findViewById(R.id.btn_scan)
         aecSwitch = findViewById(R.id.switch_aec)
         handsfreeSwitch = findViewById(R.id.switch_handsfree)
         devicesBox = findViewById(R.id.devices_box)
-        val backBtn = findViewById<Button>(R.id.btn_back)
 
         // 空值时展示默认服务器，让用户看得见、可改
         serverEdit.setText(
             prefs.getString(KEY_SERVER, null)?.takeIf { it.isNotBlank() }
                 ?: AudioStreamService.DEFAULT_SERVER
         )
-        // 本地（局域网）服务器：扫描选择或手动填，可空
-        localEdit.setText(prefs.getString(AudioStreamService.KEY_SERVER_LOCAL, "") ?: "")
         aecSwitch.isChecked = prefs.getBoolean(KEY_AEC, false)
         handsfreeSwitch.isChecked = prefs.getBoolean(AudioStreamService.KEY_HANDSFREE, false)
-
-        parseBtn.setOnClickListener {
-            val parsed = ConfigParser.parse(importEdit.text.toString())
-            if (parsed == null) {
-                Toast.makeText(this, R.string.toast_import_bad, Toast.LENGTH_LONG).show()
-                return@setOnClickListener
-            }
-            val server = ConfigParser.format(parsed)
-            serverEdit.setText(server)
-            prefs.edit().putString(KEY_SERVER, server).apply()
-            Toast.makeText(this, R.string.toast_import_ok, Toast.LENGTH_SHORT).show()
-        }
 
         findViewById<Button>(R.id.btn_add_device).setOnClickListener {
             showAddDeviceDialog()
         }
 
-        // 局域网扫描（后台线程收包，回主线程弹结果）；扫不到时提示回落远程/手动
-        btnScan.setOnClickListener {
-            btnScan.isEnabled = false
-            btnScan.text = "扫描中…"
-            Thread {
-                val found = try {
-                    LanDiscovery.scan()
-                } catch (_: Exception) {
-                    emptyList()
+        // 清除当前输入服务器的 TOFU 指纹（证书更换等场景），确认后执行
+        findViewById<Button>(R.id.btn_clear_trust).setOnClickListener {
+            val target = currentServerParsed()
+            if (target == null) {
+                Toast.makeText(this, R.string.toast_addr_bad, Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+            val addr = ConfigParser.format(target)
+            AlertDialog.Builder(this)
+                .setTitle(R.string.label_trust)
+                .setMessage("清除 $addr 的服务器指纹后，首次连接将重新接受其证书。继续吗？")
+                .setPositiveButton(R.string.btn_trust_clear) { _, _ ->
+                    TrustStore.clear(prefs, TrustStore.serverKey(target.host, target.port))
+                    Toast.makeText(this, R.string.toast_trust_cleared, Toast.LENGTH_SHORT).show()
                 }
-                runOnUiThread {
-                    btnScan.isEnabled = true
-                    btnScan.text = getString(R.string.btn_scan)
-                    if (found.isEmpty()) {
-                        Toast.makeText(this, R.string.toast_scan_none, Toast.LENGTH_LONG).show()
-                    } else {
-                        showScanResults(found)
-                    }
-                }
-            }.start()
+                .setNegativeButton("取消", null)
+                .show()
         }
 
-        backBtn.setOnClickListener {
+        findViewById<Button>(R.id.btn_back).setOnClickListener {
             saveAll()
             finish()
         }
@@ -103,24 +81,9 @@ class SettingsActivity : Activity() {
         renderDevices()
     }
 
-    /** 扫描结果列表：选中即保存为本地服务器地址并重连（本地优先，选不中仍走远程）。 */
-    private fun showScanResults(found: List<LanDiscovery.Found>) {
-        val titles = found.map { f ->
-            (f.name.ifBlank { "server" }) + "\n${f.host}:${f.port}"
-        }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("选择局域网服务器")
-            .setItems(titles) { _, which ->
-                val f = found[which]
-                val addr = "${f.host}:${f.port}"
-                localEdit.setText(addr)
-                prefs.edit().putString(AudioStreamService.KEY_SERVER_LOCAL, addr).apply()
-                Toast.makeText(this, "本地服务器已设为 $addr", Toast.LENGTH_SHORT).show()
-                restartRunningService()
-            }
-            .setNegativeButton("取消", null)
-            .show()
-    }
+    /** 当前输入框地址归一化；空值回落默认服务器，格式无效返回 null。 */
+    private fun currentServerParsed() =
+        ConfigParser.parse(serverEdit.text.toString().trim().ifBlank { AudioStreamService.DEFAULT_SERVER })
 
     private fun renderDevices() {
         devicesBox.removeAllViews()
@@ -131,8 +94,9 @@ class SettingsActivity : Activity() {
                 setPadding(0, 10, 0, 10)
             }
             val name = TextView(this).apply {
-                text = d.name.ifBlank { d.secret.take(12) + "…" }
-                textSize = 14f
+                text = (if (store.active()?.id == d.id) "● " else "○ ") +
+                    d.name.ifBlank { d.secret.take(12) + "…" }
+                textSize = 13f
                 setTextColor(0xFFE6E9EE.toInt())
             }
             val meta = TextView(this).apply {
@@ -254,10 +218,20 @@ class SettingsActivity : Activity() {
     }
 
     private fun saveAll(showToast: Boolean = true) {
-        val server = serverEdit.text.toString().trim().ifBlank { AudioStreamService.DEFAULT_SERVER }
+        val raw = serverEdit.text.toString().trim()
+        val server = if (raw.isEmpty()) {
+            AudioStreamService.DEFAULT_SERVER
+        } else {
+            // rv:// 或 host:port 统一归一化（IPv6 加括号、默认端口补全）
+            val parsed = ConfigParser.parse(raw)
+            if (parsed == null) {
+                Toast.makeText(this, R.string.toast_addr_bad, Toast.LENGTH_LONG).show()
+                return
+            }
+            ConfigParser.format(parsed)
+        }
         prefs.edit()
             .putString(KEY_SERVER, server)
-            .putString(AudioStreamService.KEY_SERVER_LOCAL, localEdit.text.toString().trim())
             .putBoolean(KEY_AEC, aecSwitch.isChecked)
             .putBoolean(AudioStreamService.KEY_HANDSFREE, handsfreeSwitch.isChecked)
             .apply()

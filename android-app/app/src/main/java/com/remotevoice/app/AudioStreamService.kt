@@ -16,6 +16,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 
 /** UI 状态枚举：Activity 据此着色并控制按钮可用性。 */
@@ -54,6 +55,9 @@ class AudioStreamService : Service(), RelayClient.Listener {
         @Volatile var framesSent: Long = 0
         @Volatile var peerName: String = ""
         @Volatile var talking: Boolean = false
+
+        /** 进入传输态的时刻（elapsedRealtime）；0=非传输态。主界面计时用。 */
+        @Volatile var startedAt: Long = 0
     }
 
     override fun onCreate() {
@@ -108,24 +112,12 @@ class AudioStreamService : Service(), RelayClient.Listener {
 
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         handsfree = prefs.getBoolean(KEY_HANDSFREE, false)
-        // 双地址（PLAN-013）：本地（局域网，可空）优先，远程兜底（空值回落内置默认）。
-        // 本地地址无效时跳过（不致命）；远程无效且无本地才报错。
-        val endpoints = ArrayList<RelayClient.Endpoint>()
-        val localRaw = (prefs.getString(KEY_SERVER_LOCAL, "") ?: "").trim()
-        if (localRaw.isNotEmpty()) {
-            ConfigParser.parse(localRaw)?.let {
-                endpoints.add(RelayClient.Endpoint(it.host, it.port, "本地"))
-            }
-        }
-        val remoteRaw = (prefs.getString(KEY_SERVER, "") ?: "").ifBlank { DEFAULT_SERVER }
-        val remote = ConfigParser.parse(remoteRaw)
-        if (remote == null) {
-            if (endpoints.isEmpty()) {
-                failAndStop("服务器地址无效（设置中检查）")
-                return
-            }
-        } else {
-            endpoints.add(RelayClient.Endpoint(remote.host, remote.port, "远程"))
+        // 单一服务器地址（V3.2）：IP:端口 或 rv://IP:端口；本地测试直接填局域网 IP。
+        val serverRaw = (prefs.getString(KEY_SERVER, "") ?: "").ifBlank { DEFAULT_SERVER }
+        val server = ConfigParser.parse(serverRaw)
+        if (server == null) {
+            failAndStop("服务器地址无效（设置中检查）")
+            return
         }
         // 指纹为空 = TOFU：连接时自动信任并记录（用户无需输入），按 host:port 隔离
         // 激活设备：秘密原文（规范化后本地算哈希，只传 hex 给 relay）
@@ -178,7 +170,8 @@ class AudioStreamService : Service(), RelayClient.Listener {
             }
         }
         relay = RelayClient(
-            endpoints,
+            server.host,
+            server.port,
             secretHex,
             { h, p -> TrustStore.load(prefs, TrustStore.serverKey(h, p)) },
             relayListener,
@@ -224,6 +217,12 @@ class AudioStreamService : Service(), RelayClient.Listener {
             text.contains("等待") -> StatusState.WAIT_PEER
             text == "已停止" -> StatusState.STOPPED
             else -> StatusState.CONNECTING
+        }
+        // 传输计时起点：进入 STREAMING 时打点，离开时清零（主界面 mm:ss 计时用）
+        if (Status.state == StatusState.STREAMING) {
+            if (Status.startedAt == 0L) Status.startedAt = SystemClock.elapsedRealtime()
+        } else {
+            Status.startedAt = 0L
         }
         Status.text = text
         mainHandler.post { updateNotification(text) }
@@ -476,11 +475,8 @@ class AudioStreamService : Service(), RelayClient.Listener {
         const val ACTION_RESTART = "com.remotevoice.app.RESTART"
         const val KEY_USER_STOPPED = "user_stopped"
 
-        // 默认远程服务器（需求指定），prefs 未配置时回落使用
-        const val DEFAULT_SERVER = "43.139.226.138:9432"
-
-        /** 本地局域网服务器地址（可空；扫描选择或手动填写，优先于远程尝试）。 */
-        const val KEY_SERVER_LOCAL = "server_local"
+        // 默认远程服务器（V3.2 部署机），prefs 未配置时回落使用
+        const val DEFAULT_SERVER = "118.193.40.160:9432"
 
         // 音频规格：48kHz/mono/s16le/20ms 帧（设计文档 §4.1，与服务器/接收器一致）
         const val SAMPLE_RATE = 48000

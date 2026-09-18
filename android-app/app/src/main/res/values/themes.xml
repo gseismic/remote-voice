@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 固定暗色（index.html 假设：暗色为两端唯一主题），无系统标题栏 -->
+<resources>
+    <style name="RVTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/rv_bg</item>
+        <item name="android:statusBarColor">@color/rv_bg</item>
+        <item name="android:navigationBarColor">@color/rv_bg</item>
+        <item name="android:colorAccent">@color/rv_amber</item>
+        <item name="android:colorControlActivated">@color/rv_amber</item>
+        <item name="android:colorControlNormal">@color/rv_tx2</item>
+        <item name="android:textColorPrimary">@color/rv_tx</item>
+        <item name="android:textColorSecondary">@color/rv_tx2</item>
+    </style>
+</resources>

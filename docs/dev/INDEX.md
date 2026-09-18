@@ -97,3 +97,12 @@
   连接前地址为空改为前置打开弹窗引导。验证：pnpm build 通过；vite dev + headless Chrome 截图
   默认态/弹窗态布局与样式正确；临时截图改动已还原复核。未覆盖：macOS 真机行为（Rust 无改动，
   不影响 PLAN-010 结论）、Android V3.2 简化另计。
+
+- **2026-09-18 13:03** | [PLAN-017-android-v32-impl.md](PLAN-017-android-v32-impl.md) → [PLAN-017-android-v32-impl-OUTCOME.md](PLAN-017-android-v32-impl-OUTCOME.md)
+  摘要：Android 端完整实施 V3.2 新设计（用户拍板"先完全实施，再测试"）。功能简化：删除
+  LanDiscovery/扫描 UI/本地-远程双地址多端点拨号，RelayClient 收敛为单地址，默认服务器切换为
+  118.193.40.160:9432；新增清除服务器信任（TrustStore.clear）。UI 重构：两端切暗色 V3.2 tokens
+  （RVTheme 固定暗色，放弃 DayNight）；主界面按原型重排（brand 行+齿轮、状态胶囊 LED+双行、
+  中央态区大字/转圈/装饰波形+计时+帧数/错误面板+重试、PTT 大钮）；设置页三卡
+  SERVER/DEVICES/ADVANCED，rv:// 直接粘贴归一化。协议/采音/心跳/退避重连零改动。
+  验证：assembleDebug 通过、残留零命中；真机联测后置（用户指示）。

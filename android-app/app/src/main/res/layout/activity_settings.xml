@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- V3.2 设置页（docs/ui-design/v3/android.html）：SERVER / DEVICES / ADVANCED 三卡 + 保存 -->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
@@ -9,7 +10,7 @@
         android:orientation="vertical"
         android:padding="16dp">
 
-        <!-- 导入配置串卡片 -->
+        <!-- SERVER -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -18,130 +19,235 @@
             android:padding="16dp">
 
             <TextView
-                android:layout_width="match_parent"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="@string/label_import"
-                android:textSize="16sp"
-                android:textStyle="bold" />
+                android:fontFamily="monospace"
+                android:letterSpacing="0.2"
+                android:text="@string/sect_server"
+                android:textColor="@color/rv_tx2"
+                android:textSize="10sp" />
 
             <TextView
-                android:layout_width="match_parent"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="@string/hint_import_desc"
-                android:textSize="12sp" />
+                android:text="@string/label_server"
+                android:textColor="@color/rv_tx"
+                android:textSize="14.5sp"
+                android:textStyle="bold" />
 
             <EditText
-                android:id="@+id/edit_import"
+                android:id="@+id/edit_server"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:hint="@string/hint_import"
-                android:inputType="textMultiLine"
-                android:maxLines="3" />
+                android:layout_marginTop="12dp"
+                android:background="@drawable/bg_field"
+                android:hint="@string/hint_server"
+                android:inputType="text"
+                android:maxLines="1"
+                android:padding="12dp"
+                android:textColor="@color/rv_tx"
+                android:textColorHint="@color/rv_tx3" />
 
-            <Button
-                android:id="@+id/btn_parse"
+            <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/btn_parse" />
+                android:layout_marginTop="7dp"
+                android:lineSpacingExtra="3dp"
+                android:text="@string/hint_server_desc"
+                android:textColor="@color/rv_tx2"
+                android:textSize="10.5sp" />
         </LinearLayout>
 
-        <!-- 我的设备 -->
+        <!-- DEVICES -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="12dp"
             android:background="@drawable/bg_card"
             android:orientation="vertical"
             android:padding="16dp">
 
             <TextView
-                android:layout_width="match_parent"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:letterSpacing="0.2"
+                android:text="@string/sect_devices"
+                android:textColor="@color/rv_tx2"
+                android:textSize="10sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
                 android:text="@string/label_devices_section"
-                android:textSize="16sp"
+                android:textColor="@color/rv_tx"
+                android:textSize="14.5sp"
                 android:textStyle="bold" />
 
             <LinearLayout
                 android:id="@+id/devices_box"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
                 android:orientation="vertical" />
 
             <Button
                 android:id="@+id/btn_add_device"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/btn_add_device" />
+                android:layout_marginTop="11dp"
+                android:background="@drawable/bg_iconbtn"
+                android:text="@string/btn_add_device"
+                android:textAllCaps="false"
+                android:textColor="@color/rv_tx2" />
         </LinearLayout>
 
-        <!-- 服务器与采音 -->
+        <!-- ADVANCED -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="12dp"
             android:background="@drawable/bg_card"
             android:orientation="vertical"
             android:padding="16dp">
 
             <TextView
-                android:layout_width="match_parent"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="@string/label_server_section"
-                android:textSize="16sp"
-                android:textStyle="bold" />
+                android:fontFamily="monospace"
+                android:letterSpacing="0.2"
+                android:text="@string/sect_advanced"
+                android:textColor="@color/rv_tx2"
+                android:textSize="10sp" />
 
             <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:text="@string/label_server_local" />
-
-            <EditText
-                android:id="@+id/edit_local"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:hint="@string/hint_local"
-                android:inputType="text"
-                android:maxLines="1" />
-
-            <Button
-                android:id="@+id/btn_scan"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/btn_scan" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:text="@string/label_server" />
-
-            <EditText
-                android:id="@+id/edit_server"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:hint="@string/hint_server"
-                android:inputType="text"
-                android:maxLines="1" />
-
-            <Switch
-                android:id="@+id/switch_aec"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:text="@string/label_aec" />
-
-            <Switch
-                android:id="@+id/switch_handsfree"
-                android:layout_width="match_parent"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="@string/label_handsfree" />
+                android:text="@string/label_advanced_title"
+                android:textColor="@color/rv_tx"
+                android:textSize="14.5sp"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/label_handsfree"
+                        android:textColor="@color/rv_tx"
+                        android:textSize="12.5sp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/label_handsfree_desc"
+                        android:textColor="@color/rv_tx2"
+                        android:textSize="10sp" />
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/switch_handsfree"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/label_aec"
+                        android:textColor="@color/rv_tx"
+                        android:textSize="12.5sp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/label_aec_desc"
+                        android:textColor="@color/rv_tx2"
+                        android:textSize="10sp" />
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/switch_aec"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="13dp"
+                android:layout_marginBottom="13dp"
+                android:background="@color/rv_line" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/label_trust"
+                        android:textColor="@color/rv_tx"
+                        android:textSize="12.5sp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/label_trust_desc"
+                        android:textColor="@color/rv_tx2"
+                        android:textSize="10sp" />
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/btn_clear_trust"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_iconbtn"
+                    android:minWidth="0dp"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:text="@string/btn_trust_clear"
+                    android:textAllCaps="false"
+                    android:textColor="@color/rv_red" />
+            </LinearLayout>
         </LinearLayout>
 
         <Button
@@ -149,6 +255,12 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="@string/btn_save_back" />
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/bg_brand"
+            android:text="@string/btn_save_back"
+            android:textAllCaps="false"
+            android:textColor="@color/rv_bg"
+            android:textSize="14sp"
+            android:textStyle="bold" />
     </LinearLayout>
 </ScrollView>
