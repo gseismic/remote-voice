@@ -217,6 +217,13 @@ input:focus, select:focus { border-color: rgba(242, 182, 77, 0.75); }
 .modal-overlay[hidden] { display: none; }
 .modal-dialog { width: min(440px, 100%); max-height: calc(100vh - 40px); padding: 22px; overflow: auto; border: 1px solid rgba(244, 241, 233, 0.14); border-radius: 8px; background: var(--panel); box-shadow: 0 28px 70px rgba(0, 0, 0, 0.55); display: flex; flex-direction: column; gap: 15px; }
 .modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+/* 配对二维码弹层：白底保证扫码对比度（暗色主题下 QR 必须垫白） */
+.qr-dialog { width: min(360px, 100%); align-items: center; text-align: center; }
+.qr-box { display: grid; place-items: center; padding: 14px; border-radius: 8px; background: #fff; }
+.qr-box svg { width: 248px; height: 248px; display: block; }
+.qr-hint { font-size: 12.5px; color: var(--muted); }
+.qr-secret { font-family: var(--mono, monospace); font-size: 15px; letter-spacing: 1px; }
+
 .modal-close { width: 32px; height: 32px; flex: 0 0 32px; }
 .modal-error { margin: 0; padding: 9px 10px; border-left: 2px solid var(--coral); color: var(--coral); background: rgba(245, 143, 120, 0.08); font-size: 11px; line-height: 1.45; }
 .modal-footer { display: flex; align-items: center; gap: 8px; }

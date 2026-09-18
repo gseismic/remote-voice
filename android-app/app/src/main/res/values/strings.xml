@@ -19,6 +19,9 @@
     <string name="btn_retry">重试</string>
     <string name="label_settings">设置</string>
 
+    <!-- 扫码配对 -->
+    <string name="err_no_camera_perm">未授予相机权限，无法扫码</string>
+
     <!-- 设置页 -->
     <string name="title_settings">设置</string>
     <string name="sect_server">SERVER</string>

@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 扫码配对页（设计 docs/design/qr-pairing-20260919-overview.md §4.2）：
+     上半预览+提示，下半手动输入配对码兜底（相机糊/暗/无权限时可用） -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/rv_bg">
+
+    <TextView
+        android:id="@+id/scan_tip"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="14dp"
+        android:text="对准 Mac 端「二维码」弹层，识别后自动添加并连接"
+        android:textColor="@color/rv_tx2"
+        android:textSize="12sp" />
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <SurfaceView
+            android:id="@+id/preview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <TextView
+            android:id="@+id/scan_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:text="正在启动相机…"
+            android:textColor="@color/rv_tx2"
+            android:textSize="13sp" />
+    </FrameLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="14dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingBottom="8dp"
+            android:text="扫不出来？手动输入配对码"
+            android:textColor="@color/rv_tx2"
+            android:textSize="11sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/edit_payload"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="@drawable/bg_field"
+                android:hint="rv://host:端口?s=密码"
+                android:inputType="textUri"
+                android:maxLines="1"
+                android:padding="10dp"
+                android:textColor="@color/rv_tx"
+                android:textColorHint="@color/rv_tx2"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/btn_parse_payload"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="添加" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btn_scan_cancel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="取消" />
+    </LinearLayout>
+</LinearLayout>

@@ -30,6 +30,8 @@ android {
     }
 }
 
-// 零第三方依赖：仅 Kotlin 标准库与 Android 框架 API（设计文档 §6.3）
+// 设计文档 §6.3 修订（docs/design/qr-pairing-20260919-overview.md §4.1）：
+// 主体保持零第三方依赖；唯一例外 zxing core（纯 Java、无传递依赖）用于扫码配对的 QR 解码
 dependencies {
+    implementation("com.google.zxing:core:3.5.3")
 }

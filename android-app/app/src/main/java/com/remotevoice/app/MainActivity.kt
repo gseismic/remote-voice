@@ -278,8 +278,47 @@ class MainActivity : Activity() {
                 renderDevices()
                 restartForActiveDevice()
             }
+            .setNeutralButton("扫码配对") { d, _ ->
+                d.dismiss()
+                @Suppress("DEPRECATION") // 零 androidx：用经典 startActivityForResult（设计 §4.1）
+                startActivityForResult(Intent(this, ScanActivity::class.java), REQ_SCAN)
+            }
             .setNegativeButton("取消", null)
             .show()
+    }
+
+    /** 扫码配对落地（设计 docs/design/qr-pairing-20260919-overview.md §4.3）。 */
+    private fun applyPairing(payload: String) {
+        val pairing = ConfigParser.parsePairing(payload)
+        if (pairing == null) {
+            Toast.makeText(this, "配对码无效（缺密码或地址非法）", Toast.LENGTH_LONG).show()
+            return
+        }
+        // 服务器地址与当前不同则切换（扫码即把 Mac 的 relay 地址带给本机）
+        val current = prefs.getString(KEY_SERVER, null)?.takeIf { it.isNotBlank() }
+            ?: AudioStreamService.DEFAULT_SERVER
+        val target = ConfigParser.format(ConfigParser.Parsed(pairing.host, pairing.port))
+        if (current != target) {
+            prefs.edit().putString(KEY_SERVER, target).apply()
+            Toast.makeText(this, "服务器已切换为 $target", Toast.LENGTH_LONG).show()
+        }
+        store.add(pairing.name, pairing.secret, typeOf(pairing.secret))
+        prefs.edit().putBoolean(KEY_USER_STOPPED, false).apply()
+        renderDevices()
+        restartForActiveDevice()
+        Toast.makeText(this, "已添加设备 ${pairing.name.ifBlank { "（待连接后自动命名）" }}", Toast.LENGTH_SHORT).show()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_SCAN || resultCode != RESULT_OK) return
+        val payload = data?.getStringExtra(ScanActivity.EXTRA_PAYLOAD)
+        if (payload.isNullOrBlank()) {
+            Toast.makeText(this, "扫码结果为空", Toast.LENGTH_SHORT).show()
+            return
+        }
+        applyPairing(payload)
     }
 
     private fun showEditDeviceDialog(d: DeviceStore.Device) {
@@ -425,6 +464,7 @@ class MainActivity : Activity() {
         const val KEY_USER_STOPPED = "user_stopped"
         const val KEY_SERVER = "server"
         const val REQ_PERMS = 1
+        const val REQ_SCAN = 2
 
         // V3.2 tokens（values/colors.xml 同源；代码内着色用）
         val COLOR_GREEN = 0xFF3FB950.toInt()

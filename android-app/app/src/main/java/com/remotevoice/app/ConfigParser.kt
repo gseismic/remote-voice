@@ -11,7 +11,16 @@ object ConfigParser {
         val port: Int,
     )
 
+    /** 配对码解析结果（扫码配对，设计 docs/design/qr-pairing-20260919-overview.md §2）。 */
+    data class Pairing(
+        val host: String,
+        val port: Int,
+        val secret: String,
+        val name: String,
+    )
+
     private const val DEFAULT_PORT = 9432
+
     fun parse(raw: String): Parsed? {
         var value = raw.trim()
         if (value.startsWith("rv://", ignoreCase = true)) {
@@ -24,6 +33,48 @@ object ConfigParser {
         if (queryIndex >= 0) return null
         val endpoint = parseAuthority(authority) ?: return null
         return Parsed(endpoint.first, endpoint.second)
+    }
+
+    /**
+     * 配对码解析：rv://<host>[:<port>]?s=<密码>&n=<设备名>。
+     * `s` 必填；`n` 选填（URL 解码，UTF-8）；未知 query 参数忽略。
+     * 与 [parse] 分开：手填地址不允许带 query 的既有语义不变。
+     */
+    fun parsePairing(raw: String): Pairing? {
+        var value = raw.trim()
+        if (value.startsWith("rv://", ignoreCase = true)) {
+            value = value.substring(5)
+        }
+        if (value.isEmpty() || value.any { it.isWhitespace() }) return null
+
+        val queryIndex = value.indexOf('?')
+        if (queryIndex < 0) return null
+        val authority = value.substring(0, queryIndex)
+        val query = value.substring(queryIndex + 1)
+
+        var secret = ""
+        var name = ""
+        for (pair in query.split('&')) {
+            if (pair.isEmpty()) continue
+            val eq = pair.indexOf('=')
+            val key = if (eq < 0) pair else pair.substring(0, eq)
+            // 值按 + 为空格的表单规则还原，再 URL 解码；解码失败视为无效配对码
+            val rawValue = if (eq < 0) "" else pair.substring(eq + 1)
+            val decoded = try {
+                java.net.URLDecoder.decode(rawValue.replace("+", "%20"), Charsets.UTF_8)
+            } catch (_: IllegalArgumentException) {
+                return null
+            }
+            when (key) {
+                "s" -> secret = decoded
+                "n" -> name = decoded
+                else -> {} // 未知参数忽略（向前兼容）
+            }
+        }
+        if (secret.isEmpty()) return null
+
+        val endpoint = parseAuthority(authority) ?: return null
+        return Pairing(endpoint.first, endpoint.second, secret, name)
     }
 
     /** 将解析结果格式化为不会歧义的服务器地址，尤其是 IPv6。 */

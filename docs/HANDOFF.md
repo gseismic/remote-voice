@@ -112,6 +112,12 @@ Linux 服务器中继，写入 Mac 的 BlackHole 虚拟声卡**，使任意 Mac 
 - 信任模型：整张证书 DER 的 SHA-256 hex = 内部 TOFU，按 `host:port` 隔离（本地/远程
   两份信任记录互不污染）
 - 心跳：客户端 10s PING / 40s 读超时；重连指数退避封顶 30s
+- 扫码配对载荷（PLAN-023）：`rv://<host>[:<port>]?s=<密码>&n=<设备名>`（n UTF-8
+  percent-encoding）；Mac 端临时密码区「二维码」出码（永久密码 QR 未做，需 Rust 读
+  Keychain）；Android「＋ 添加→扫码配对」解析落地（服务器切换+添加+自动重连），
+  zxing:core 3.5.3 为唯一 maven 依赖（零依赖约束修订，走腾讯 maven 镜像——开发机直连
+  Maven Central 不通）
+
 - 认证：v3 Mac 设备身份（server 存 SHA-256(device_key)）→ REGISTER 秘密哈希；
   手机只带规范化秘密的 SHA-256 hex
 - UI V3.2 设计决定（实施界面时必须遵守）：仅保留公网连接（单服务器地址）、

@@ -41,6 +41,9 @@
             <button class="button button-quiet" id="regenerate-temp" title="重新生成临时密码">
               <i data-lucide="refresh-cw" aria-hidden="true"></i><span>重新生成</span>
             </button>
+            <button class="button button-quiet" id="qr-temp" title="出示配对二维码（手机扫码添加本机）">
+              <i data-lucide="qr-code" aria-hidden="true"></i><span>二维码</span>
+            </button>
           </div>
           <div class="signal-meta" aria-live="polite">
             <span id="connection-detail">等待连接</span>
@@ -218,7 +221,25 @@
         </div>
       </div>
     </div>
+    <!-- 配对二维码弹层：展示 rv:// 载荷（服务器+临时密码+设备名），手机扫码一键添加 -->
+    <div class="modal-overlay" id="qr-overlay" role="dialog" aria-modal="true" aria-labelledby="qr-title" hidden>
+      <div class="modal-dialog qr-dialog">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">PAIRING QR</p>
+            <h2 id="qr-title">配对二维码</h2>
+          </div>
+          <button class="icon-button modal-close" id="close-qr" title="关闭" aria-label="关闭配对二维码">
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
+        </div>
+        <div class="qr-box" id="qr-box" aria-label="配对二维码"></div>
+        <p class="qr-hint">手机端「＋ 添加 → 扫码配对」对准本二维码；内含服务器地址与临时密码</p>
+        <p class="qr-secret" id="qr-secret"></p>
+      </div>
+    </div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/vendor/qrcode.js"></script>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

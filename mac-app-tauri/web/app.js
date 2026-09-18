@@ -257,6 +257,14 @@ function render(next) {
       : status === "bridged" ? "手机已连接" : "手机未连接",
   );
   setText($("temp-secret"), state.temp_secret || "--------");
+  // 配对二维码可用性：需要临时密码 + 可解析的服务器地址（设计 docs/design/qr-pairing-20260919-overview.md §3）
+  const qrReady = Boolean(
+    state.temp_secret && state.temp_secret !== "--------" && pairingServerPart(),
+  );
+  if ($("qr-temp").disabled !== !qrReady) $("qr-temp").disabled = !qrReady;
+  $("qr-temp").title = pairingServerPart()
+    ? "出示配对二维码（手机扫码添加本机）"
+    : "先在连接设置里填写服务器地址";
   setText($("permanent-state"), state.permanent_enabled ? "已启用" : "未设置");
   const permanentEnabled = state.permanent_enabled ? "true" : "false";
   if ($("permanent-state").dataset.enabled !== permanentEnabled) {
@@ -344,6 +352,80 @@ async function runAction(action, successMessage = "已完成") {
     showToast(commandError(error), "error");
     return null;
   }
+}
+
+// ---- 配对二维码（设计 docs/design/qr-pairing-20260919-overview.md §2/§3）----
+
+/** 归一化配置里的服务器地址为 rv:// 的 authority 部分（host[:port]）；不可解析返回空串。 */
+function pairingServerPart() {
+  let s = (state.server || "").trim();
+  if (s.toLowerCase().startsWith("rv://")) s = s.slice(5);
+  s = s.split("?")[0].trim();
+  // 与后端 parse_server 同规则的轻量校验：非空、无空白、无斜杠
+  if (!s || /\s/.test(s) || s.includes("/")) return "";
+  return s;
+}
+
+/** 组装配对载荷：rv://<host>[:<port>]?s=<密码>&n=<设备名> */
+function buildPairingUri(secret) {
+  const server = pairingServerPart();
+  if (!server || !secret) return "";
+  let uri = `rv://${server}?s=${encodeURIComponent(secret)}`;
+  if (state.name && state.name.trim()) {
+    uri += `&n=${encodeURIComponent(state.name.trim())}`;
+  }
+  return uri;
+}
+
+/** 用 vendor/qrcode.js 生成模块矩阵（版本自动：从 v1 起尝试），渲染为 SVG。 */
+function renderPairingQr(uri) {
+  // 中文设备名需要 UTF-8 字节模式（库默认单字节编码会出错）
+  window.qrcode.stringToBytes = window.qrcode.stringToBytesFuncs["UTF-8"];
+  let qr = null;
+  for (let version = 1; version <= 10 && !qr; version++) {
+    try {
+      const candidate = window.qrcode(version, "M");
+      candidate.addData(uri, "Byte");
+      candidate.make();
+      qr = candidate;
+    } catch {
+      // 容量不足，试更大版本
+    }
+  }
+  if (!qr) return null;
+  const count = qr.getModuleCount();
+  const cells = [];
+  for (let y = 0; y < count; y++) {
+    for (let x = 0; x < count; x++) {
+      if (qr.isDark(y, x)) {
+        cells.push(`<rect x="${x}" y="${y}" width="1" height="1"/>`);
+      }
+    }
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${count} ${count}" ` +
+    `shape-rendering="crispEdges"><rect width="${count}" height="${count}" fill="#fff"/>` +
+    `<g fill="#111">${cells.join("")}</g></svg>`;
+}
+
+function showPairingQr() {
+  const uri = buildPairingUri(state.temp_secret);
+  if (!uri) {
+    showToast(state.temp_secret === "--------" ? "临时密码尚未生成" : "请先在连接设置里填写服务器地址", "error");
+    return;
+  }
+  const svg = renderPairingQr(uri);
+  if (!svg) {
+    showToast("二维码生成失败", "error");
+    return;
+  }
+  $("qr-box").innerHTML = svg;
+  setText($("qr-secret"), state.temp_secret);
+  $("qr-overlay").hidden = false;
+}
+
+function closePairingQr() {
+  $("qr-overlay").hidden = true;
+  $("qr-box").innerHTML = "";
 }
 
 async function copyTempSecret() {
@@ -439,6 +521,11 @@ function bindEvents() {
   $("copy-temp").addEventListener("click", copyTempSecret);
   $("regenerate-temp").addEventListener("click", () =>
     runAction(() => call("regenerate_temp"), "临时密码已更新"));
+  $("qr-temp").addEventListener("click", showPairingQr);
+  $("close-qr").addEventListener("click", closePairingQr);
+  $("qr-overlay").addEventListener("click", (event) => {
+    if (event.target === $("qr-overlay")) closePairingQr();
+  });
   $("connect-toggle").addEventListener("click", toggleConnection);
   // 右上状态胶囊点按 = 连接/断开/重试（V3.2 原型交互，与底部按钮同语义）
   $("status-cluster").addEventListener("click", toggleConnection);

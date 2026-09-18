@@ -186,3 +186,17 @@
   模拟按住 PTT 收 TALK 0x01→50 帧 AUDIO→0x00，全程进程存活。修复版已装机，prefs 还原
   公网默认，harness 已清理。遗留：主线程建 AudioRecord 微卡（方案 C）未做，属可选优化。
   文件：PLAN-022-android-add-connection-crash.md / PLAN-022-android-add-connection-crash-OUTCOME.md。
+
+- **2026-09-19 01:55** | PLAN-023 扫码配对——Mac 出二维码、手机扫码一键添加
+  摘要：新功能。载荷 `rv://<host>[:<port>]?s=<密码>&n=<设备名>`（设计文档含方案比较与
+  2 轮自查）。Mac 端纯前端：内嵌 qrcode-generator 2.0.4（MIT，web/public/vendor，Vite
+  publicDir 才会被拷贝）、临时密码区「二维码」按钮 + 模态白底 SVG、服务器未配/无密码时
+  禁用；Rust 零改动。Android 端：唯一 maven 例外 zxing:core 3.5.3（腾讯镜像拉取，零依赖
+  约束修订记录于设计文档 §4.1）、ConfigParser.parsePairing（parse 原语义不变）、新增
+  ScanActivity（Camera2+YUV→zxing 仅 QR，8fps 节流，手动输入配对码兜底）、添加对话框
+  「扫码配对」→ applyPairing（服务器切换+添加设备+自动重连）。验证：zbarimg 离线闭环
+  断言、pnpm build、assembleDebug、真机 e2e（手动输入路径全链路：服务器切换→添加→连接
+  →已就绪·TestMac 自动命名→无崩溃）。待验收：相机实拍扫码（需真人对准屏幕 10 秒）。
+  遗留：永久密码 QR 需 Rust 命令读 Keychain（前端无明文），下次 Mac 构建时做。
+  文件：PLAN-023-qr-pairing.md / PLAN-023-qr-pairing-OUTCOME.md，
+  设计 docs/design/qr-pairing-20260919-overview.md。
