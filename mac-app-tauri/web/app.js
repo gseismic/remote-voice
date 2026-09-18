@@ -207,6 +207,8 @@ function renderAudioMeter(status) {
   } else {
     audiost.textContent = "未连接";
   }
+  // 手动解除兜底：模拟 Fn 期间可见（断线悬空时点按或按一次物理 Fn 均可放下）
+  $("release-fn").hidden = !(state.talking && state.dictation_enabled);
 }
 
 function render(next) {
@@ -261,7 +263,7 @@ function renderCountdown() {
     expiryRefreshAttempt !== state.temp_exp
   ) {
     expiryRefreshAttempt = state.temp_exp;
-    runAction(() => call("regenerate_temp"), "临时秘密已自动更新");
+    runAction(() => call("regenerate_temp"), "临时密码已自动更新");
   }
 }
 
@@ -290,12 +292,12 @@ async function runAction(action, successMessage = "已完成") {
 
 async function copyTempSecret() {
   if (!state.temp_secret || state.temp_secret === "--------") {
-    showToast("临时秘密尚未生成", "error");
+    showToast("临时密码尚未生成", "error");
     return;
   }
   try {
     await navigator.clipboard.writeText(state.temp_secret);
-    showToast("临时秘密已复制");
+    showToast("临时密码已复制");
   } catch {
     const input = document.createElement("textarea");
     input.value = state.temp_secret;
@@ -305,7 +307,7 @@ async function copyTempSecret() {
     input.select();
     document.execCommand("copy");
     input.remove();
-    showToast("临时秘密已复制");
+    showToast("临时密码已复制");
   }
 }
 
@@ -380,7 +382,7 @@ async function saveSettings() {
 function bindEvents() {
   $("copy-temp").addEventListener("click", copyTempSecret);
   $("regenerate-temp").addEventListener("click", () =>
-    runAction(() => call("regenerate_temp"), "临时秘密已更新"));
+    runAction(() => call("regenerate_temp"), "临时密码已更新"));
   $("connect-toggle").addEventListener("click", toggleConnection);
   // 右上状态胶囊点按 = 连接/断开/重试（V3.2 原型交互，与底部按钮同语义）
   $("status-cluster").addEventListener("click", toggleConnection);
@@ -396,6 +398,8 @@ function bindEvents() {
     if (event.key === "Escape" && !$("settings-overlay").hidden) closeSettings();
   });
   $("save-settings").addEventListener("click", saveSettings);
+  $("release-fn").addEventListener("click", () =>
+    runAction(() => call("release_fn"), "已放下 Fn"));
   $("clear-trust").addEventListener("click", () => {
     if (!window.confirm("清除当前服务器信任后，下一次连接会重新接受服务器证书。继续吗？")) {
       return;
@@ -411,15 +415,15 @@ function bindEvents() {
   $("set-permanent").addEventListener("click", async () => {
     const secret = $("permanent-input").value.trim();
     if (!secret) {
-      showToast("请输入永久秘密", "error");
+      showToast("请输入永久密码", "error");
       $("permanent-input").focus();
       return;
     }
-    const next = await runAction(() => call("set_permanent", { secret }), "永久秘密已启用");
+    const next = await runAction(() => call("set_permanent", { secret }), "永久密码已启用");
     if (next) $("permanent-input").value = "";
   });
   $("clear-permanent").addEventListener("click", () =>
-    runAction(() => call("clear_permanent"), "永久秘密已停用"));
+    runAction(() => call("clear_permanent"), "永久密码已停用"));
 }
 
 async function boot() {

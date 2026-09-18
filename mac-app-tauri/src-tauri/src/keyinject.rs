@@ -77,6 +77,16 @@ mod ffi {
     pub const FN_FLAG: u64 = 0x20;
     /// kCGHIDEventTap
     pub const K_CG_HID_EVENT_TAP: u32 = 0;
+    /// kCGEventKeyUp（CGEventType）
+    pub const K_CG_EVENT_KEY_UP: u32 = 11;
+    /// kCGKeyboardEventKeycode（CGEventField）
+    pub const K_KEYBOARD_EVENT_KEYCODE: i64 = 9;
+    /// kCGHeadInsertEventTap / kCGEventTapOptionListenOnly
+    pub const K_HEAD_INSERT: u32 = 0;
+    pub const K_TAP_LISTEN_ONLY: u32 = 1;
+
+    pub type TapCallback =
+        extern "C" fn(*mut c_void, u32, *mut c_void, *mut c_void) -> *mut c_void;
 
     extern "C" {
         fn CGEventCreateKeyboardEvent(
@@ -86,8 +96,27 @@ mod ffi {
         ) -> *mut c_void;
         fn CGEventSetFlags(event: *mut c_void, flags: u64);
         fn CGEventPost(tap: u32, event: *mut c_void);
+        fn CGEventGetIntegerValueField(event: *mut c_void, field: i64) -> i64;
+        fn CGEventTapCreate(
+            tap: u32,
+            place: u32,
+            options: u32,
+            event_mask: u64,
+            callback: TapCallback,
+            user_info: *mut c_void,
+        ) -> *mut c_void;
+        fn CGEventTapEnable(tap: *mut c_void, enable: bool);
+        fn CFMachPortCreateRunLoopSource(
+            allocator: *mut c_void,
+            port: *mut c_void,
+            order: i64,
+        ) -> *mut c_void;
+        fn CFRunLoopAddSource(rl: *mut c_void, source: *mut c_void, mode: *mut c_void);
+        fn CFRunLoopGetCurrent() -> *mut c_void;
+        fn CFRunLoopRun();
         fn CFRelease(cf: *mut c_void);
         fn AXIsProcessTrusted() -> bool;
+        static kCFRunLoopCommonModes: *mut c_void;
     }
 
     pub fn accessibility_trusted() -> bool {
@@ -105,6 +134,69 @@ mod ffi {
             CFRelease(event);
         }
         Ok(())
+    }
+
+    /// 监听物理 Fn 键抬起事件；tap 在专用线程的 CFRunLoop 上运行。
+    /// 返回 Err 表示 tap 创建失败（多为辅助功能权限未授予）。
+    pub fn spawn_fn_keyup_listener(
+        injector: std::sync::Arc<crate::keyinject::KeyInjector>,
+    ) -> Result<(), String> {
+        unsafe {
+            let user_info = std::sync::Arc::into_raw(injector) as *mut c_void;
+            // 只监听 keyUp（掩码 1 << 11）：合成 down 也会进入事件流，
+            // 若监听 down 会把自己刚按下的 Fn 误放；抬起触发 + release 幂等可收敛
+            let tap = CGEventTapCreate(
+                K_CG_HID_EVENT_TAP,
+                K_HEAD_INSERT,
+                K_TAP_LISTEN_ONLY,
+                1_u64 << K_CG_EVENT_KEY_UP,
+                fn_keyup_tap_callback,
+                user_info,
+            );
+            if tap.is_null() {
+                // 失败路径回收 Arc，避免泄漏
+                drop(std::sync::Arc::from_raw(user_info as *const crate::keyinject::KeyInjector));
+                return Err(
+                    "无法监听物理 Fn 键（需要辅助功能权限）：手动解除请用界面的「放下 Fn」按钮"
+                        .to_string(),
+                );
+            }
+            let source = CFMachPortCreateRunLoopSource(std::ptr::null_mut(), tap, 0);
+            if source.is_null() {
+                CFRelease(tap);
+                drop(std::sync::Arc::from_raw(user_info as *const crate::keyinject::KeyInjector));
+                return Err("创建 Fn 监听 runloop source 失败".to_string());
+            }
+            std::thread::Builder::new()
+                .name("fn-keyup-tap".to_string())
+                .spawn(move || unsafe {
+                    let rl = CFRunLoopGetCurrent();
+                    CFRunLoopAddSource(rl, source, kCFRunLoopCommonModes);
+                    CGEventTapEnable(tap, true);
+                    CFRunLoopRun();
+                })
+                .map_err(|error| format!("无法启动 Fn 监听线程: {error}"))?;
+        }
+        Ok(())
+    }
+
+    extern "C" fn fn_keyup_tap_callback(
+        _proxy: *mut c_void,
+        tap_type: u32,
+        event: *mut c_void,
+        user_info: *mut c_void,
+    ) -> *mut c_void {
+        if tap_type == K_CG_EVENT_KEY_UP && !event.is_null() && !user_info.is_null() {
+            unsafe {
+                let key_code = CGEventGetIntegerValueField(event, K_KEYBOARD_EVENT_KEYCODE);
+                if key_code == i64::from(K_VK_FUNCTION) {
+                    let injector = &*(user_info as *const crate::keyinject::KeyInjector);
+                    // 幂等：模拟未按住时无动作；悬空时即放下（用户手动解除）
+                    injector.release();
+                }
+            }
+        }
+        event
     }
 }
 
@@ -162,6 +254,22 @@ fn double_tap() -> Result<(), String> {
     ffi::post_fn_key(true)?;
     std::thread::sleep(std::time::Duration::from_millis(30));
     ffi::post_fn_key(false)
+}
+
+/// 安装物理 Fn 键监听（应用启动时调用一次）：悬空状态下按一次物理 Fn 即放下。
+/// 非 macOS 平台为空实现。
+pub fn install_fn_release_tap(injector: std::sync::Arc<KeyInjector>) -> Result<(), String> {
+    install_fn_release_tap_impl(injector)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn install_fn_release_tap_impl(_injector: std::sync::Arc<KeyInjector>) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn install_fn_release_tap_impl(injector: std::sync::Arc<KeyInjector>) -> Result<(), String> {
+    ffi::spawn_fn_keyup_listener(injector)
 }
 
 #[cfg(test)]

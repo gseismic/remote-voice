@@ -2,7 +2,7 @@ use crate::audio::{self, AudioSink, CpalSink, SinkStats};
 use crate::config::{self, AppConfig};
 use crate::history::{self, HistoryEntry};
 use crate::identity;
-use crate::keyinject::{InjectMode, KeyInjector};
+use crate::keyinject::{install_fn_release_tap, InjectMode, KeyInjector};
 use crate::relay::{Registration, RelayClient, RelayClientOptions, RelayEvent};
 use crate::secrets;
 use crate::storage::SystemKeychain;
@@ -101,7 +101,7 @@ pub struct AppController {
     client: Mutex<Option<Arc<RelayClient>>>,
     thread: Mutex<Option<JoinHandle<()>>>,
     app: Mutex<Option<AppHandle>>,
-    injector: KeyInjector,
+    injector: Arc<KeyInjector>,
     inject_warned: std::sync::atomic::AtomicBool,
 }
 
@@ -151,7 +151,7 @@ impl AppController {
             client: Mutex::new(None),
             thread: Mutex::new(None),
             app: Mutex::new(None),
-            injector: KeyInjector::new(),
+            injector: Arc::new(KeyInjector::new()),
             inject_warned: std::sync::atomic::AtomicBool::new(false),
             config_dir,
         })
@@ -205,7 +205,7 @@ impl AppController {
             perm_hash: self
                 .perm_hash
                 .lock()
-                .map_err(|_| CommandError::new("state-lock", "永久秘密状态锁已损坏"))?
+                .map_err(|_| CommandError::new("state-lock", "永久密码状态锁已损坏"))?
                 .clone(),
             temp_hash: secrets::hash_of(&state.temp_secret),
             temp_exp: state.temp_exp,
@@ -312,7 +312,7 @@ impl AppController {
             return Err(CommandError::new("invalid-audio-device", "音频设备名无效"));
         }
         if !matches!(temp_duration, 600 | 3600 | 28_800 | 86_400) {
-            return Err(CommandError::new("invalid-expiry", "临时秘密有效期无效"));
+            return Err(CommandError::new("invalid-expiry", "临时密码有效期无效"));
         }
         if dictation_mode != "hold" && dictation_mode != "double" {
             return Err(CommandError::new(
@@ -396,7 +396,7 @@ impl AppController {
             state.temp_exp = exp;
         });
         self.update_registration();
-        self.add_event("info", "已重新生成临时秘密");
+        self.add_event("info", "已重新生成临时密码");
         self.snapshot()
     }
 
@@ -421,12 +421,12 @@ impl AppController {
             let mut hash = self
                 .perm_hash
                 .lock()
-                .map_err(|_| CommandError::new("state-lock", "永久秘密状态锁已损坏"))?;
+                .map_err(|_| CommandError::new("state-lock", "永久密码状态锁已损坏"))?;
             *hash = secrets::hash_of(&secret);
         }
         self.update_state(|state| state.permanent_enabled = true);
         self.update_registration();
-        self.add_event("info", "永久秘密已启用");
+        self.add_event("info", "永久密码已启用");
         self.snapshot()
     }
 
@@ -450,12 +450,12 @@ impl AppController {
             let mut hash = self
                 .perm_hash
                 .lock()
-                .map_err(|_| CommandError::new("state-lock", "永久秘密状态锁已损坏"))?;
+                .map_err(|_| CommandError::new("state-lock", "永久密码状态锁已损坏"))?;
             hash.clear();
         }
         self.update_state(|state| state.permanent_enabled = false);
         self.update_registration();
-        self.add_event("info", "永久秘密已停用");
+        self.add_event("info", "永久密码已停用");
         self.snapshot()
     }
 
@@ -505,6 +505,14 @@ impl AppController {
             self.connect_inner()?;
         }
         self.snapshot()
+    }
+
+    /// 手动放下 Fn（界面按钮 / 物理 Fn 抬起之外的确定性兜底）。
+    /// 解除后保持释放，直到手机新一轮按下（TALK true）才恢复模拟。
+    pub fn manual_release(&self) {
+        self.injector.release();
+        self.update_state(|state| state.talking = false);
+        self.add_event("info", "已手动放下 Fn；手机再次按下说话时会自动恢复");
     }
 
     fn persist_temp_if_needed(
@@ -840,6 +848,12 @@ pub fn list_audio_devices(
 }
 
 #[tauri::command]
+pub fn release_fn(state: State<'_, Arc<AppController>>) -> Result<AppState, CommandError> {
+    state.manual_release();
+    state.snapshot()
+}
+
+#[tauri::command]
 pub fn clear_history(state: State<'_, Arc<AppController>>) -> Result<AppState, CommandError> {
     state.clear_history()
 }
@@ -862,6 +876,10 @@ pub fn run_tauri() {
         .manage(controller)
         .setup(move |app| {
             setup_controller.attach_app(app.handle().clone());
+            // 物理 Fn 抬起即可手动放下悬空的模拟 Fn；失败仅提示（界面按钮仍可用）
+            if let Err(message) = install_fn_release_tap(Arc::clone(&setup_controller.injector)) {
+                setup_controller.add_event("warning", message);
+            }
             if setup_controller
                 .snapshot()
                 .map(|state| !state.server.trim().is_empty())
@@ -881,7 +899,8 @@ pub fn run_tauri() {
             clear_permanent,
             list_audio_devices,
             clear_history,
-            clear_server_trust
+            clear_server_trust,
+            release_fn
         ])
         .run(tauri::generate_context!());
     if let Err(error) = run {

@@ -202,6 +202,9 @@ input:focus, select:focus { border-color: rgba(242, 182, 77, 0.75); }
 .meter.off i { animation: none; height: 6%; background: var(--wave-off, #27303d); }
 .audiost { margin: 8px 0 0; color: var(--muted); font-size: 11px; }
 .audiost b { color: var(--green); font-weight: 600; }
+.audiost-row { margin-top: 2px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.audiost-row .audiost { flex: 1; min-width: 0; }
+#release-fn { flex-shrink: 0; }
 
 /* 永久秘密折叠 */
 .perm-body { display: none; }
