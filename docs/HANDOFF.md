@@ -1,6 +1,6 @@
 # 交接文档 (HANDOFF)
 
-更新时间：2026-09-18 04:30 (UTC+8)
+更新时间：2026-09-18 05:15 (UTC+8)
 
 ## 项目背景（零上下文可读）
 
@@ -11,7 +11,7 @@ Linux 服务器中继，写入 Mac 的 BlackHole 虚拟声卡**，使任意 Mac 
 - 目标原始记录：`GOAL.md`
 - 设计文档目录：`docs/design/`（协议、多 Mac 自助入网、局域网发现等）
 - UI 设计稿：`docs/ui-design/`（v1/v2 历史，**v3 为当前待评审的可交互原型**）
-- 计划与结果：`docs/dev/`（PLAN-XXX / -OUTCOME + INDEX.md，已执行至 PLAN-014 计划）
+- 计划与结果：`docs/dev/`（PLAN-XXX / -OUTCOME + INDEX.md；PLAN-014 已撤销，见其文件头）
 - 评审文档：`docs/dev/` 下 REVIEW-* 文件
 - 协议现状：v3（Mac 设备身份认证 + 秘密哈希注册表 + 多 Mac 1:1 桥接 + IP 限速防爆破），
   v1/v2 已淘汰（v2 regkey 仅作 server 可选兼容）
@@ -34,7 +34,7 @@ Linux 服务器中继，写入 Mac 的 BlackHole 虚拟声卡**，使任意 Mac 
 2. **PLAN-013（局域网发现 + 双地址 + 归档）**：
    - server 新增 UDP 局域网发现应答（探测串 `RV-DISCOVER-v1`，同 `-addr` 端口，同源 1s 节流，
      `-discovery/-name` 参数）；
-   - Android 设置页手动扫描 + 本地/远程双地址（当时为"本地优先自动"语义，后被 V3.1 推翻，见下）；
+   - Android 设置页手动扫描 + 本地/远程双地址（后被 V3.2 决定移除，见下，实施待做）；
    - Python Mac 客户端归档 `backup/mac-app/`，Tauri 成为唯一 Mac 客户端；
    - **部署到公网 118.193.40.160**（用户指定）：源码 rsync 至 `/home/ubuntu/services/`，
      服务器 Go 1.22.2 构建，systemd 服务 `remote-voice-server` 已启动；
@@ -42,23 +42,23 @@ Linux 服务器中继，写入 Mac 的 BlackHole 虚拟声卡**，使任意 Mac 
 3. **三端联合本地测试（部分完成）**：本机起 server（`:9432`，发现开启），Linux 版 Tauri 客户端
    充当 Mac 端 + 真实小米手机（`adb reverse` USB 转发），三端桥接推流 **500 帧/10s（精确 50fps）**
    连续稳定。注意：该联测中 Mac 端是 Linux 临时替身，**真 Mac 客户端联合测试未做**。
-4. **UI V3.1 可交互原型（待用户评审确认）**：`docs/ui-design/v3/`（index/android/mac 三个 HTML），
-   全部按钮可点。V3.1 设计决定（用户拍板，实施时必须遵守）：
-   - **本地/远程 = 两条并行链路、两个分组，用户显式选择、随时切换**；推翻 PLAN-013 的
-     "本地优先自动回落"（剥夺选择权，被用户否决）；
-   - **只有选「本地」链路才扫描**（扫描结果只填本地组地址）；远程直连配置地址，永不扫描；
-   - 局域网多台 server → **蓝牙式选择列表**：在线可选，历史连接但不在线的灰显标注「离线」；
-   - 秘密配对决定接哪台 Mac（扫到的是中继 server，不是 Mac 本身）。
-5. **PLAN-014（连接前自动扫描，计划已写、未实施）**：
-   `docs/dev/PLAN-014-auto-lan-discovery.md` —— 两端按 V3.1 决定实施"连接时自动扫描"，
-   含 Rust `discover.rs` 与 Android 服务扫描的行为定义。**UI 评审通过后即可实施**。
+
 
 ### 遗留问题（按优先级）
 
 1. **云安全组放行（用户操作，卡住公网验收）**：118.193.40.160 的云控制台放行入站
    **TCP 9432**（必须）+ **UDP 9432**（仅局域网扫描需要，公网可不放）。实测公网 TCP/UDP 均
    被安全组拦截；服务器侧监听正常、主机无防火墙（ufw inactive、iptables ACCEPT）。
-2. **UI V3.1 评审**：用户确认原型后实施两端真实界面 + PLAN-014 行为。
+2. **UI V3.2 评审 → 实施简化**：`docs/ui-design/v3/` 三个可交互原型（android/mac/index）已改为
+   纯公网单链路，待用户最终确认后实施：① 两端真实界面按 V3.2 稿落地；② Android 代码简化——
+   移除 LanDiscovery/KEY_SERVER_LOCAL/RelayClient 多端点（恢复单一服务器地址）；③ server
+   `-discovery` 默认已改为 false（部署机需重新 rsync+构建+重启生效）。
+4. **UI V3.2 可交互原型（待用户评审确认）**：`docs/ui-design/v3/`（index/android/mac 三个 HTML，
+   全部按钮可点）。V3.2 设计决定（用户拍板，实施时必须遵守）：
+   - **只保留公网连接**：本地局域网仅用于测试——测试时把服务器地址填成局域网 IP 即可，
+     不需要"本地链路"这个产品概念（V3.1 的双链路分组/扫描/蓝牙式列表全部移除）；
+   - server 的 UDP 发现应答降级为本地测试工具（`-discovery` 默认关，仅本地测试显式开启）；
+   - 秘密配对决定接哪台 Mac；历史连接信息（设备名等）只来自既往成功连接的本地记录。
 3. **真 Mac 端三端联测**：Mac 上构建 Tauri（pnpm），连 `192.168.1.103:9432`（本机 server）或
    公网 server，手机连家里 Wi-Fi 用扫描选本地 server；替换手机端预置的旧秘密（`2TWU-KF8U`
    属于已弃用的 Linux 临时客户端注册的设备，Mac 新客户端会生成新秘密）。
@@ -103,12 +103,12 @@ Linux 服务器中继，写入 Mac 的 BlackHole 虚拟声卡**，使任意 Mac 
 - 心跳：客户端 10s PING / 40s 读超时；重连指数退避封顶 30s
 - 认证：v3 Mac 设备身份（server 存 SHA-256(device_key)）→ REGISTER 秘密哈希；
   手机只带规范化秘密的 SHA-256 hex
-- UI V3.1 设计决定（实施界面时必须遵守）：双链路并行可选、仅本地扫描、
-  蓝牙式多服务器列表 + 历史离线标注（详见 `docs/ui-design/v3/index.html` 设计决定区）
+- UI V3.2 设计决定（实施界面时必须遵守）：仅保留公网连接（单服务器地址）、
+  局域网发现已降级为测试工具（详见 `docs/ui-design/v3/index.html` 设计决定区）
 
 ## 历史脉络（详见 docs/dev/INDEX.md）
 
 PLAN-001 MVP → 002 review 修复 → 003 可观测性+Android UX → 004/005 协议 v2 →
 006 仓库重组 → 007 一键连接 → 008 TOFU 免输指纹 → 009 多 Mac 自助入网(v3) →
 010 Rust/Tauri 客户端 → 011 Android 连接修复 → 012 pnpm 统一 → 013 局域网发现+双地址+
-归档 Python+公网部署 → 014 连接前自动扫描（**计划完成待实施**）。
+归档 Python+公网部署 → 014 连接前自动扫描（**已撤销**：V3.2 只保留公网）。

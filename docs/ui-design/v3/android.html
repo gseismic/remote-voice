@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>remote-voice · Android 交互原型 · V3</title>
+<title>remote-voice · Android 交互原型 · V3.2 纯公网</title>
 <style>
 :root{
   --bg:#0e1116; --panel:#161b22; --card:#1a212b; --line:#2a313c;
@@ -67,7 +67,7 @@ body{
 .gear{width:38px;height:38px;border-radius:10px;border:1px solid var(--line);background:rgba(20,26,35,.82);
   display:flex;align-items:center;justify-content:center;color:var(--tx2);cursor:pointer}
 .gear:active{color:var(--amber)}
-.conn{flex:none;margin:12px 22px 0;display:flex;align-items:center;gap:9px;
+.conn{flex:none;margin:14px 22px 0;display:flex;align-items:center;gap:9px;
   background:rgba(20,26,35,.82);border:1px solid var(--line);border-radius:999px;
   padding:10px 12px 10px 17px;font-size:13.5px;cursor:pointer;user-select:none}
 .conn:active{border-color:#3d4654}
@@ -82,33 +82,7 @@ body{
 .conn .st{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .conn .sub{font:10.5px var(--mono);color:var(--tx2);margin-top:2px}
 
-/* ===== 链路选择：本地/远程 两个并行分组（v3.1 用户显式选择） ===== */
-.lineseg{flex:none;display:flex;gap:8px;margin:10px 22px 0}
-.seg{flex:1;display:flex;flex-direction:column;gap:3px;border:1px solid var(--line);border-radius:12px;
-  background:rgba(20,26,35,.82);padding:9px 13px;cursor:pointer;user-select:none}
-.seg b{font-size:12.5px;display:flex;align-items:center;gap:6px}
-.seg small{font:9.5px var(--mono);color:var(--tx2);letter-spacing:.4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.seg .rd{width:12px;height:12px;border-radius:50%;border:1.5px solid #4d5561;flex:none;margin-left:auto}
-.seg.on.lan{border-color:#274a2d;background:rgba(63,185,80,.07)}
-.seg.on.lan b{color:var(--green)}
-.seg.on.lan .rd{border-color:var(--green);background:radial-gradient(circle,var(--green) 42%,transparent 47%)}
-.seg.on.wan{border-color:#2b4a68;background:rgba(88,166,255,.07)}
-.seg.on.wan b{color:var(--blue)}
-.seg.on.wan .rd{border-color:var(--blue);background:radial-gradient(circle,var(--blue) 42%,transparent 47%)}
-
 .center{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;position:relative}
-.radar{position:relative;width:190px;height:190px;border-radius:50%;display:none;
-  background:radial-gradient(circle,rgba(88,166,255,.05),transparent 70%)}
-.radar::before,.radar::after{content:"";position:absolute;border-radius:50%;border:1px solid rgba(88,166,255,.18)}
-.radar::before{inset:0}.radar::after{inset:34px;border-color:rgba(88,166,255,.12)}
-.radar .sweep{position:absolute;inset:0;border-radius:50%;
-  background:conic-gradient(from 0deg,rgba(88,166,255,.35),transparent 70deg,transparent);
-  animation:spin 1.6s linear infinite}
-.radar .dot{position:absolute;width:10px;height:10px;border-radius:50%;background:var(--green);
-  box-shadow:0 0 10px var(--green);animation:blink 1.6s ease-in-out infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
-@keyframes blink{0%,55%{opacity:0}65%,80%{opacity:1}90%,100%{opacity:0}}
-.rlabel{font:11px var(--mono);letter-spacing:2px;color:var(--tx2);display:none}
 .wave{display:flex;align-items:center;gap:7px;height:96px;display:none}
 .wave i{width:4px;height:4px;border-radius:2px;background:#27303d}
 .wave.live i{background:var(--green);animation:wv ease-in-out infinite alternate;box-shadow:0 0 6px rgba(63,185,80,.45)}
@@ -118,13 +92,14 @@ body{
 .bigst{display:none;text-align:center}
 .bigst .t1{font-size:22px;font-weight:700;letter-spacing:2px}
 .bigst .t2{font:11px var(--mono);letter-spacing:2px;color:var(--tx2);margin-top:8px;line-height:1.9}
+.spin{width:44px;height:44px;border-radius:50%;border:2px solid rgba(88,166,255,.25);
+  border-top-color:var(--blue);animation:spin 1s linear infinite;display:none}
+@keyframes spin{to{transform:rotate(360deg)}}
 .errpanel{display:none;width:290px;background:rgba(30,20,22,.9);border:1px solid #5a2b29;border-radius:14px;padding:18px;text-align:center}
 .errpanel .et{color:var(--red);font-weight:700;font-size:14px}
 .errpanel .ed{font-size:12px;color:var(--tx2);line-height:1.7;margin-top:8px}
 .errpanel .eh{display:inline-flex;margin-top:14px;font:12px var(--mono);color:var(--tx);
-  border:1px solid var(--line);border-radius:7px;padding:8px 14px;cursor:pointer;background:#212936;margin:14px 4px 0}
-.errpanel .eh.alt{color:var(--blue);border-color:#2b4a68}
-.errpanel .eh:active{opacity:.8}
+  border:1px solid var(--line);border-radius:7px;padding:8px 14px;cursor:pointer;background:#212936}
 
 .devices{flex:none;display:flex;gap:8px;align-items:center;padding:0 22px 6px;overflow-x:auto}
 .devices::-webkit-scrollbar{width:0}
@@ -167,55 +142,12 @@ body{
 .card .sect{font:10px var(--mono);letter-spacing:2.5px;color:var(--tx2)}
 .card h3{font-size:14.5px;margin-top:4px}
 .hr{height:1px;background:var(--line);margin:13px 0}
-
-/* 两个并行链路分组 */
-.grp{border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:12px}
-.grp .gh{display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none}
-.grp .gh b{font-size:13px}
-.grp .gh .no{font:10px var(--mono);color:var(--tx2)}
-.grp .rd{width:14px;height:14px;border-radius:50%;border:1.5px solid #4d5561;flex:none;margin-left:auto}
-.grp .cur{display:none;font:9px var(--mono);letter-spacing:1px;border-radius:5px;padding:3px 7px}
-.grp.on .cur{display:inline-block}
-.grp.on.lan{border-color:#274a2d;background:rgba(63,185,80,.04)}
-.grp.on.lan .gh b{color:var(--green)}
-.grp.on.lan .rd{border-color:var(--green);background:radial-gradient(circle,var(--green) 42%,transparent 47%)}
-.grp.on.lan .cur{color:var(--green);border-color:#274a2d}
-.grp.on.wan{border-color:#2b4a68;background:rgba(88,166,255,.04)}
-.grp.on.wan .gh b{color:var(--blue)}
-.grp.on.wan .rd{border-color:var(--blue);background:radial-gradient(circle,var(--blue) 42%,transparent 47%)}
-.grp.on.wan .cur{color:var(--blue);border-color:#2b4a68}
-
-.autodis{display:flex;align-items:center;gap:12px;border:1px dashed #2b4a68;border-radius:12px;padding:12px;margin-top:12px;
-  background:rgba(88,166,255,.04)}
-.autodis .aring{position:relative;width:44px;height:44px;border-radius:50%;flex:none;
-  border:1px solid rgba(88,166,255,.25);display:flex;align-items:center;justify-content:center}
-.autodis .aring::before{content:"";position:absolute;inset:8px;border-radius:50%;border:1px solid rgba(88,166,255,.18)}
-.autodis .aring i{width:8px;height:8px;border-radius:50%;background:var(--blue);box-shadow:0 0 8px var(--blue);
-  animation:blink 1.4s ease-in-out infinite}
-.autodis.res{border-color:#274a2d;background:rgba(63,185,80,.05)}
-.autodis.res .aring{border-color:rgba(63,185,80,.3)}
-.autodis.res .aring i{background:var(--green);box-shadow:0 0 8px var(--green);animation:none}
-.autodis .atx{flex:1;min-width:0}
-.autodis .t1{font-size:12.5px;font-weight:600}
-.autodis .t2{font-size:10.5px;color:var(--tx2);margin-top:3px;line-height:1.6}
-.foundrow{display:flex;align-items:center;gap:9px;margin-top:10px;background:#141a22;border:1px solid #274a2d;
-  border-radius:10px;padding:10px 12px;cursor:pointer}
-.foundrow:active{background:#1a212b}
-.foundrow .led{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}
-.foundrow .fn{font-size:12.5px;font-weight:600}
-.foundrow .fa{font:10px var(--mono);color:var(--tx2);margin-top:2px}
-.foundrow .pick{margin-left:auto;font:10px var(--mono);color:var(--green);border:1px solid #274a2d;border-radius:6px;padding:4px 8px}
-.rescan{font:10px var(--mono);color:var(--blue);cursor:pointer;letter-spacing:1px;flex:none}
 label.fl{display:block;font-size:11px;color:var(--tx2);margin:13px 0 6px}
 label.fl b{color:var(--tx);font-weight:600}
 .field{display:flex;align-items:center;gap:8px;background:#141a22;border:1px solid var(--line);border-radius:10px;padding:11px 13px}
 .field input{flex:1;background:transparent;border:none;outline:none;color:var(--tx);font-size:13px;min-width:0}
 .field input::placeholder{color:#4d5561}
-.field .tag{flex:none;font:9.5px var(--mono);letter-spacing:1px;border-radius:5px;padding:3px 7px;border:1px solid}
-.field .tag.lan{color:var(--green);border-color:#274a2d}
-.field .tag.wan{color:var(--blue);border-color:#2b4a68}
-.field .clr{color:var(--tx2);cursor:pointer;font-size:13px}
-.hint{font-size:10.5px;color:var(--tx2);line-height:1.7;margin-top:10px}
+.hint{font-size:10.5px;color:var(--tx2);line-height:1.7;margin-top:7px}
 .hint b{color:var(--amber)}
 .row{display:flex;align-items:center;gap:10px;margin-top:12px}
 .row .rt{flex:1;font-size:12.5px}
@@ -252,34 +184,16 @@ label.fl b{color:var(--tx);font-weight:600}
   background:rgba(10,13,17,.92);border:1px solid var(--line);border-radius:999px;padding:9px 18px;
   font-size:12px;opacity:0;pointer-events:none;transition:.25s;white-space:nowrap}
 .toast.on{opacity:1;transform:translateX(-50%)}
-/* ===== 服务器选择列表（蓝牙式：在线可选 / 历史离线灰显标注） ===== */
-.slbl{font-size:10.5px;color:var(--tx2);margin:12px 0 6px}
-.slbl b{color:var(--tx)}
-.slist{border:1px solid var(--line);border-radius:12px;overflow:hidden}
-.srow{display:flex;align-items:center;gap:10px;padding:11px 13px;background:#141a22;cursor:pointer;border-bottom:1px solid #20262f}
-.srow:last-child{border-bottom:none}
-.srow:active{background:#1a212b}
-.srow .led{width:8px;height:8px;border-radius:50%;flex:none}
-.srow .led.g{background:var(--green);box-shadow:0 0 8px var(--green)}
-.srow .led.gray{background:#3d444d}
-.srow .st{flex:1;min-width:0}
-.srow .sn{font-size:12.5px;font-weight:600}
-.srow .sa{font:9.5px var(--mono);color:var(--tx2);margin-top:2px}
-.srow .pick{font:10px var(--mono);color:var(--green);border:1px solid #274a2d;border-radius:6px;padding:4px 9px;flex:none}
-.srow .offtag{font:9px var(--mono);color:var(--tx2);border:1px solid var(--line);border-radius:5px;padding:3px 7px;flex:none}
-.srow.off{opacity:.55;cursor:not-allowed}
-.srow.sel{background:rgba(63,185,80,.06)}
-.srow.sel .sn::after{content:" ✓";color:var(--green)}
-@media (prefers-reduced-motion:reduce){.wave.live i,.ptt.hold .ring,.led.g,.led.blue,.radar .sweep{animation:none}}
+@media (prefers-reduced-motion:reduce){.wave.live i,.ptt.hold .ring,.led.g,.led.blue,.spin{animation:none}}
 </style>
 </head>
 <body>
 
 <header class="pghead">
-  <span class="mark">remote-voice <em>·</em> ANDROID 交互原型 V3.1（本地/远程并行可选）</span>
+  <span class="mark">remote-voice <em>·</em> ANDROID 交互原型 V3.2（纯公网）</span>
   <a href="./index.html">← 返回总览</a>
 </header>
-<div class="tip">V3.1：<b>本地/远程是两条并行链路，用户自己选</b>——点分段卡切换（连接中切换=自动换线重连）。<b>只有本地链路才扫描</b>（结果只填本地组地址）；远程直连配置地址，永不扫描。</div>
+<div class="tip">V3.2 决定：<b>只保留公网连接</b>（本地局域网仅用于测试——测试时把服务器地址填成局域网 IP 即可，不需要独立链路/扫描/选择列表）。<b>点状态胶囊</b>连接；<b>按住说话</b>；<b>齿轮</b>进设置。</div>
 
 <div class="stage">
   <div class="halo"></div>
@@ -313,27 +227,13 @@ label.fl b{color:var(--tx);font-weight:600}
           <span class="led gray" id="led"></span>
           <div class="txt">
             <div class="st" id="st">未启动 · 点按连接</div>
-            <div class="sub" id="sub">当前链路：本地 192.168.1.103:9432</div>
+            <div class="sub" id="sub">服务器：118.193.40.160:9432</div>
           </div>
-          <span class="src" id="src" style="display:none"></span>
-        </div>
-
-        <!-- 两条并行链路：本地 / 远程（用户显式选择） -->
-        <div class="lineseg">
-          <span class="seg lan on" id="seg-lan">
-            <b>本地（局域网）<span class="rd"></span></b>
-            <small id="seg-lan-a">192.168.1.103:9432</small>
-          </span>
-          <span class="seg wan" id="seg-wan">
-            <b>远程（公网）<span class="rd"></span></b>
-            <small>118.193.40.160:9432</small>
-          </span>
         </div>
 
         <div class="center">
-          <div class="radar" id="radar"><span class="sweep"></span><span class="dot" style="top:44px;right:52px"></span><span class="dot" style="bottom:38px;left:66px;animation-delay:.5s"></span></div>
-          <div class="rlabel" id="rlabel">SCANNING LAN · 发现本地服务器</div>
-          <div class="bigst" id="bigst"><div class="t1" id="bt1">准备就绪</div><div class="t2" id="bt2">点上方状态胶囊连接<br>所选链路的 server</div></div>
+          <div class="spin" id="spin"></div>
+          <div class="bigst" id="bigst"><div class="t1" id="bt1">准备就绪</div><div class="t2" id="bt2">点状态胶囊连接服务器<br>秘密配对决定接哪台 Mac</div></div>
           <div class="wave" id="wave">
             <i style="--h:22px"></i><i style="--h:46px;animation-delay:.1s"></i><i style="--h:72px;animation-delay:.2s"></i><i style="--h:96px;animation-delay:.3s"></i><i style="--h:60px;animation-delay:.4s"></i><i style="--h:84px;animation-delay:.5s"></i><i style="--h:38px;animation-delay:.6s"></i><i style="--h:64px;animation-delay:.7s"></i><i style="--h:90px;animation-delay:.8s"></i><i style="--h:48px;animation-delay:.9s"></i>
           </div>
@@ -341,9 +241,8 @@ label.fl b{color:var(--tx);font-weight:600}
           <div class="frames" id="frames">已发送 0 帧 · 48kHz</div>
           <div class="errpanel" id="errpanel">
             <div class="et">连接失败</div>
-            <div class="ed" id="ed">本地服务器未响应。</div>
-            <span class="eh" id="btn-retry">重试本链路</span>
-            <span class="eh alt" id="btn-swt">切到另一条链路</span>
+            <div class="ed">服务器未响应：检查网络、服务器是否在线、防火墙是否放行端口。</div>
+            <span class="eh" id="btn-retry">重试</span>
           </div>
         </div>
 
@@ -364,44 +263,13 @@ label.fl b{color:var(--tx);font-weight:600}
         </div>
         <div class="scroll">
           <div class="card">
-            <div class="sect">SERVER · 两条并行链路</div>
-            <h3>选择当前使用的链路（二选一）</h3>
-
-            <!-- 分组① 本地 -->
-            <div class="grp lan on" id="grp-lan">
-              <div class="gh" id="gh-lan"><span class="no">①</span><b>本地 · 局域网</b><span class="cur">当前使用</span><span class="rd"></span></div>
-              <div class="autodis" id="autodis">
-                <span class="aring"><i></i></span>
-                <div class="atx">
-                  <div class="t1" id="ad-t1">正在扫描局域网…</div>
-                  <div class="t2" id="ad-t2">发现结果只填入本组地址，不改变你的选择</div>
-                </div>
-                <span class="rescan" id="btn-rescan">重新扫描</span>
-              </div>
-              <div class="slbl"><b>可用服务器</b> · 点选即为连接目标</div>
-              <div class="slist" id="srv-list"></div>
-              <div class="slbl">历史连接 · 不在线</div>
-              <div class="slist" id="srv-hist"></div>
-              <label class="fl"><b>本地服务器地址</b>（当前选中，可手动改）</label>
-              <div class="field">
-                <input id="in-local" value="192.168.1.103:9432" spellcheck="false">
-                <span class="tag lan">LAN</span>
-                <span class="clr" id="clr-local">✕</span>
-              </div>
+            <div class="sect">SERVER</div>
+            <h3>中继服务器地址</h3>
+            <div class="field" style="margin-top:12px">
+              <input id="in-server" value="118.193.40.160:9432" spellcheck="false">
             </div>
-
-            <!-- 分组② 远程 -->
-            <div class="grp wan" id="grp-wan">
-              <div class="gh" id="gh-wan"><span class="no">②</span><b>远程 · 公网</b><span class="cur">当前使用</span><span class="rd"></span></div>
-              <label class="fl" style="margin-top:12px"><b>远程服务器地址</b></label>
-              <div class="field">
-                <input id="in-remote" value="118.193.40.160:9432" spellcheck="false">
-                <span class="tag wan">WAN</span>
-              </div>
-              <div class="hint">出门在外时使用；需 server 公网可达（安全组放行）。</div>
-            </div>
-
-            <div class="hint">两条链路相互独立、随时切换；扫描只负责发现<b>本地组</b>的服务器，<b>不会替你改变选择</b>。</div>
+            <div class="hint">格式 <b>IP:端口</b> 或 <b>rv://IP:端口</b>。填公网服务器地址；
+              本地测试时也可填局域网 IP（同一 Wi-Fi 下直达，不经公网）。</div>
           </div>
 
           <div class="card">
@@ -445,22 +313,14 @@ label.fl b{color:var(--tx);font-weight:600}
         </div>
       </div>
 
-      <div class="mask" id="pickmask">
-        <div class="sheet">
-          <div class="stt">发现多台局域网服务器，选择一台</div>
-          <div id="pick-list"></div>
-          <div class="btns"><span class="sbtn ghost" id="btn-pick-cancel">取消连接</span></div>
-        </div>
-      </div>
-
       <div class="toast" id="toast"></div>
     </div>
   </div>
 </div>
 
 <p class="tip" style="margin-top:18px">
-  设计决定（V3.1）：<b>本地/远程 = 两个并行分组，用户显式选择当前链路</b>；选本地时连接前自动扫描局域网填充地址；
-  连接中切换分段卡 = 停当前 + 连新链路；所选链路失败时，错误面板提供「切到另一条链路」按钮（仍是用户发起）。
+  V3.2 状态机：<b>点胶囊 → 连接中(蓝) → 已连中继·等待Mac(琥珀) → Mac上线→传输中(绿)</b>；
+  再点胶囊 = 停止。免提关时仅按住 PTT 传输。
 </p>
 
 <script>
@@ -475,133 +335,63 @@ function showView(v){document.querySelectorAll('.view').forEach(x=>x.classList.r
 /* ============ 数据 ============ */
 const devices=[
   {name:'客厅 Mac',secret:'2TWU-KF8U',active:true},
-  {name:'书房 Mac',secret:'9QQA-M3RT',active:false},
 ];
 const active=()=>devices.find(d=>d.active);
+const serverAddr=()=>$('in-server').value.trim()||'118.193.40.160:9432';
 
-/* ============ 链路选择（本地/远程 并行分组，用户显式选择） ============ */
-let line='lan';   // 'lan' | 'wan' —— 用户选择的当前链路
-const lanAddr=()=>$('in-local').value.trim()||'192.168.1.103:9432';
-const wanAddr=()=>$('in-remote').value.trim()||'118.193.40.160:9432';
-const lineAddr=()=>line==='lan'?lanAddr():wanAddr();
-
-function setLine(l,fromUser){
-  line=l;
-  $('seg-lan').classList.toggle('on',l==='lan');
-  $('seg-wan').classList.toggle('on',l==='wan');
-  $('grp-lan').classList.toggle('on',l==='lan');
-  $('grp-wan').classList.toggle('on',l==='wan');
-  if(fromUser)toast('当前链路：'+(l==='lan'?'本地':'远程'));
-  if(st==='idle')render();          // 空闲时刷新目标提示
-}
-$('seg-lan').addEventListener('click',()=>switchLine('lan'));
-$('seg-wan').addEventListener('click',()=>switchLine('wan'));
-$('gh-lan').addEventListener('click',()=>setLine('lan',true));
-$('gh-wan').addEventListener('click',()=>setLine('wan',true));
-function switchLine(l){
-  if(l===line)return;
-  setLine(l,true);
-  if(st==='idle')return;
-  // 连接中切换 = 停当前 + 连新链路
-  stopAll(true);
-  toast('切换到'+(l==='lan'?'本地':'远程')+'链路');
-  startConnect();
-}
-
-/* ============ 主界面状态机 ============ */
+/* ============ 主界面状态机：idle → connecting → wait → live ⇄ hold；err = 失败停服 ============ */
 let st='idle',timer=null,sec=0,frames=0;
-const led=$('led'),stEl=$('st'),subEl=$('sub'),srcEl=$('src');
+const led=$('led'),stEl=$('st'),subEl=$('sub');
 
 function render(){
-  const scanning=st==='scan'&&line==='lan';
-  $('radar').style.display=scanning?'block':'none';
-  $('rlabel').style.display=scanning?'block':'none';
-  $('rlabel').textContent=line==='lan'?'SCANNING LAN · 发现本地服务器':'CONNECTING';
+  $('spin').style.display=st==='connecting'?'block':'none';
   $('wave').style.display=(st==='live'||st==='hold')?'flex':'none';
   $('wave').classList.toggle('live',st==='live'||st==='hold');
   $('tmr').style.display=(st==='live'||st==='hold')?'block':'none';
   $('frames').style.display=(st==='live'||st==='hold')?'block':'none';
   $('errpanel').style.display=st==='err'?'block':'none';
-  $('ed').textContent=(line==='lan'?'本地服务器':'远程服务器')+'未响应，可重试或切换链路。';
-  $('btn-swt').textContent=line==='lan'?'切到远程重试':'切到本地重试';
   const big=st==='idle'||st==='wait';
   $('bigst').style.display=big?'block':'none';
-  $('bt1').textContent=st==='idle'?'准备就绪':'已连'+(line==='lan'?'本地':'远程')+'中继';
-  $('bt2').innerHTML=st==='idle'?'点状态胶囊连接所选链路<br>秘密配对决定接哪台 Mac'
+  $('bt1').textContent=st==='idle'?'准备就绪':'已连中继';
+  $('bt2').innerHTML=st==='idle'?'点状态胶囊连接服务器<br>秘密配对决定接哪台 Mac'
     :'等待 Mac 上线<br>在 Mac 端确认配对秘密';
   $('ptt').classList.toggle('dis',!(st==='live'||st==='hold'));
-  const ln=line==='lan';
   const map={
-    idle:['led gray','未启动 · 点按连接','当前链路：'+(ln?'本地 ':'远程 ')+lineAddr(),''],
-    scan:[ln?'led blue':'led blue',ln?'扫描局域网服务器…':'连接远程服务器…',
-          ln?'最多约 2 秒，扫到自动连接':wanAddr(),ln?['LAN','']:['WAN','']],
-    wait:[led_amber(),'已连中继 · 等待 Mac',lineAddr(),ln?['局域网','lan']:['远程','wan']],
-    live:['led g','传输中 · '+(active()?active().name:''),'',['局域网','lan']],
-    hold:['led g','按住传输 · '+(active()?active().name:''),'',['局域网','lan']],
-    err:['led red','连接失败 · 点按重试',lineAddr(),ln?['LAN','lan']:['WAN','wan']],
+    idle:['led gray','未启动 · 点按连接','服务器：'+serverAddr()],
+    connecting:['led blue','连接服务器…',serverAddr()],
+    wait:['led amber','已连中继 · 等待 Mac',serverAddr()],
+    live:['led g','传输中 · '+(active()?active().name:''),''],
+    hold:['led g','按住传输 · '+(active()?active().name:''),''],
+    err:['led red','连接失败 · 点按重试',serverAddr()],
   }[st];
   led.className='led '+map[0];stEl.textContent=map[1];subEl.textContent=map[2];
-  if(map[3]&&map[3][0]){srcEl.style.display='';srcEl.textContent=map[3][0];srcEl.className='src '+(map[3][1]||'err');}
-  else srcEl.style.display='none';
 }
-function led_amber(){return 'led amber';}
 function setStates(s){st=s;render();}
 
 function startConnect(){
   if(timer)clearInterval(timer);
-  if(line==='lan'){
-    // 本地链路：先扫描，多台则弹列表让用户选（蓝牙式）
-    setStates('scan');
-    setTimeout(()=>{
-      if(st!=='scan')return;
-      if(discovered.length===0){setStates('err');return;}
-      const auto=discovered.find(d=>d.addr===selSrv);
-      if(discovered.length===1||auto){proceed(auto?auto.addr:discovered[0].addr);return;}
-      showPicker(discovered,target=>{if(!target){stopAll();return;}proceed(target);});
-    },1600);
-  }else{
-    // 远程链路：直连，永不扫描
-    setStates('scan');
-    setTimeout(()=>{if(st==='scan')proceed(wanAddr());},1200);
-  }
+  setStates('connecting');
+  setTimeout(()=>{                       // 模拟 TLS+AUTH 成功
+    if(st!=='connecting')return;
+    setStates('wait');
+    setTimeout(()=>{                     // 模拟 Mac 上线
+      if(st!=='wait')return;
+      setStates('live');sec=0;frames=0;
+      timer=setInterval(()=>{
+        sec++;if(st==='live'||st==='hold')frames+=10;
+        const m=String(Math.floor(sec/60)).padStart(2,'0'),s=String(sec%60).padStart(2,'0');
+        $('tmr').textContent=m+':'+s;
+        $('frames').textContent='已发送 '+frames+' 帧 · 48kHz';
+      },200);
+    },2200);
+  },1500);
 }
-function proceed(target){
-  setStates('wait');
-  setTimeout(()=>{
-    if(st!=='wait')return;
-    setStates('live');sec=0;frames=0;
-    timer=setInterval(()=>{
-      sec++;if(st==='live'||st==='hold')frames+=10;
-      const m=String(Math.floor(sec/60)).padStart(2,'0'),s=String(sec%60).padStart(2,'0');
-      $('tmr').textContent=m+':'+s;
-      $('frames').textContent='已发送 '+frames+' 帧 · 48kHz';
-    },200);
-  },line==='lan'?1600:1400);
-}
-function showPicker(items,cb){
-  const list=$('pick-list');list.innerHTML='';
-  items.forEach(d=>{
-    const r=document.createElement('div');r.className='srow';
-    r.innerHTML='<span class="led g"></span><div class="st"><div class="sn">'+d.name+'</div><div class="sa">'+d.addr+'</div></div><span class="pick">连接</span>';
-    r.addEventListener('click',()=>{$('pickmask').classList.remove('on');cb(d.addr);});
-    list.appendChild(r);
-  });
-  $('pickmask').classList.add('on');
-}
-$('btn-pick-cancel').addEventListener('click',()=>{$('pickmask').classList.remove('on');stopAll();});
-function stopAll(silent){
-  if(timer)clearInterval(timer);
-  st='idle';render();
-}
+function stopAll(){if(timer)clearInterval(timer);setStates('idle');}
 $('conn').addEventListener('click',()=>{
   if(st==='idle'||st==='err')startConnect();
   else if(st==='live'||st==='hold'||st==='wait'){stopAll();toast('已停止 · 点按状态胶囊恢复');}
 });
 $('btn-retry').addEventListener('click',e=>{e.stopPropagation();startConnect();});
-$('btn-swt').addEventListener('click',e=>{
-  e.stopPropagation();
-  switchLine(line==='lan'?'wan':'lan');
-});
 
 /* PTT */
 const ptt=$('ptt');
@@ -635,58 +425,9 @@ function renderDevices(){
 renderDevices();
 
 /* ============ 设置视图 ============ */
-$('btn-gear').addEventListener('click',()=>{showView('settings');runScanDemo();});
+$('btn-gear').addEventListener('click',()=>showView('settings'));
 $('btn-back').addEventListener('click',()=>showView('home'));
-$('btn-save').addEventListener('click',()=>{showView('home');toast('已保存');});
-
-/* 局域网多台服务器：在线列表 + 历史离线标注（蓝牙式） */
-const discovered=[
-  {name:'联合测试服务器',addr:'192.168.1.103:9432'},
-  {name:'书房服务器',addr:'192.168.1.106:9432'},
-];
-const remembered=[
-  {name:'客厅旧服务器',addr:'192.168.1.102:9432'},
-  {name:'办公室服务器',addr:'10.8.0.5:9432'},
-];
-let selSrv='192.168.1.103:9432';
-const isOnline=s=>discovered.some(d=>d.addr===s.addr);
-
-function renderSrvLists(){
-  const box=$('srv-list');box.innerHTML='';
-  discovered.forEach(d=>{
-    const r=document.createElement('div');
-    r.className='srow'+(selSrv===d.addr?' sel':'');
-    r.innerHTML='<span class="led g"></span><div class="st"><div class="sn">'+d.name+'</div><div class="sa">'+d.addr+'</div></div>'+(selSrv===d.addr?'':'<span class="pick">选择</span>');
-    r.addEventListener('click',()=>{
-      selSrv=d.addr;$('in-local').value=d.addr;$('seg-lan-a').textContent=d.addr;
-      renderSrvLists();render();toast('连接目标：'+d.addr);
-    });
-    box.appendChild(r);
-  });
-  const hb=$('srv-hist');hb.innerHTML='';
-  remembered.filter(s=>!isOnline(s)).forEach(s=>{
-    const r=document.createElement('div');r.className='srow off';
-    r.innerHTML='<span class="led gray"></span><div class="st"><div class="sn">'+s.name+'</div><div class="sa">'+s.addr+'</div></div><span class="offtag">离线</span>';
-    r.addEventListener('click',()=>toast(s.name+' 当前不在线'));
-    hb.appendChild(r);
-  });
-}
-function runScanDemo(){
-  const box=$('autodis');
-  box.classList.remove('res');
-  $('ad-t1').textContent='正在扫描局域网…';
-  $('ad-t2').textContent='发现结果只填入本组地址，不改变你的选择';
-  setTimeout(()=>{
-    if(!$('view-settings').classList.contains('on'))return;
-    box.classList.add('res');
-    $('ad-t1').textContent='发现 '+discovered.length+' 台局域网服务器';
-    $('ad-t2').textContent='点选即为连接目标；历史连接但不在线的已标注「离线」';
-    renderSrvLists();
-  },1400);
-}
-$('btn-rescan').addEventListener('click',runScanDemo);
-$('clr-local').addEventListener('click',()=>{$('in-local').value='';$('seg-lan-a').textContent='未设置';selSrv='';toast('本地地址已清除');});
-$('in-local').addEventListener('input',()=>{const v=$('in-local').value.trim();$('seg-lan-a').textContent=v||'未设置';selSrv=v;});
+$('btn-save').addEventListener('click',()=>{showView('home');toast('已保存');render();});
 
 ['tg-hf','tg-aec','tg-trust'].forEach(id=>{
   $(id).addEventListener('click',()=>{

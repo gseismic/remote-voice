@@ -31,7 +31,7 @@ func main() {
 	regkeyFile := flag.String("regkeyfile", "", "旧 v2 兼容：从文件读取 Mac 注册密钥")
 	regkeyFlag := flag.String("regkey", "", "旧 v2 兼容：直接指定 regkey（仅限本地调试）")
 	pprofAddr := flag.String("pprof", "", "可选：pprof 监听地址，如 127.0.0.1:6060")
-	discoveryOn := flag.Bool("discovery", true, "局域网发现应答（UDP 与 -addr 同号端口）")
+	discoveryOn := flag.Bool("discovery", false, "局域网发现应答（UDP 与 -addr 同号端口）；仅本地测试用，公网部署无需开启")
 	discoveryName := flag.String("name", "", "局域网发现显示名（默认主机名）")
 	flag.Parse()
 

@@ -228,12 +228,12 @@ sudo systemctl daemon-reload && sudo systemctl enable --now remote-voice-server
 journalctl -u remote-voice-server -f      # 查看日志（含启动时打印的诊断指纹与配置串）
 ```
 
-别忘了放行防火墙与云安全组的 **TCP 9432 + UDP 9432** 端口
-（UDP 同端口用于局域网发现应答，PLAN-013；公网部署可不放 UDP，仅影响同局域网手机扫描）：
+只需放行防火墙与云安全组的 **TCP 9432** 端口。
+局域网发现（UDP 同端口）自 V3.2 起降级为本地测试工具：`-discovery` 默认关闭，
+仅在同一 Wi-Fi 测试扫描时显式开启（`-discovery`），公网部署无需放行 UDP：
 
 ```bash
 sudo ufw allow 9432/tcp        # Ubuntu ufw
-sudo ufw allow 9432/udp
 # 或 firewalld: sudo firewall-cmd --permanent --add-port=9432/tcp && sudo firewall-cmd --reload
 ```
 
@@ -248,7 +248,7 @@ sudo ufw allow 9432/udp
 | 手机报「未找到匹配设备」 | Mac 尚未在线或尚未注册该配对秘密；先启动 Mac，再确认手机「设备」里的秘密与 Mac 当前显示一致 |
 | 手机报「尝试过于频繁，已被临时锁定」 | 按 §6.2 限速：等锁定期结束或换网络；日志用于定位源 IP |
 | `监听 :9432 失败: address already in use` | 端口被占用：`ss -tlnp \| grep 9432` 查看，或换 `-addr` 端口 |
-| 手机/Mac 连不上（connection refused/timeout） | 防火墙或云安全组未放行 TCP 9432（见 §7）；局域网扫描无结果时另查 UDP 9432 与 AP 广播隔离 |
+| 手机/Mac 连不上（connection refused/timeout） | 防火墙或云安全组未放行 TCP 9432（见 §7）；本地扫描测试无结果时另查 server 是否以 -discovery 开启与 AP 广播隔离 |
 | 客户端报 `certificate fingerprint mismatch` | server 证书与该地址此前 TOFU 记录不一致；确认 `data/` 没被替换。若确实更换过证书，需要清理对应客户端的内部信任记录后重新连接 |
 | Mac 报 `invalid-device` | 本机设备身份文件/Keychain 被替换或损坏；恢复原设备身份，或删除本机身份后让它生成新身份并重新入网 |
 

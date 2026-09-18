@@ -54,7 +54,7 @@ ul.cl li::before{content:"· ";color:var(--amber)}
 
 <h1>remote-voice · 客户端 UI 设计 <em>V3</em>（可交互原型）</h1>
 <p class="sub">LAN 自动发现时代的两端界面：Android 采音端 + Mac 接收端。<br>
-延续 V2「夜间音频控制台」体系（同一套 tokens），把 <b style="color:var(--amber)">自动扫描 · 本地优先 · 链路可见</b> 变成界面语言。<br>原型里所有按钮均可点击，直接操作即可走完两端的状态流转。</p>
+延续 V2「夜间音频控制台」体系（同一套 tokens），把 <b style="color:var(--amber)">自动扫描 · 本地优先 · 链路可见</b> 变成界面语言。<br>原型里所有按钮均可点击。V3.2（纯公网）为当前评审版本。</p>
 
 <div class="wrap">
 
@@ -62,12 +62,12 @@ ul.cl li::before{content:"· ";color:var(--amber)}
     <a class="linkcard" href="./android.html">
       <div class="ic">ANDROID · 可点击原型</div>
       <div class="tt">手机端（主界面 + 设置）</div>
-      <div class="ds">点状态胶囊走「扫描→连接→传输」全流程；按住 PTT 说话；齿轮进设置：发现结果选用、LAN/WAN 双地址、设备增删、开关。单文件内导航，无需翻页。</div>
+      <div class="ds">点状态胶囊走「连接→等待 Mac→传输」全流程；按住 PTT 说话；齿轮进设置：单一服务器地址、设备增删、免提/回声消除开关。单文件内导航。</div>
     </a>
     <a class="linkcard" href="./mac.html">
       <div class="ic">MAC · 可点击原型</div>
       <div class="tt">Mac 接收端</div>
-      <div class="ds">点状态胶囊：扫描→注册出秘密→模拟手机上线桥接；重新生成/复制秘密；音频下拉选未接入设备看缺失态；永久秘密折叠管理；会话日志实时追加。</div>
+      <div class="ds">点状态胶囊：连接→注册出秘密→模拟手机上线桥接；重新生成/复制秘密；音频下拉选未接入设备看缺失态；永久秘密折叠管理；会话日志实时追加。</div>
     </a>
     <a class="linkcard" href="../v2/index.html">
       <div class="ic">HISTORY</div>
@@ -108,7 +108,7 @@ ul.cl li::before{content:"· ";color:var(--amber)}
       <tr><th>端</th><th>现状痛点</th><th>V3 对策</th></tr>
       <tr><td>Android</td><td>浅色系统风与 Mac 端暗色控制台割裂；连接状态是一行小字；走哪条链路（局域网/远程）不可见；扫描只是设置页里的裸按钮</td><td>统一暗色 tokens；状态升级为胶囊（大字 + LED + 链路标签）；扫描变为连接流程内建动作（雷达动画）；失败给可读原因 + 重试</td></tr>
       <tr><td>Mac</td><td>四张卡片均质排列、层级弱；桥接后缺音频可视化；无扫描/发现态；音频设备错误藏在最底部</td><td>P1 配对信号唯一最重；新增连接目标卡（发现来源 + RTT + 音频电平表）；扫描横条；错误条紧贴音频卡并带重试</td></tr>
-      <tr><td>共性</td><td>服务器地址是"手填表单"，与自动发现相悖；且自动本地优先剥夺用户选择权</td><td>本地/远程 = 两条并行链路、两个分组，用户显式选择当前链路并可随时切换；<b>只有选择「本地」时才扫描</b>（结果只填本地组地址，不改变选择）；远程直连配置地址，永不扫描；秘密照常配对</td></tr>
+      <tr><td>共性</td><td>曾为局域网场景引入双链路/扫描/列表，复杂度高且实际使用以公网为主</td><td><b>V3.2 只保留公网连接</b>：单一服务器地址（任意 IP:端口——本地测试时填局域网 IP 即可，无需独立链路概念）；秘密照常配对；局域网发现降级为 server 端测试工具（默认关）</td></tr>
     </table>
   </div>
 
@@ -117,7 +117,7 @@ ul.cl li::before{content:"· ";color:var(--amber)}
     <table>
       <tr><th>页面</th><th>服务场景</th><th>频率</th><th>P1（视觉最重）</th><th>主行动点</th></tr>
       <tr><td>Android 主界面</td><td>①开口即说 ③连不上</td><td><span class="tag a">高</span></td><td>连接胶囊 + PTT</td><td>按住说话（自动连接为前置流）</td></tr>
-      <tr><td>Android 设置</td><td>②换网络接入 ③排查</td><td><span class="tag">中</span></td><td>服务器卡（发现结果/双地址）</td><td>选用发现的局域网服务器</td></tr>
+      <tr><td>Android 设置</td><td>②接入新环境 ③排查</td><td><span class="tag">中</span></td><td>服务器地址</td><td>填入/修改 server 地址</td></tr>
       <tr><td>Mac 主窗口</td><td>①接收 ③排查</td><td><span class="tag">中</span></td><td>配对信号（大码）</td><td>复制秘密 / 重新生成</td></tr>
     </table>
   </div>
@@ -161,8 +161,9 @@ ul.cl li::before{content:"· ";color:var(--amber)}
   <div class="card">
     <h2>假设与开放问题（欢迎推翻）</h2>
     <ul class="cl">
-      <li><b>[决定 V3.1 · 用户拍板]</b> 本地/远程为两个并行分组，用户显式选择当前链路、随时切换；<b>仅选择「本地」时才扫描</b>（结果只填本地组地址），远程永不扫描；所选链路失败时提供「切到另一条链路」按钮，切换永远由用户发起。</li>
-      <li><b>[决定 V3.1 · 用户拍板]</b> 局域网可能有多台 server：扫描结果以<b>蓝牙式列表</b>呈现——在线的可点选；历史连接过但不在线的条目列出并灰显标注「离线」（不可直连）；发现多台时连接流程弹列表由用户选一台。</li>
+      <li><b>[决定 V3.2 · 用户拍板，取代 V3.1]</b> <b>只保留公网连接</b>：本地局域网仅用于测试——测试时把服务器地址填成局域网 IP 即可，不需要"本地链路"这个产品概念。据此移除：双链路分组/切换、局域网扫描、蓝牙式多服务器列表与离线标注（V3.1 的全部相关 UI）。<br>
+      衍生调整：server 的 UDP 发现应答（PLAN-013）降级为<b>本地测试工具</b>，<code>-discovery</code> 默认改为关闭，仅本地测试时显式开启；Android 侧双地址/扫描代码将移除，恢复单一服务器地址字段。</li>
+      <li><b>[历史 · V3.1 已被取代]</b> 双链路并行可选 / 仅本地扫描 / 蓝牙式列表+离线标注——设计已实现于 V3.1 原型，随 V3.2 决定一并移除（见 git 历史 766ae07）。</li>
       <li><b>[假设]</b> 暗色为两端唯一主题（与 V2/Mac 现状一致，Android 放弃 DayNight 浅色）。</li>
       <li><b>[假设]</b> Android 主界面常显"客厅 Mac"这类设备别名；秘密原文只在设置页掩码展示，主界面芯片不再露出。</li>
       <li><b>[假设]</b> Mac 连接目标卡公开显示两条链路的地址（透明优先于简洁）。</li>

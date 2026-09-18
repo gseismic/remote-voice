@@ -70,3 +70,11 @@
 
 - **2026-09-17 06:05** | [PLAN-013-lan-discovery-dual-address.md](PLAN-013-lan-discovery-dual-address.md) → [PLAN-013-lan-discovery-dual-address-OUTCOME.md](PLAN-013-lan-discovery-dual-address-OUTCOME.md)
   摘要：①归档 Python Mac 客户端（14590fb，mac-app→backup/mac-app，Tauri 唯一受支持）；②server 新增 UDP 局域网发现应答（internal/discovery，探测串 RV-DISCOVER-v1，同源 1s 节流，-discovery/-name 参数，3 例新测试）；③Android 局域网扫描 + 本地/远程双地址（LanDiscovery.kt、RelayClient 多 Endpoint 拨号本地优先、TOFU 按 host:port 隔离、设置页扫描选择 UI）；④部署公网服务器 118.193.40.160（源码 rsync 至 /home/ubuntu/services，服务器 Go 1.22 构建，systemd remote-voice-server 托管）。验证：go vet/-race 全绿、assembleDebug 通过、服务器本机 fakephone 双角色回环全链路通过（注册→TOFU→认证→399 帧推流→UDP 发现应答正确）。遗留：云安全组未放行 TCP/UDP 9432，公网与真机验收待用户执行；保护了 services 目录下非本项目 ThinkTime/，未清理 8 月旧部署残留。
+
+- **2026-09-18 05:20** | UI V3.2 设计决定（用户拍板）+ PLAN-014 撤销
+  摘要：经三轮评审迭代（V3.1 双链路可选→仅本地扫描→蓝牙式列表），用户最终拍板：**只保留公网连接，
+  本地局域网仅用于测试**（测试时把 server 地址填成局域网 IP 即可，无需独立链路概念）。
+  UI 原型 docs/ui-design/v3/（android/mac/index）已全部改为纯公网单链路版本；
+  PLAN-014（连接前自动扫描）标记撤销、不再实施；server `-discovery` 默认改为 false
+  （降级为本地测试工具）。待办：UI V3.2 评审确认后实施两端界面简化（Android 移除
+  LanDiscovery/双地址代码，恢复单一服务器地址）。
