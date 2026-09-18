@@ -11,6 +11,8 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.security.cert.X509Certificate
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLSocket
@@ -87,6 +89,14 @@ class RelayClient(
     /** TCP 拨号期间也登记原始 socket，停止服务时可立即打断阻塞的 connect。 */
     private var connectingSocket: Socket? = null
     private val outLock = Any()
+    /**
+     * TALK 帧写线程：sendTalk 会被 Activity 主线程（PTT 回调）和服务主线程
+     * （startCapture 的桥接同步）调用，TLS 写绝不能留在主线程（NetworkOnMainThreadException
+     * 必崩，PLAN-022）；单线程 FIFO 保证 TALK on/off 顺序稳定，stop() 时关闭。
+     */
+    private val talkExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "relay-talk").apply { isDaemon = true }
+    }
     // TOFU/固定指纹（key = TrustStore.serverKey）
     private val trusted = HashMap<String, String>()
 
@@ -139,6 +149,8 @@ class RelayClient(
 
     fun stop() {
         running = false
+        // 关闭 TALK 写线程；此后 sendTalk 提交会走 RejectedExecutionException 分支
+        talkExecutor.shutdownNow()
         closeQuietly()
     }
 
@@ -161,17 +173,27 @@ class RelayClient(
     /**
      * 发送说话状态（PTT 按下/松开，FRAME_TALK 1 字节）。
      * best-effort：桥接未就绪或串号时丢弃，不重试——下一条状态会覆盖旧状态。
+     * 实际 TLS 写提交到 talkExecutor（主线程调用安全），FIFO 保证 on/off 顺序。
      */
     fun sendTalk(on: Boolean, expectedConnectionSerial: Long): Boolean {
         val currentSocket = socket ?: return false
-        if (!peerOnline || connectionSerial != expectedConnectionSerial) return false
+        if (!running || !peerOnline || connectionSerial != expectedConnectionSerial) return false
         return try {
-            sendFrameTo(
-                currentSocket.getOutputStream(), frameTalk,
-                byteArrayOf(if (on) talkOnByte else 0x00),
-            )
-        } catch (e: IOException) {
-            Log.w(TAG, "send talk failed", e)
+            talkExecutor.execute {
+                // 任务内自捕获：socket 关闭竞态下 getOutputStream/write 抛 IOException，
+                // 不能让执行器线程出现未捕获异常（同样会杀进程）
+                try {
+                    sendFrameTo(
+                        currentSocket.getOutputStream(), frameTalk,
+                        byteArrayOf(if (on) talkOnByte else 0x00),
+                    )
+                } catch (e: IOException) {
+                    Log.w(TAG, "send talk failed", e)
+                }
+            }
+            true
+        } catch (_: RejectedExecutionException) {
+            // stop() 已关闭执行器（服务停止竞态）：丢弃即可
             false
         }
     }

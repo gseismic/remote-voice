@@ -171,3 +171,18 @@
   playwright + Tauri IPC stub 断言全部前端守卫生效。待真机复核错误风暴复现
   实验（设备名填错 → CPU 不升高、≤5s 自愈恢复）。
   文件：PLAN-021-mac-audio-error-storm.md / PLAN-021-mac-audio-error-storm-OUTCOME.md。
+
+- **2026-09-19 01:05** | PLAN-022 Android「添加连接」必闪退修复（主线程 TLS 写）
+  摘要：用户报「android 添加连接总闪退」。真机 crash buffer 三次同栈确证：
+  NetworkOnMainThreadException @ RelayClient.sendTalk ← AudioStreamService.startCapture:321
+  ——PLAN-019 引入的「桥接建立无条件同步 PTT 状态」把 TLS 写留在了主线程（relay 回调经
+  postIfCurrent 落主线程），Mac 在线时添加连接 100% 必崩；setTalking（PTT 回调）为同因
+  第二处。修复：RelayClient 内新增单线程 daemon 执行器 relay-talk，sendTalk 调用线程只做
+  无 I/O 前置检查、TLS 写 FIFO 提交执行器（保 TALK on/off 顺序，防 Fn 悬空回归）；任务内
+  自捕获 IOException；stop() shutdownNow（幂等），closeQuietly 不关执行器（重连后 TALK
+  仍可用）；sendAudio 保持采音线程直写。验证：Python 假 relay（自签 TLS，AUTH_OK+
+  PEER_STATE online，端口 19432 以避开用户自起的 9432 server-linux）+ adb reverse +
+  run-as 注入 prefs；修复前 APK 复现同因闪退，修复后 APK 桥接不崩、TALK 0x00 同步帧到达、
+  模拟按住 PTT 收 TALK 0x01→50 帧 AUDIO→0x00，全程进程存活。修复版已装机，prefs 还原
+  公网默认，harness 已清理。遗留：主线程建 AudioRecord 微卡（方案 C）未做，属可选优化。
+  文件：PLAN-022-android-add-connection-crash.md / PLAN-022-android-add-connection-crash-OUTCOME.md。
