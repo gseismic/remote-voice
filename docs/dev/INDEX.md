@@ -78,3 +78,12 @@
   PLAN-014（连接前自动扫描）标记撤销、不再实施；server `-discovery` 默认改为 false
   （降级为本地测试工具）。待办：UI V3.2 评审确认后实施两端界面简化（Android 移除
   LanDiscovery/双地址代码，恢复单一服务器地址）。
+
+- **2026-09-18 11:19** | [PLAN-015-mac-settings-modal.md](PLAN-015-mac-settings-modal.md) → [PLAN-015-mac-settings-modal-OUTCOME.md](PLAN-015-mac-settings-modal-OUTCOME.md)
+  摘要：Mac 原型按用户反馈调整——服务器地址/设备名为低频设置，不应占据首页。首页第二卡拆为
+  RELAY SERVER 单行只读卡（整卡可点弹窗）+ AUDIO OUTPUT 卡；连接设置表单移入模态弹窗
+  （校验失败弹窗内提示、已连接保存自动换线重连，保持 V3.2 行为；×/取消/遮罩/Esc 可关闭）；
+  同步 connect/disconnect 状态行文案与页首 tip；顺带修复 index.html 中 V3.2 重写残留的
+  孤立文本与指向已删除文件的死链接卡。验证：HTML 标签配平、node --check、headless Chrome
+  截图（默认态/弹窗态/总览页）全部通过。仅改设计原型未动客户端代码；Tauri 真端实现待
+  UI V3.2 评审确认后统一实施。

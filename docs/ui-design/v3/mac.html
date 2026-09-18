@@ -84,7 +84,6 @@ body{
   border-radius:4px;padding:2px 6px;margin-left:7px;vertical-align:1px}
 .target .t2{font:10px var(--mono);color:var(--tx2);margin-top:3px}
 .target .r{margin-left:auto;font:10.5px var(--mono);color:var(--tx2)}
-.hr{height:1px;background:var(--line);margin:13px 0}
 select#audiosel{width:100%;margin-top:10px;background:#141a22;border:1px solid var(--line);border-radius:9px;
   padding:10px 12px;color:var(--tx);font-size:12px;outline:none}
 .meter{display:flex;align-items:flex-end;gap:3px;height:34px;margin-top:12px}
@@ -121,6 +120,18 @@ select#audiosel{width:100%;margin-top:10px;background:#141a22;border:1px solid v
 .field input{flex:1;background:transparent;border:none;outline:none;color:var(--tx);font-size:13px;min-width:0}
 .field input:focus{border-color:#3d4654}
 .svnote{font-size:10px;color:var(--tx2);line-height:1.6}
+.srvcard{cursor:pointer;user-select:none}
+.srvcard:hover{border-color:#4a3b1c}
+.srvcard:hover .btn{border-color:#4a3b1c;color:var(--amber)}
+.ovl{position:fixed;inset:0;background:rgba(5,8,12,.66);display:none;align-items:center;justify-content:center;z-index:60}
+.ovl.open{display:flex}
+.modal{width:min(400px,88vw);background:var(--card);border:1px solid #3a4452;border-radius:12px;padding:18px;
+  box-shadow:0 24px 70px rgba(0,0,0,.6)}
+.mhead{display:flex;justify-content:space-between;align-items:flex-start}
+.mx{font:14px var(--mono);color:var(--tx2);cursor:pointer;line-height:1;padding:4px 8px;border-radius:6px;user-select:none}
+.mx:hover{color:var(--tx);background:#232b37}
+.merr{display:none;font-size:11px;color:var(--red);margin-top:10px}
+.mbtns{display:flex;gap:8px;margin-top:16px;align-items:center}
 @media (prefers-reduced-motion:reduce){.led.g,.meter i,.spin{animation:none}}
 </style>
 </head>
@@ -131,7 +142,7 @@ select#audiosel{width:100%;margin-top:10px;background:#141a22;border:1px solid v
   <a href="./index.html">← 返回总览</a>
 </header>
 <div class="tip">试一下：<b>点右上状态胶囊</b>连接 → 注册出秘密 → 3 秒后模拟手机上线桥接；<b>重新生成</b>换秘密；<b>复制</b>可复制；
-音频下拉选「外接声卡（未接入）」看音频缺失态；<b>再点状态胶囊</b>=断开。V3.2 决定：<b>只保留公网连接</b>，本地局域网仅用于测试（地址填局域网 IP 即可）。</div>
+音频下拉选「外接声卡（未接入）」看音频缺失态；<b>再点状态胶囊</b>=断开；<b>点「中继服务器」卡</b>弹窗修改地址/设备名（低频设置，不占首屏）。V3.2 决定：<b>只保留公网连接</b>，本地局域网仅用于测试（地址填局域网 IP 即可）。</div>
 
 <div class="stage">
   <div class="halo"></div>
@@ -162,28 +173,23 @@ select#audiosel{width:100%;margin-top:10px;background:#141a22;border:1px solid v
         <div class="peerline" id="peerline"></div>
       </div>
 
-      <div class="card target">
-        <div class="sect">CONNECTION SETTINGS · 中继服务器</div>
-        <label class="fl"><b>服务器地址</b>（IP:端口，本地测试可填局域网 IP）</label>
-        <div class="field"><input id="in-server" value="118.193.40.160:9432" spellcheck="false"></div>
-        <label class="fl"><b>设备名</b>（手机端看到的本机名字）</label>
-        <div class="field"><input id="in-name" value="联合测试Mac" spellcheck="false"></div>
-        <div class="row" style="justify-content:space-between;align-items:center">
-          <span class="btn pri" id="btn-save">保存设置</span>
-          <span class="svnote">已连接时保存会自动换线重连</span>
-        </div>
-        <div class="hr"></div>
+      <div class="card target srvcard" id="srvcfg" title="点击修改服务器地址 / 设备名">
+        <div class="sect">RELAY SERVER · 中继服务器</div>
         <div class="row">
           <span class="ico lan">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1" fill="currentColor" stroke="none"/></svg>
           </span>
           <div class="tt">
             <div class="t1" id="srv-t1">未连接</div>
-            <div class="t2" id="srv-t2">保存后点右上状态胶囊连接</div>
+            <div class="t2" id="srv-t2">点右上状态胶囊连接 · 点击本卡修改设置</div>
           </div>
           <span class="r" id="rtt"></span>
+          <span class="btn">修改</span>
         </div>
-        <div class="hr"></div>
+      </div>
+
+      <div class="card target">
+        <div class="sect">AUDIO OUTPUT · 音频输出</div>
         <div class="row">
           <span class="ico">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M17 2l-5 5-5-5"/></svg>
@@ -233,6 +239,29 @@ select#audiosel{width:100%;margin-top:10px;background:#141a22;border:1px solid v
   </div>
 </div>
 
+<!-- 连接设置弹窗：低频配置（服务器地址/设备名）收在这里，首页只留中继服务器状态行 -->
+<div class="ovl" id="ovl">
+  <div class="modal">
+    <div class="mhead">
+      <div>
+        <div class="sect">CONNECTION SETTINGS</div>
+        <div style="font-size:14.5px;font-weight:700;margin-top:4px">连接设置</div>
+      </div>
+      <span class="mx" id="btn-mclose">✕</span>
+    </div>
+    <label class="fl"><b>服务器地址</b>（IP:端口，本地测试可填局域网 IP）</label>
+    <div class="field"><input id="in-server" value="118.193.40.160:9432" spellcheck="false"></div>
+    <label class="fl"><b>设备名</b>（手机端看到的本机名字）</label>
+    <div class="field"><input id="in-name" value="联合测试Mac" spellcheck="false"></div>
+    <div class="merr" id="merr"></div>
+    <div class="mbtns">
+      <span class="svnote" style="margin-right:auto">已连接时保存会自动换线重连</span>
+      <span class="btn" id="btn-mcancel">取消</span>
+      <span class="btn pri" id="btn-save">保存设置</span>
+    </div>
+  </div>
+</div>
+
 <script>
 const $=id=>document.getElementById(id);
 const ALPHA='23456789ABCDEFGHJKMNPQRSTUVWXYZ';
@@ -273,7 +302,7 @@ function connect(){
     $('srvline').textContent=serverAddr;
     $('srvsrc').style.display='';
     $('srv-t1').innerHTML=serverAddr+'<span class="tag">已连接</span>';
-    $('srv-t2').textContent='配置地址 · 修改后保存会自动重连';
+    $('srv-t2').textContent='配置地址 · 点击本卡可修改';
     $('rtt').textContent='RTT 42ms';
     const secret=rand(4)+'-'+rand(4);
     $('bigcode').textContent=secret;
@@ -307,8 +336,13 @@ function disconnect(){
   $('exp').textContent='有效期 --:--:--';
   clearInterval(window._exp);clearTimeout(bridgeT);clearInterval(bridgeTick);
   $('srvline').textContent='尚未连接';$('srvsrc').style.display='none';
-  $('srv-t1').textContent='中继服务器';
-  $('srv-t2').textContent='连接后显示（连接设置中配置）';
+  if(serverAddr){
+    $('srv-t1').textContent='未连接';
+    $('srv-t2').textContent='点右上状态胶囊连接 · 点击本卡修改设置';
+  }else{
+    $('srv-t1').textContent='未配置服务器';
+    $('srv-t2').textContent='点击本卡填写服务器地址';
+  }
   $('rtt').textContent='';
   $('peerline').innerHTML='';
   $('meter').classList.add('off');
@@ -317,10 +351,27 @@ function disconnect(){
   log('','已断开');
 }
 
-/* 连接设置保存：校验 → 生效；已连接则换线重连 */
+/* 连接设置弹窗：打开回填；×/取消/遮罩/Esc 关闭；保存校验→生效，已连接则换线重连 */
+function openCfg(){
+  $('in-server').value=serverAddr;
+  $('in-name').value=deviceName;
+  $('merr').style.display='none';
+  $('ovl').classList.add('open');
+}
+function closeCfg(){$('ovl').classList.remove('open');}
+$('srvcfg').addEventListener('click',openCfg);
+$('btn-mclose').addEventListener('click',closeCfg);
+$('btn-mcancel').addEventListener('click',closeCfg);
+$('ovl').addEventListener('click',e=>{if(e.target===$('ovl'))closeCfg();});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&$('ovl').classList.contains('open'))closeCfg();
+});
 $('btn-save').addEventListener('click',()=>{
   const v=$('in-server').value.trim(),n=$('in-name').value.trim()||'Mac';
-  if(!/^[\w.\-]+(:\d+)?$/.test(v)){log('err','服务器地址格式无效（应为 host:port）');return;}
+  if(!/^[\w.\-]+(:\d+)?$/.test(v)){
+    $('merr').textContent='服务器地址格式无效（应为 host:port，如 118.193.40.160:9432）';
+    $('merr').style.display='block';return;
+  }
   const changed=v!==serverAddr;
   serverAddr=v;deviceName=n;
   if(st==='stopped'){
@@ -330,6 +381,7 @@ $('btn-save').addEventListener('click',()=>{
     disconnect();connect();
   }
   if(!changed)log('info','地址未变化，仅设备名更新');
+  closeCfg();
 });
 
 /* 音频输出（选择缺失设备触发错误子态） */
