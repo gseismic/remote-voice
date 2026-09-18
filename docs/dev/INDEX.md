@@ -87,3 +87,13 @@
   孤立文本与指向已删除文件的死链接卡。验证：HTML 标签配平、node --check、headless Chrome
   截图（默认态/弹窗态/总览页）全部通过。仅改设计原型未动客户端代码；Tauri 真端实现待
   UI V3.2 评审确认后统一实施。
+
+- **2026-09-18 11:41** | [PLAN-016-mac-settings-modal-impl.md](PLAN-016-mac-settings-modal-impl.md) → [PLAN-016-mac-settings-modal-impl-OUTCOME.md](PLAN-016-mac-settings-modal-impl-OUTCOME.md)
+  摘要：将 PLAN-015 定稿原型落地到 Mac Tauri 客户端（仅 web/ 三件，Rust 零改动）。删除首页常驻
+  「连接设置」面板，改为 RELAY SERVER 单行只读卡（整卡可点）+ AUDIO OUTPUT 卡 + 永久秘密通栏；
+  服务器地址/设备名/有效期/keep-temp/清除信任收进「连接设置」模态弹窗；全部沿用原元素 ID，
+  readSettings/render 无缝兼容。新增 editingSettings 标志修复连接中高频 app-state 事件冲掉
+  弹窗内未提交编辑的既有缺陷；保存重连复用后端 save_settings 内置换线（controller.rs:346-348），
+  连接前地址为空改为前置打开弹窗引导。验证：pnpm build 通过；vite dev + headless Chrome 截图
+  默认态/弹窗态布局与样式正确；临时截图改动已还原复核。未覆盖：macOS 真机行为（Rust 无改动，
+  不影响 PLAN-010 结论）、Android V3.2 简化另计。

@@ -49,6 +49,7 @@ let renderStarted = false;
 let toastTimer = null;
 let audioDevices = [];
 let expiryRefreshAttempt = 0;
+let editingSettings = false;
 
 function formatBytes(value) {
   if (!Number.isFinite(value) || value < 1024) return `${Math.max(0, value || 0)} B`;
@@ -168,6 +169,22 @@ function renderConnectButton() {
   renderIcons();
 }
 
+function renderRelayLine(status) {
+  const connected = statusIsConnected(status);
+  const lineState = connected
+    ? (status === "connecting" || status === "reconnecting" ? "progress" : "true")
+    : status === "fatal" ? "fatal" : "false";
+  $("relay-line").dataset.connected = lineState;
+  $("relay-summary").textContent = state.server || "未配置服务器";
+  $("relay-detail").textContent = !state.server
+    ? "点击填写服务器地址"
+    : status === "fatal"
+      ? "连接失败 · 点击本卡检查设置"
+      : connected
+        ? "保存修改将自动换线重连"
+        : "点「连接」开始 · 点击本卡修改";
+}
+
 function render(next) {
   state = { ...fallbackState, ...next };
   const status = state.status || "stopped";
@@ -187,12 +204,16 @@ function render(next) {
   $("audio-bytes").textContent = formatBytes(Number(state.audio_bytes || 0));
   $("dropped-frames").textContent = Number(state.dropped_audio_frames || 0).toLocaleString("zh-CN");
 
-  setValueIfIdle($("server"), state.server);
-  setValueIfIdle($("device-name"), state.name);
-  if (document.activeElement !== $("temp-expiry-choice")) {
-    $("temp-expiry-choice").value = String(state.temp_duration || 28800);
+  // 弹窗打开期间不回填连接设置，避免高频 app-state 事件冲掉用户未提交的编辑
+  if (!editingSettings) {
+    setValueIfIdle($("server"), state.server);
+    setValueIfIdle($("device-name"), state.name);
+    if (document.activeElement !== $("temp-expiry-choice")) {
+      $("temp-expiry-choice").value = String(state.temp_duration || 28800);
+    }
+    if (document.activeElement !== $("keep-temp")) $("keep-temp").checked = Boolean(state.keep);
   }
-  if (document.activeElement !== $("keep-temp")) $("keep-temp").checked = Boolean(state.keep);
+  renderRelayLine(status);
   renderAudioOptions();
   const alert = $("audio-alert");
   alert.hidden = !state.audio_error;
@@ -268,8 +289,13 @@ async function toggleConnection() {
     await runAction(() => call("disconnect"), "已断开连接");
     return;
   }
+  if (!$("server").value.trim()) {
+    openSettings();
+    showToast("请先填写服务器地址", "error");
+    return;
+  }
   await runAction(async () => {
-    // 连接动作同时提交当前表单，让首次使用只需填写服务器地址即可开始。
+    // 连接动作同时提交当前设置，让首次使用只需在弹窗填一次服务器地址即可开始。
     await call("save_settings", readSettings());
     return call("connect");
   }, "正在连接");
@@ -285,8 +311,35 @@ function readSettings() {
   };
 }
 
+function openSettings() {
+  editingSettings = true;
+  $("server").value = state.server || "";
+  $("device-name").value = state.name || "";
+  $("temp-expiry-choice").value = String(state.temp_duration || 28800);
+  $("keep-temp").checked = Boolean(state.keep);
+  $("settings-error").hidden = true;
+  $("settings-overlay").hidden = false;
+  $("server").focus();
+}
+
+function closeSettings() {
+  editingSettings = false;
+  $("settings-overlay").hidden = true;
+}
+
 async function saveSettings() {
-  await runAction(() => call("save_settings", readSettings()), "设置已保存");
+  const wasConnected = statusIsConnected(state.status);
+  try {
+    const next = await call("save_settings", readSettings());
+    render(next);
+    closeSettings();
+    // 已连接时后端保存会自动按新地址换线重连（controller.save_settings）
+    showToast(wasConnected ? "设置已保存，正在按新设置重连" : "设置已保存");
+  } catch (error) {
+    const box = $("settings-error");
+    box.textContent = commandError(error);
+    box.hidden = false;
+  }
 }
 
 function bindEvents() {
@@ -294,6 +347,16 @@ function bindEvents() {
   $("regenerate-temp").addEventListener("click", () =>
     runAction(() => call("regenerate_temp"), "临时秘密已更新"));
   $("connect-toggle").addEventListener("click", toggleConnection);
+  $("relay-panel").addEventListener("click", openSettings);
+  $("open-settings").addEventListener("click", openSettings);
+  $("close-settings").addEventListener("click", closeSettings);
+  $("cancel-settings").addEventListener("click", closeSettings);
+  $("settings-overlay").addEventListener("click", (event) => {
+    if (event.target === $("settings-overlay")) closeSettings();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("settings-overlay").hidden) closeSettings();
+  });
   $("save-settings").addEventListener("click", saveSettings);
   $("clear-trust").addEventListener("click", () => {
     if (!window.confirm("清除当前服务器信任后，下一次连接会重新接受服务器证书。继续吗？")) {

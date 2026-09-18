@@ -50,7 +50,45 @@
         </section>
 
         <div class="content-grid">
-          <section class="panel panel-permanent" aria-labelledby="permanent-title">
+          <section class="panel panel-relay" id="relay-panel" aria-labelledby="relay-title" title="点击修改服务器地址 / 设备名">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">RELAY SERVER</p>
+                <h2 id="relay-title">中继服务器</h2>
+              </div>
+              <button class="button button-accent" id="open-settings" title="修改服务器地址 / 设备名">
+                <i data-lucide="pencil" aria-hidden="true"></i><span>修改</span>
+              </button>
+            </div>
+            <div class="relay-line" id="relay-line" data-connected="false">
+              <span class="relay-dot" aria-hidden="true"></span>
+              <div class="relay-copy">
+                <span class="relay-address" id="relay-summary">未配置服务器</span>
+                <span class="relay-detail" id="relay-detail">点击填写服务器地址</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel panel-audio" aria-labelledby="audio-title">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">AUDIO OUTPUT</p>
+                <h2 id="audio-title">音频输出</h2>
+              </div>
+              <div class="panel-actions">
+                <button class="icon-button" id="refresh-audio" title="刷新音频设备" aria-label="刷新音频设备">
+                  <i data-lucide="volume-2" aria-hidden="true"></i>
+                </button>
+              </div>
+            </div>
+            <label class="field">
+              <span>输出设备</span>
+              <select id="audio-device"></select>
+            </label>
+            <p class="audio-alert" id="audio-alert" hidden></p>
+          </section>
+
+          <section class="panel panel-permanent panel-span" aria-labelledby="permanent-title">
             <div class="panel-heading">
               <div>
                 <p class="eyebrow">LONG-LIVED ACCESS</p>
@@ -70,57 +108,6 @@
                 <i data-lucide="trash-2" aria-hidden="true"></i>
               </button>
             </div>
-          </section>
-
-          <section class="panel panel-settings" aria-labelledby="settings-title">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">RECEIVER PROFILE</p>
-                <h2 id="settings-title">连接设置</h2>
-              </div>
-              <div class="panel-actions">
-                <button class="icon-button" id="clear-trust" title="清除服务器信任" aria-label="清除服务器信任">
-                  <i data-lucide="shield-off" aria-hidden="true"></i>
-                </button>
-                <button class="icon-button" id="refresh-audio" title="刷新音频设备" aria-label="刷新音频设备">
-                  <i data-lucide="volume-2" aria-hidden="true"></i>
-                </button>
-              </div>
-            </div>
-            <div class="settings-fields">
-              <label class="field">
-                <span>服务器地址</span>
-                <input id="server" type="text" inputmode="url" placeholder="host:9432" autocomplete="url" />
-              </label>
-              <label class="field">
-                <span>设备名</span>
-                <input id="device-name" type="text" placeholder="MacBook" autocomplete="organization" />
-              </label>
-              <label class="field">
-                <span>音频输出</span>
-                <select id="audio-device"></select>
-              </label>
-              <label class="field">
-                <span>临时秘密有效期</span>
-                <select id="temp-expiry-choice">
-                  <option value="600">10 分钟</option>
-                  <option value="3600">1 小时</option>
-                  <option value="28800" selected>8 小时</option>
-                  <option value="86400">24 小时</option>
-                </select>
-              </label>
-            </div>
-            <div class="settings-footer">
-              <label class="toggle-field">
-                <input id="keep-temp" type="checkbox" />
-                <span class="toggle-track" aria-hidden="true"></span>
-                <span>重启后保持临时秘密</span>
-              </label>
-              <button class="button button-primary" id="save-settings">
-                <i data-lucide="save" aria-hidden="true"></i><span>保存设置</span>
-              </button>
-            </div>
-            <p class="audio-alert" id="audio-alert" hidden></p>
           </section>
         </div>
 
@@ -150,6 +137,56 @@
           <i data-lucide="power" aria-hidden="true"></i><span>连接</span>
         </button>
       </footer>
+    </div>
+    <!-- 连接设置弹窗：低频配置（服务器地址/设备名/有效期/信任）收在这里，首页只留中继服务器状态行 -->
+    <div class="modal-overlay" id="settings-overlay" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
+      <div class="modal-dialog">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">RECEIVER PROFILE</p>
+            <h2 id="settings-title">连接设置</h2>
+          </div>
+          <button class="icon-button modal-close" id="close-settings" title="关闭" aria-label="关闭连接设置">
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
+        </div>
+        <div class="settings-fields">
+          <label class="field modal-span">
+            <span>服务器地址（host:端口）</span>
+            <input id="server" type="text" inputmode="url" placeholder="host:9432" autocomplete="url" />
+          </label>
+          <label class="field modal-span">
+            <span>设备名（手机端看到的本机名字）</span>
+            <input id="device-name" type="text" placeholder="MacBook" autocomplete="organization" />
+          </label>
+          <label class="field modal-span">
+            <span>临时秘密有效期</span>
+            <select id="temp-expiry-choice">
+              <option value="600">10 分钟</option>
+              <option value="3600">1 小时</option>
+              <option value="28800" selected>8 小时</option>
+              <option value="86400">24 小时</option>
+            </select>
+          </label>
+        </div>
+        <label class="toggle-field modal-toggle">
+          <input id="keep-temp" type="checkbox" />
+          <span class="toggle-track" aria-hidden="true"></span>
+          <span>重启后保持临时秘密</span>
+        </label>
+        <p class="modal-error" id="settings-error" hidden></p>
+        <div class="modal-footer">
+          <button class="text-button text-danger" id="clear-trust" title="清除当前服务器的 TOFU 信任记录">
+            <i data-lucide="shield-off" aria-hidden="true"></i><span>清除服务器信任</span>
+          </button>
+          <div class="modal-footer-actions">
+            <button class="button" id="cancel-settings"><span>取消</span></button>
+            <button class="button button-primary" id="save-settings">
+              <i data-lucide="save" aria-hidden="true"></i><span>保存设置</span>
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script type="module" src="/app.js"></script>
