@@ -31,8 +31,6 @@
     <string name="btn_add_device">＋ 添加设备（粘贴 Mac 端秘密）</string>
     <string name="sect_advanced">ADVANCED</string>
     <string name="label_advanced_title">采音与信任</string>
-    <string name="label_handsfree">免提常开</string>
-    <string name="label_handsfree_desc">开启后不需按住即持续传输（会议场景）</string>
     <string name="label_aec">回声消除</string>
     <string name="label_aec_desc">Mac 外放时建议开启</string>
     <string name="label_trust">清除服务器信任</string>

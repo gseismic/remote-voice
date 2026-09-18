@@ -184,6 +184,21 @@
           <span class="toggle-track" aria-hidden="true"></span>
           <span>重启后保持临时秘密</span>
         </label>
+        <div class="settings-fields dictation-fields">
+          <label class="toggle-field modal-toggle">
+            <input id="dictation-enabled" type="checkbox" />
+            <span class="toggle-track" aria-hidden="true"></span>
+            <span>手机说话时模拟 Fn（触发语音输入）</span>
+          </label>
+          <label class="field modal-span">
+            <span>模拟方式</span>
+            <select id="dictation-mode">
+              <option value="hold" selected>按住 Fn（松开结束）</option>
+              <option value="double">双击 Fn（兜底模式）</option>
+            </select>
+          </label>
+          <p class="field-hint modal-span">需要辅助功能权限：系统设置 → 隐私与安全性 → 辅助功能，勾选本应用。</p>
+        </div>
         <p class="modal-error" id="settings-error" hidden></p>
         <div class="modal-footer">
           <button class="text-button text-danger" id="clear-trust" title="清除当前服务器的 TOFU 信任记录">

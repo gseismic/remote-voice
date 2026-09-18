@@ -2,6 +2,7 @@ use crate::audio::{self, AudioSink, CpalSink, SinkStats};
 use crate::config::{self, AppConfig};
 use crate::history::{self, HistoryEntry};
 use crate::identity;
+use crate::keyinject::{InjectMode, KeyInjector};
 use crate::relay::{Registration, RelayClient, RelayClientOptions, RelayEvent};
 use crate::secrets;
 use crate::storage::SystemKeychain;
@@ -48,6 +49,9 @@ pub struct AppState {
     pub keep: bool,
     pub permanent_enabled: bool,
     pub peer_name: String,
+    pub talking: bool,
+    pub dictation_enabled: bool,
+    pub dictation_mode: String,
     pub audio_frames: u64,
     pub audio_bytes: u64,
     pub dropped_audio_frames: u64,
@@ -74,6 +78,9 @@ impl AppState {
             keep: config.keep,
             permanent_enabled: permanent,
             peer_name: String::new(),
+            talking: false,
+            dictation_enabled: config.dictation_enabled,
+            dictation_mode: config.dictation_mode.clone(),
             audio_frames: 0,
             audio_bytes: 0,
             dropped_audio_frames: 0,
@@ -94,6 +101,8 @@ pub struct AppController {
     client: Mutex<Option<Arc<RelayClient>>>,
     thread: Mutex<Option<JoinHandle<()>>>,
     app: Mutex<Option<AppHandle>>,
+    injector: KeyInjector,
+    inject_warned: std::sync::atomic::AtomicBool,
 }
 
 impl AppController {
@@ -142,6 +151,8 @@ impl AppController {
             client: Mutex::new(None),
             thread: Mutex::new(None),
             app: Mutex::new(None),
+            injector: KeyInjector::new(),
+            inject_warned: std::sync::atomic::AtomicBool::new(false),
             config_dir,
         })
     }
@@ -169,6 +180,8 @@ impl AppController {
 
     fn connect_inner(self: &Arc<Self>) -> Result<(), CommandError> {
         self.stop_client();
+        // 重连前强制释放 Fn：旧连接的 PeerOffline 事件可能因 fatal 而未送达
+        self.injector.release();
         let (config, state) = {
             let config = self
                 .config
@@ -229,6 +242,7 @@ impl AppController {
             state.detail = config.server.clone();
             state.audio_error.clear();
             state.peer_name.clear();
+            state.talking = false;
             state.audio_frames = 0;
             state.audio_bytes = 0;
             state.dropped_audio_frames = 0;
@@ -253,10 +267,12 @@ impl AppController {
 
     pub fn disconnect(&self) {
         let _lifecycle_guard = self.lifecycle_lock.lock().ok();
+        self.injector.release();
         self.stop_client();
         self.update_state(|state| {
             state.status = "stopped".to_string();
             state.detail.clear();
+            state.talking = false;
         });
     }
 
@@ -273,6 +289,7 @@ impl AppController {
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // Tauri command 参数须扁平供前端按名调用
     pub fn save_settings(
         self: &Arc<Self>,
         server: String,
@@ -280,6 +297,8 @@ impl AppController {
         audio_device: String,
         temp_duration: i64,
         keep: bool,
+        dictation_enabled: bool,
+        dictation_mode: String,
     ) -> Result<AppState, CommandError> {
         config::parse_server(&server)
             .map_err(|error| CommandError::new("invalid-server", error.to_string()))?;
@@ -294,6 +313,12 @@ impl AppController {
         }
         if !matches!(temp_duration, 600 | 3600 | 28_800 | 86_400) {
             return Err(CommandError::new("invalid-expiry", "临时秘密有效期无效"));
+        }
+        if dictation_mode != "hold" && dictation_mode != "double" {
+            return Err(CommandError::new(
+                "invalid-dictation-mode",
+                "语音输入模拟方式无效",
+            ));
         }
         let _lifecycle_guard = self
             .lifecycle_lock
@@ -323,6 +348,8 @@ impl AppController {
             config.audio_device = audio_device.clone();
             config.temp_duration = temp_duration;
             config.keep = keep;
+            config.dictation_enabled = dictation_enabled;
+            config.dictation_mode = dictation_mode.clone();
             if keep {
                 config.temp_secret = current_state.temp_secret.clone();
                 config.temp_exp = temp_exp;
@@ -339,10 +366,15 @@ impl AppController {
             state.audio_device = audio_device.clone();
             state.temp_duration = temp_duration;
             state.keep = keep;
+            state.dictation_enabled = dictation_enabled;
+            state.dictation_mode = dictation_mode.clone();
             if duration_changed {
                 state.temp_exp = temp_exp;
             }
         });
+        // 配置切换（关闭功能/换模式）时强制释放，避免旧模式下的 Fn 悬空
+        self.injector.release();
+        self.inject_warned.store(false, std::sync::atomic::Ordering::Relaxed);
         if active {
             self.connect_inner()?;
         }
@@ -551,11 +583,38 @@ impl AppController {
                     format!("{} 已连接", state.peer_name)
                 };
             }),
-            RelayEvent::PeerOffline => self.update_state(|state| {
-                state.status = "registered".to_string();
-                state.detail = "等待手机连接".to_string();
-                state.peer_name.clear();
-            }),
+            RelayEvent::PeerOffline => {
+                // 对端掉线必须强制释放 Fn，防止手机崩溃/断网后 Fn 悬空（设计 §1）
+                self.injector.release();
+                self.update_state(|state| {
+                    state.status = "registered".to_string();
+                    state.detail = "等待手机连接".to_string();
+                    state.peer_name.clear();
+                    state.talking = false;
+                })
+            }
+            RelayEvent::PeerTalking { on } => {
+                self.update_state(|state| state.talking = on);
+                let (enabled, mode) = match self.state.lock() {
+                    Ok(state) => (
+                        state.dictation_enabled,
+                        InjectMode::parse(&state.dictation_mode),
+                    ),
+                    Err(_) => return,
+                };
+                if !enabled {
+                    return;
+                }
+                if let Err(message) = self.injector.set_talking(on, mode) {
+                    // 权限类错误每次 PTT 都会触发，只提示一次避免刷屏
+                    if !self
+                        .inject_warned
+                        .swap(true, std::sync::atomic::Ordering::Relaxed)
+                    {
+                        self.add_event("warning", message);
+                    }
+                }
+            }
             RelayEvent::AuthAccepted { ip, kind } => {
                 let label = if kind == "perm" { "永久" } else { "临时" };
                 self.add_history(HistoryEntry {
@@ -659,6 +718,7 @@ impl AppController {
 
 impl Drop for AppController {
     fn drop(&mut self) {
+        self.injector.release();
         self.stop_client();
     }
 }
@@ -722,6 +782,7 @@ pub fn disconnect(state: State<'_, Arc<AppController>>) -> Result<AppState, Comm
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // 与 controller.save_settings 同参，扁平传递
 pub fn save_settings(
     state: State<'_, Arc<AppController>>,
     server: String,
@@ -729,8 +790,18 @@ pub fn save_settings(
     audio_device: String,
     temp_duration: i64,
     keep: bool,
+    dictation_enabled: bool,
+    dictation_mode: String,
 ) -> Result<AppState, CommandError> {
-    state.save_settings(server, name, audio_device, temp_duration, keep)
+    state.save_settings(
+        server,
+        name,
+        audio_device,
+        temp_duration,
+        keep,
+        dictation_enabled,
+        dictation_mode,
+    )
 }
 
 #[tauri::command]

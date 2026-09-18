@@ -147,41 +147,6 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="@string/label_handsfree"
-                        android:textColor="@color/rv_tx"
-                        android:textSize="12.5sp" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
-                        android:text="@string/label_handsfree_desc"
-                        android:textColor="@color/rv_tx2"
-                        android:textSize="10sp" />
-                </LinearLayout>
-
-                <Switch
-                    android:id="@+id/switch_handsfree"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
                         android:text="@string/label_aec"
                         android:textColor="@color/rv_tx"
                         android:textSize="12.5sp" />

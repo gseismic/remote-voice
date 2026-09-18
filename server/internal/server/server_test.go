@@ -486,6 +486,46 @@ func TestBridgeFullDuplex(t *testing.T) {
 	}
 }
 
+func TestBridgeTalkForwardAndUnbridgedDrop(t *testing.T) {
+	addr := startTestServer(t, 5*time.Second, 2*time.Second)
+	mac, _, _ := mustRegMac(t, addr, "MacBook", "", "TALK-1", time.Now().Add(time.Hour).Unix())
+
+	// 未桥接丢弃：手机已认证（桥接随 Mac 掉线溶解）→ 发 TALK 不致死、不转发
+	phone, _ := mustAuthPhone(t, addr, "TALK-1")
+	expectFrame(t, mac, protocol.FramePeerState, 2*time.Second)
+	mac.Close()
+	expectFrame(t, phone, protocol.FramePeerState, 3*time.Second)
+	if err := protocol.WriteFrame(phone, protocol.FrameTalk, []byte{0x01}); err != nil {
+		t.Fatalf("unbridged talk should be accepted (dropped): %v", err)
+	}
+	// 会话仍存活：PING→PONG 证明连接未被 TALK 误杀
+	if err := protocol.WriteFrame(phone, protocol.FramePing, nil); err != nil {
+		t.Fatal(err)
+	}
+	expectFrame(t, phone, protocol.FramePong, 2*time.Second)
+	phone.Close()
+
+	// 桥接透传：新 Mac 同秘密重连，手机重连后发 TALK(按下/松开) 均按字节透传
+	mac2, _, _ := mustRegMac(t, addr, "MacBook", "", "TALK-1", time.Now().Add(time.Hour).Unix())
+	_ = mac2
+	phone2, _ := mustAuthPhone(t, addr, "TALK-1")
+	expectFrame(t, mac2, protocol.FramePeerState, 2*time.Second)
+	if err := protocol.WriteFrame(phone2, protocol.FrameTalk, []byte{0x01}); err != nil {
+		t.Fatalf("phone send talk: %v", err)
+	}
+	got := expectFrame(t, mac2, protocol.FrameTalk, 2*time.Second)
+	if len(got) != 1 || got[0] != 0x01 {
+		t.Fatalf("want talk-on payload [0x01], got %v", got)
+	}
+	if err := protocol.WriteFrame(phone2, protocol.FrameTalk, []byte{0x00}); err != nil {
+		t.Fatalf("phone send talk off: %v", err)
+	}
+	got = expectFrame(t, mac2, protocol.FrameTalk, 2*time.Second)
+	if len(got) != 1 || got[0] != 0x00 {
+		t.Fatalf("want talk-off payload [0x00], got %v", got)
+	}
+}
+
 func TestPeerBusyRejected(t *testing.T) {
 	addr := startTestServer(t, 5*time.Second, 2*time.Second)
 	mac, _, _ := mustRegMac(t, addr, "MacBook", "", "BUSY-1", time.Now().Add(time.Hour).Unix())

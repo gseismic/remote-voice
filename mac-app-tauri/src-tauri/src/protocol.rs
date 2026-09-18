@@ -12,6 +12,8 @@ pub const FRAME_PONG: u8 = 0x06;
 pub const FRAME_PEER_STATE: u8 = 0x07;
 pub const FRAME_REGISTER: u8 = 0x08;
 pub const FRAME_EVENT: u8 = 0x09;
+/// 手机→Mac 说话状态（PTT 按下/松开），payload 1 字节（0x01/0x00），server 透传
+pub const FRAME_TALK: u8 = 0x0A;
 
 pub const PEER_OFFLINE: u8 = 0x00;
 pub const PEER_ONLINE: u8 = 0x01;

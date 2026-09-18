@@ -71,8 +71,14 @@ func (s *Server) readLoop(sess *session) {
 			sess.audioFrames.Add(1)
 			sess.audioBytes.Add(int64(len(payload)))
 			// 计数含未桥接时被丢弃的帧：反映的是"对端发来了什么"
-			if target := s.audioTarget(sess); target != nil {
+			if target := s.peerTarget(sess); target != nil {
 				target.writeFrame(protocol.FrameAudio, payload)
+			}
+		case protocol.FrameTalk:
+			// 说话状态（PTT 按下/松开）与音频同路径透传，不计数不解析。
+			// 手机侧持有当前状态并在重桥时重发，服务器丢弃不缓存。
+			if target := s.peerTarget(sess); target != nil {
+				target.writeFrame(protocol.FrameTalk, payload)
 			}
 		case protocol.FrameRegister:
 			if sess.role == protocol.RoleMac {
@@ -85,9 +91,10 @@ func (s *Server) readLoop(sess *session) {
 	}
 }
 
-// audioTarget 返回某会话 AUDIO 帧应转发到的对端；无桥接时返回 nil。
+// peerTarget 返回某会话应转发到的桥接对端（音频/说话状态等双向载荷）；
+// 无桥接时返回 nil。
 // 在锁内解引用桥接的读操作，避免与 authPhone/detach 的原子解桥竞态。
-func (s *Server) audioTarget(sess *session) *session {
+func (s *Server) peerTarget(sess *session) *session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b := sess.bridge

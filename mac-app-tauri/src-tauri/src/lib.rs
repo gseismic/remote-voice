@@ -3,6 +3,7 @@ mod config;
 mod controller;
 mod history;
 mod identity;
+mod keyinject;
 mod protocol;
 mod relay;
 mod secrets;

@@ -29,7 +29,14 @@ Linux 服务器中继，写入 Mac 的 BlackHole 虚拟声卡**，使任意 Mac 
 
 ### 最近完成的重点
 
-1. **PLAN-012（pnpm 统一）**：Tauri 前端包管理器 npm→pnpm，锁文件换 pnpm-lock.yaml；
+1. **PLAN-019（PTT→Fn 语音输入 + 泄流修复）**：协议加 `FRAME_TALK=0x0A`（手机→Mac
+   说话状态，server 透传）；Mac 端 keyinject 模块把手机 PTT 映射为 Fn 按键
+   （hold 按住保持=默认 / double 双击=兜底，需**辅助功能权限**），桥接断开强制释放；
+   Android 移除 handsfree（泄流根因 A：旧 prefs 残留 true 且 V3.2 无处关闭）、
+   onPause 兜底复位 pttHeld（根因 B）、"传输中"文案改"已就绪"。设计：
+   `docs/design/ptt-dictation-20260918-holdfn.md`。**待真机验证**：Fn 注入实际效果
+   （若长按 Fn 弹输入菜单→设置切双击模式）、授权后语音输入闭环、未按 PTT 帧数归零。
+2. **PLAN-012（pnpm 统一）**：Tauri 前端包管理器 npm→pnpm，锁文件换 pnpm-lock.yaml；
    顺带修复开发机 cargo PATH 与 crates.io 网络问题（见环境备忘）。
 2. **PLAN-013（局域网发现 + 双地址 + 归档）**：
    - server 新增 UDP 局域网发现应答（探测串 `RV-DISCOVER-v1`，同 `-addr` 端口，同源 1s 节流，
@@ -62,7 +69,9 @@ Linux 服务器中继，写入 Mac 的 BlackHole 虚拟声卡**，使任意 Mac 
 3. **真 Mac 端三端联测**：Mac 上构建 Tauri（pnpm），连 `192.168.1.103:9432`（本机 server）或
    公网 server，手机连家里 Wi-Fi 用扫描选本地 server；替换手机端预置的旧秘密（`2TWU-KF8U`
    属于已弃用的 Linux 临时客户端注册的设备，Mac 新客户端会生成新秘密）。
-4. Tauri macOS 真机验收：Keychain、BlackHole 实际出声、签名/公证（沿用 PLAN-010 遗留）。
+4. Tauri macOS 真机验收：Keychain、BlackHole 实际出声、签名/公证（沿用 PLAN-010 遗留）+
+   **PLAN-019 新增**：辅助功能权限授权与 Fn→语音输入真机效果（见上 PLAN-019 摘要）；
+   **两端必须安装新版**（旧 Android APK 会恢复 handsfree 泄流）。
 5. 音频演化方向（远期）：UDP+Opus+FEC、反向声道、波形真实数据源。
 
 ## 部署机备忘（118.193.40.160，ubuntu@，免密 sudo）
@@ -94,6 +103,8 @@ Linux 服务器中继，写入 Mac 的 BlackHole 虚拟声卡**，使任意 Mac 
 ## 关键技术决策速查
 
 - 协议：`[1B type][4B len BE][payload]`，音频 48kHz/mono/s16le/20ms(1920B) 裸 PCM；
+  v3.1 增补 `FRAME_TALK=0x0A`（手机→Mac 说话状态 1 字节 0x01/0x00，server 透传不解析，
+  Mac 端据此模拟 Fn 触发语音输入）；
   活跃端常量同步（Go: `server/internal/protocol`，Rust: `mac-app-tauri/src-tauri`，
   Kotlin: `android-app/.../RelayClient.kt`；Python 已归档不再同步）
 - 局域网发现（PLAN-013）：UDP 与 TCP 同端口；探测串 `RV-DISCOVER-v1`（精确匹配）；

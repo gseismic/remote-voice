@@ -42,7 +42,6 @@ class MainActivity : Activity() {
     private lateinit var devicesRow: LinearLayout
     private lateinit var pttBtn: Button
     private val pollHandler = Handler(Looper.getMainLooper())
-    private var pttDownAt = 0L
     private var permissionRequestInFlight = false
 
     private val pollTask = object : Runnable {
@@ -95,14 +94,12 @@ class MainActivity : Activity() {
                         }
                         Toast.makeText(this, "连接中，稍候再按住说话", Toast.LENGTH_SHORT).show()
                     } else {
-                        pttDownAt = System.currentTimeMillis()
                         svc.setTalking(true)
                     }
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     pttBtn.isPressed = false
-                    pttDownAt = 0L
                     AudioStreamService.instance?.setTalking(false)
                     true
                 }
@@ -125,7 +122,7 @@ class MainActivity : Activity() {
         val (main, sub, color) = when (st.state) {
             StatusState.STREAMING ->
                 if (st.talking) Triple("按住传输 · $name", "", COLOR_GREEN)
-                else Triple("传输中 · $name", "", COLOR_GREEN)
+                else Triple("已就绪 · $name", "按住下方按钮开始说话", COLOR_GREEN)
             StatusState.WAIT_PEER -> Triple("已连中继 · 等待 Mac", serverDisplay(), COLOR_AMBER)
             StatusState.CONNECTING -> Triple("连接服务器…", serverDisplay(), COLOR_BLUE)
             StatusState.ERROR -> Triple("连接失败 · 点按重试", serverDisplay(), COLOR_RED)
@@ -366,6 +363,9 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         pollHandler.removeCallbacks(pollTask)
+        // PTT 兜底复位：息屏/来电/切走时 ACTION_UP 可能不送达，防止 pttHeld
+        // 永久卡 true 导致持续推流（设计 §3.2 根因 B）
+        AudioStreamService.instance?.setTalking(false)
     }
 
     /** 一键连接：无激活设备→引导添加；有设备且用户未手动停止→自动拉起服务。 */

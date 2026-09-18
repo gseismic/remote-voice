@@ -16,7 +16,7 @@ import android.widget.Toast
  * 设置页（V3.2 原型 docs/ui-design/v3/android.html）：
  * SERVER 单一服务器地址（IP:端口 或 rv://，本地测试填局域网 IP）、
  * DEVICES 设备条目管理（添加/编辑/删除，秘密保存本机）、
- * ADVANCED 免提/回声消除/清除服务器信任。
+ * ADVANCED 回声消除/清除服务器信任（免提常开已随 V3.2 纯 PTT 语义移除）。
  */
 class SettingsActivity : Activity() {
 
@@ -24,7 +24,6 @@ class SettingsActivity : Activity() {
     private lateinit var store: DeviceStore
     private lateinit var serverEdit: EditText
     private lateinit var aecSwitch: Switch
-    private lateinit var handsfreeSwitch: Switch
     private lateinit var devicesBox: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -36,7 +35,6 @@ class SettingsActivity : Activity() {
 
         serverEdit = findViewById(R.id.edit_server)
         aecSwitch = findViewById(R.id.switch_aec)
-        handsfreeSwitch = findViewById(R.id.switch_handsfree)
         devicesBox = findViewById(R.id.devices_box)
 
         // 空值时展示默认服务器，让用户看得见、可改
@@ -45,7 +43,6 @@ class SettingsActivity : Activity() {
                 ?: AudioStreamService.DEFAULT_SERVER
         )
         aecSwitch.isChecked = prefs.getBoolean(KEY_AEC, false)
-        handsfreeSwitch.isChecked = prefs.getBoolean(AudioStreamService.KEY_HANDSFREE, false)
 
         findViewById<Button>(R.id.btn_add_device).setOnClickListener {
             showAddDeviceDialog()
@@ -233,7 +230,6 @@ class SettingsActivity : Activity() {
         prefs.edit()
             .putString(KEY_SERVER, server)
             .putBoolean(KEY_AEC, aecSwitch.isChecked)
-            .putBoolean(AudioStreamService.KEY_HANDSFREE, handsfreeSwitch.isChecked)
             .apply()
         if (!prefs.getBoolean(AudioStreamService.KEY_USER_STOPPED, false)) {
             AudioStreamService.prepareRetry()

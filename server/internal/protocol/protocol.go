@@ -22,6 +22,7 @@ const (
 	FramePeerState byte = 0x07 // S→C 对端状态通知，payload 1 字节：0x01 上线 / 0x00 掉线
 	FrameRegister  byte = 0x08 // Mac→S 注册/热更秘密（可随时重发实现热更）
 	FrameEvent     byte = 0x09 // S→Mac 事件通知（认证成功/对秘密试探失败），仅元数据
+	FrameTalk      byte = 0x0A // 手机→Mac 说话状态（PTT 按下/松开），payload 1 字节，桥接透传不解析
 )
 
 // 对端状态字节值（FramePeerState 的 payload）

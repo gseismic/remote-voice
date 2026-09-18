@@ -25,7 +25,8 @@ enum class StatusState { STOPPED, CONNECTING, WAIT_PEER, STREAMING, ERROR }
 /**
  * 前台采音服务（v3）：持有 RelayClient 与 AudioRecord 生命周期。
  * 前台服务(microphone 类型)保证后台采音不被系统杀死（设计文档 §6.3）。
- * 当前交互：按住说话（PTT）——采音循环常开，但仅在「按住或免提常开」时发送；
+ * 当前交互：按住说话（PTT）——采音循环常开，仅在按住时发送；
+ * 按下/松开即时上报 FRAME_TALK（Mac 端据此模拟 Fn 触发语音输入）；
  * 设备名在认证成功后由 AUTH_OK 回写 [RelayClient.Listener.onPeerName]。
  */
 class AudioStreamService : Service(), RelayClient.Listener {
@@ -38,8 +39,7 @@ class AudioStreamService : Service(), RelayClient.Listener {
     @Volatile private var captureGeneration = 0L
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    /** 免提常开：设置为 true 时相当于 v1 持续推流（默认关闭=仅按住说话）。 */
-    @Volatile private var handsfree = false
+    /** 免提常开（v1 持续推流）已随 V3.2 纯 PTT 语义移除；发送只受 pttHeld 门控。 */
     @Volatile private var pttHeld = false
     /** 致命错误停服后保留错误文案，避免 onDestroy 把真正原因覆盖成“未启动”。 */
     @Volatile private var preserveError = false
@@ -111,7 +111,7 @@ class AudioStreamService : Service(), RelayClient.Listener {
         }
 
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        handsfree = prefs.getBoolean(KEY_HANDSFREE, false)
+        pttHeld = false
         // 单一服务器地址（V3.2）：IP:端口 或 rv://IP:端口；本地测试直接填局域网 IP。
         val serverRaw = (prefs.getString(KEY_SERVER, "") ?: "").ifBlank { DEFAULT_SERVER }
         val server = ConfigParser.parse(serverRaw)
@@ -212,16 +212,16 @@ class AudioStreamService : Service(), RelayClient.Listener {
         // relay 线程在 fatal 回调后还会发送一次“已停止”，不能覆盖真正的错误原因。
         if (preserveError && text == "已停止") return
         // 状态归一：RelayClient 的文案 → UI 状态枚举（Activity 据此着色/禁用按钮）
+        // 桥接建立=已就绪（STREAMING 态），但只在按住 PTT 后才真正发送
         Status.state = when {
-            text == "推流中" || text.startsWith("传输中") -> StatusState.STREAMING
+            text == "已就绪" || text.startsWith("已就绪 ·") -> StatusState.STREAMING
             text.contains("等待") -> StatusState.WAIT_PEER
             text == "已停止" -> StatusState.STOPPED
             else -> StatusState.CONNECTING
         }
-        // 传输计时起点：进入 STREAMING 时打点，离开时清零（主界面 mm:ss 计时用）
-        if (Status.state == StatusState.STREAMING) {
-            if (Status.startedAt == 0L) Status.startedAt = SystemClock.elapsedRealtime()
-        } else {
+        // 传输计时起点：进入 STREAMING 时不计时（桥接≠说话），按住 PTT 时由
+        // setTalking 打点；离开传输态一律清零（主界面 mm:ss 计时=按住时长）
+        if (Status.state != StatusState.STREAMING) {
             Status.startedAt = 0L
         }
         Status.text = text
@@ -293,11 +293,18 @@ class AudioStreamService : Service(), RelayClient.Listener {
     fun setTalking(on: Boolean) {
         pttHeld = on
         Status.talking = on
+        // 计时=按住时长：按下打点、松开清零（render 侧用 startedAt 显示 mm:ss）
+        Status.startedAt = if (on) SystemClock.elapsedRealtime() else 0L
+        // 即时告知 Mac 端说话状态（触发语音输入模拟）；未桥接时丢弃，桥接建立会重发
+        client?.let { relay ->
+            val serial = relay.currentConnectionSerial()
+            relay.sendTalk(on, serial)
+        }
         mainHandler.post { updateNotification(if (on) "正在传输…" else Status.text) }
     }
 
-    /** 是否满足发送条件（按住 或 免提常开）。 */
-    private fun shouldSend(): Boolean = handsfree || pttHeld
+    /** 是否满足发送条件：纯 PTT 语义（V3.2），仅按住时发送。 */
+    private fun shouldSend(): Boolean = pttHeld
 
     // ---- 采音循环：仅在对端在线期间运行 ----
 
@@ -308,6 +315,8 @@ class AudioStreamService : Service(), RelayClient.Listener {
         // 固定本次采音对应的 relay；切换设备后旧线程绝不能重新读取到新 client。
         val captureClient = client ?: return
         val connectionSerial = captureClient.currentConnectionSerial()
+        // 桥接建立/重连后同步当前 PTT 状态，避免 Mac 端 Fn 与手机不一致（设计 §1 时序保证）
+        if (pttHeld) captureClient.sendTalk(true, connectionSerial)
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val useAec = prefs.getBoolean(KEY_AEC, false)
         val source = if (useAec) MediaRecorder.AudioSource.VOICE_COMMUNICATION
@@ -367,7 +376,7 @@ class AudioStreamService : Service(), RelayClient.Listener {
                     break
                 }
                 if (n == FRAME_BYTES) {
-                    // PTT 门控：未按住且非免提常开时，帧读出即弃（麦克风保持取音，
+                    // PTT 门控：未按住时，帧读出即弃（麦克风保持取音，
                     // 数据不出本机；对端掉线时 sendAudio 返回 false，同样不计数）
                     if (connectionGeneration == generation && captureGeneration == captureId &&
                         shouldSend() && captureClient.sendAudio(frame, connectionSerial) &&
@@ -510,7 +519,6 @@ class AudioStreamService : Service(), RelayClient.Listener {
         private const val PREFS = "config"
         private const val KEY_SERVER = "server"
         private const val KEY_AEC = "aec"
-        const val KEY_HANDSFREE = "handsfree"
     }
 
 }

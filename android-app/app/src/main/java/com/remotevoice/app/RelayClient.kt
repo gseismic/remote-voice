@@ -64,7 +64,9 @@ class RelayClient(
     private val framePing = 0x05
     private val framePong = 0x06
     private val framePeerState = 0x07
+    private val frameTalk = 0x0A
     private val peerOnlineByte = 0x01
+    private val talkOnByte: Byte = 0x01
 
     private val maxPayload = 65536
     private val protoVersion = 3
@@ -155,6 +157,24 @@ class RelayClient(
 
     /** 返回当前 TLS 会话标识，采音线程用它隔离网络自动重连。 */
     fun currentConnectionSerial(): Long = connectionSerial
+
+    /**
+     * 发送说话状态（PTT 按下/松开，FRAME_TALK 1 字节）。
+     * best-effort：桥接未就绪或串号时丢弃，不重试——下一条状态会覆盖旧状态。
+     */
+    fun sendTalk(on: Boolean, expectedConnectionSerial: Long): Boolean {
+        val currentSocket = socket ?: return false
+        if (!peerOnline || connectionSerial != expectedConnectionSerial) return false
+        return try {
+            sendFrameTo(
+                currentSocket.getOutputStream(), frameTalk,
+                byteArrayOf(if (on) talkOnByte else 0x00),
+            )
+        } catch (e: IOException) {
+            Log.w(TAG, "send talk failed", e)
+            false
+        }
+    }
 
     private fun connectAndServe() {
         connectOne()
@@ -299,7 +319,8 @@ class RelayClient(
         if (payload.isEmpty()) return
         if (payload[0].toInt() == peerOnlineByte) {
             peerOnline = true
-            listener.onState(if (peerName.isBlank()) "推流中" else "传输中 · $peerName")
+            // 桥接建立 ≠ 正在推流：未按住 PTT 前不出声，文案避免误导
+            listener.onState(if (peerName.isBlank()) "已就绪" else "已就绪 · $peerName")
             listener.onPeerOnline()
         } else {
             peerOnline = false

@@ -35,6 +35,9 @@ const fallbackState = {
   temp_exp: 0,
   temp_duration: 28800,
   keep: false,
+  talking: false,
+  dictation_enabled: true,
+  dictation_mode: "hold",
   permanent_enabled: false,
   peer_name: "",
   audio_frames: 0,
@@ -189,12 +192,16 @@ function renderRelayLine(status) {
 function renderAudioMeter(status) {
   const meter = $("meter");
   const live = status === "bridged" && !state.audio_error;
-  meter.classList.toggle("off", !live);
+  meter.classList.toggle("off", !live || !state.talking);
   const audiost = $("audiost");
   if (state.audio_error) {
     audiost.textContent = "音频输出异常（详见下方提示）";
+  } else if (status === "bridged" && state.talking) {
+    audiost.innerHTML = state.dictation_enabled
+      ? "对端说话中 · <b>模拟 Fn</b> · <b>0 丢帧</b>"
+      : "对端说话中 · <b>0 丢帧</b>";
   } else if (status === "bridged") {
-    audiost.innerHTML = "实时接收中 · <b>0 丢帧</b>";
+    audiost.textContent = "已就绪 · 按住手机按钮开始说话";
   } else if (statusIsConnected(status)) {
     audiost.textContent = "等待手机上线";
   } else {
@@ -326,6 +333,8 @@ function readSettings() {
     audioDevice: $("audio-device").value.trim() || "BlackHole",
     tempDuration: Number($("temp-expiry-choice").value),
     keep: $("keep-temp").checked,
+    dictationEnabled: $("dictation-enabled").checked,
+    dictationMode: $("dictation-mode").value,
   };
 }
 
@@ -335,6 +344,8 @@ function openSettings() {
   $("device-name").value = state.name || "";
   $("temp-expiry-choice").value = String(state.temp_duration || 28800);
   $("keep-temp").checked = Boolean(state.keep);
+  $("dictation-enabled").checked = state.dictation_enabled !== false;
+  $("dictation-mode").value = state.dictation_mode || "hold";
   $("settings-error").hidden = true;
   $("settings-overlay").hidden = false;
   $("server").focus();

@@ -8,6 +8,7 @@ use thiserror::Error;
 pub const DEFAULT_PORT: u16 = 9432;
 pub const DEFAULT_AUDIO_DEVICE: &str = "BlackHole";
 pub const DEFAULT_TEMP_DURATION: i64 = 8 * 60 * 60;
+pub const DEFAULT_DICTATION_MODE: &str = "hold";
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -35,6 +36,10 @@ pub struct AppConfig {
     pub temp_duration: i64,
     pub fingerprints: BTreeMap<String, String>,
     pub perm_in_keychain: bool,
+    /// 手机 PTT 是否联动模拟 Fn（macOS 语音输入）；关闭后仅音频转发
+    pub dictation_enabled: bool,
+    /// 模拟方式：hold=按住 Fn / double=双击 Fn（见 keyinject 模块）
+    pub dictation_mode: String,
     /// 只用于迁移 PLAN-008 的单值指纹；保存时不再写回旧字段。
     #[serde(rename = "fingerprint", skip_serializing)]
     pub legacy_fingerprint: String,
@@ -55,6 +60,8 @@ impl Default for AppConfig {
             temp_duration: DEFAULT_TEMP_DURATION,
             fingerprints: BTreeMap::new(),
             perm_in_keychain: false,
+            dictation_enabled: true,
+            dictation_mode: DEFAULT_DICTATION_MODE.to_string(),
             legacy_fingerprint: String::new(),
             legacy_regkey: String::new(),
         }
@@ -68,6 +75,9 @@ impl AppConfig {
         }
         if !matches!(self.temp_duration, 600 | 3600 | 28_800 | 86_400) {
             self.temp_duration = DEFAULT_TEMP_DURATION;
+        }
+        if self.dictation_mode != "hold" && self.dictation_mode != "double" {
+            self.dictation_mode = DEFAULT_DICTATION_MODE.to_string();
         }
     }
 }

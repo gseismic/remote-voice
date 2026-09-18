@@ -113,3 +113,16 @@
   （bridged 时动画）与状态行三分支文案，audio_error 时提示异常。真振幅数据源仍为开放问题。
   验证：pnpm build 通过；headless Chrome 截图默认态/展开态正常；临时截图改动已还原。
   至此 V3.2 设计完整落地两端代码（Mac=PLAN-016+018，Android=PLAN-017），联测按用户指示后置。
+
+- **2026-09-18 15:40** | [PLAN-019-ptt-fn-dictation-and-ptt-leak.md](PLAN-019-ptt-fn-dictation-and-ptt-leak.md) → [PLAN-019-ptt-fn-dictation-and-ptt-leak-OUTCOME.md](PLAN-019-ptt-fn-dictation-and-ptt-leak-OUTCOME.md)
+  摘要：①协议增补 FRAME_TALK=0x0A（手机→Mac 说话状态 1 字节，server 桥接透传，三端同步），
+  Mac 端新模块 keyinject 把 PTT 映射为 Fn 按键（hold 按住保持=默认，double 双击=兜底，
+  裸 FFI CoreGraphics 零新依赖，AXIsProcessTrusted 权限检测，PeerOffline/断线/Drop 强制
+  释放防 Fn 悬空，桥接重连时手机重发当前状态），Mac 设置弹窗新增语音输入模拟开关+模式；
+  ②泄流修复：确认根因 handsfree 残留（V3.2 已无此概念但代码残留，用户无处关闭）+
+  pttHeld 卡死缺陷（ACTION_UP 丢失后永久推流）——移除 handsfree 全部代码、onPause 兜底
+  复位、startStreaming 重置、"传输中"文案改"已就绪"（含 review 中发现并修复的 applyState
+  状态映射同步）。验证：go vet/-race 全绿（新增 TALK 透传+未桥接丢弃用例）、cargo test 18 例
+  （TLS 集成断言 PeerTalking 事件）、clippy 0 警告、pnpm build、assembleDebug 全过。
+  待真机验证：Fn 注入实际触发语音输入效果（若长按 Fn 弹输入菜单则切 double 模式）、
+  辅助功能权限授权、泄流归零。

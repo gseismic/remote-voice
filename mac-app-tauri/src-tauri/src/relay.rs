@@ -40,6 +40,8 @@ pub enum RelayEvent {
     PeerName { name: String },
     PeerOnline,
     PeerOffline,
+    /// 手机 PTT 按下/松开（FRAME_TALK 透传），用于模拟 Fn 触发语音输入
+    PeerTalking { on: bool },
     AuthAccepted { ip: String, kind: String },
     AuthFailed { ip: String, reason: String },
     AudioStats { stats: SinkStats },
@@ -463,6 +465,12 @@ impl RelayClient {
                 }
                 Ok(())
             }
+            protocol::FRAME_TALK => {
+                (self.events)(RelayEvent::PeerTalking {
+                    on: payload.first() == Some(&0x01),
+                });
+                Ok(())
+            }
             protocol::FRAME_EVENT => match protocol::parse_event(payload) {
                 Ok(event) if event.event == "auth-ok" => {
                     (self.events)(RelayEvent::AuthAccepted {
@@ -736,6 +744,9 @@ mod tests {
             protocol::write_frame(&mut writer, protocol::FRAME_AUDIO, &[0, 0, 1, 0])
                 .await
                 .unwrap();
+            protocol::write_frame(&mut writer, protocol::FRAME_TALK, &[0x01])
+                .await
+                .unwrap();
 
             // 等待客户端处理 Stop；连接关闭时读错误属于预期收尾路径。
             let _ = protocol::read_frame(&mut reader).await;
@@ -743,7 +754,11 @@ mod tests {
 
         let tofu = Arc::new(StdMutex::new(None::<(String, String)>));
         let tofu_capture = Arc::clone(&tofu);
-        let events = Arc::new(|_: RelayEvent| {});
+        let events_log = Arc::new(StdMutex::new(Vec::<RelayEvent>::new()));
+        let events_capture = Arc::clone(&events_log);
+        let events = Arc::new(move |event: RelayEvent| {
+            events_capture.lock().unwrap().push(event);
+        });
         let sink = Arc::new(NullSink::default());
         let sink_capture = Arc::clone(&sink);
         let client = RelayClient::new_with_tofu_store(RelayClientOptions {
@@ -768,7 +783,12 @@ mod tests {
 
         timeout(Duration::from_secs(2), async {
             loop {
-                if sink_capture.stats().frames >= 1 {
+                let got_talk = events_log
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|event| matches!(event, RelayEvent::PeerTalking { on: true }));
+                if sink_capture.stats().frames >= 1 && got_talk {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -781,6 +801,11 @@ mod tests {
         server_task.await.unwrap();
 
         assert_eq!(sink_capture.stats().frames, 1);
+        assert!(events_log
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event, RelayEvent::PeerTalking { on: true })));
         assert_eq!(
             tofu.lock().unwrap().as_ref(),
             Some(&(fingerprint, format!("127.0.0.1:{}", addr.port())))
