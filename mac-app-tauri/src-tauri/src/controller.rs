@@ -563,11 +563,17 @@ impl AppController {
                 state.status = "connecting".to_string();
                 state.detail = server;
             }),
-            RelayEvent::Reconnecting { detail } => self.update_state(|state| {
-                state.status = "reconnecting".to_string();
-                state.detail = detail;
-                state.peer_name.clear();
-            }),
+            RelayEvent::Reconnecting { detail } => {
+                // 与中继失联即释放 Fn：断线期间收不到手机的"松开"帧，
+                // 主动释放防止 Fn 悬空（重桥后手机会重发当前状态恢复语义）
+                self.injector.release();
+                self.update_state(|state| {
+                    state.status = "reconnecting".to_string();
+                    state.detail = detail;
+                    state.peer_name.clear();
+                    state.talking = false;
+                })
+            }
             RelayEvent::TofuEstablished => self.add_event("info", "已建立服务器信任"),
             RelayEvent::Registered => self.update_state(|state| {
                 state.status = "registered".to_string();
@@ -652,12 +658,16 @@ impl AppController {
                 });
                 self.add_event("error", format!("{}: {}", code, message));
             }
-            RelayEvent::Stopped => self.update_state(|state| {
-                if state.status != "fatal" {
-                    state.status = "stopped".to_string();
-                    state.detail.clear();
-                }
-            }),
+            RelayEvent::Stopped => {
+                self.injector.release();
+                self.update_state(|state| {
+                    if state.status != "fatal" {
+                        state.status = "stopped".to_string();
+                        state.detail.clear();
+                        state.talking = false;
+                    }
+                })
+            }
         }
     }
 

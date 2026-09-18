@@ -315,8 +315,10 @@ class AudioStreamService : Service(), RelayClient.Listener {
         // 固定本次采音对应的 relay；切换设备后旧线程绝不能重新读取到新 client。
         val captureClient = client ?: return
         val connectionSerial = captureClient.currentConnectionSerial()
-        // 桥接建立/重连后同步当前 PTT 状态，避免 Mac 端 Fn 与手机不一致（设计 §1 时序保证）
-        if (pttHeld) captureClient.sendTalk(true, connectionSerial)
+        // 桥接建立/重连后无条件同步当前 PTT 状态（true/false 都发）：
+        // 断网期间的 TALK 帧可能丢失（包括"松开"），重桥时以手机现状纠偏，
+        // 防止 Mac 端 Fn 悬空（设计 §1 时序保证）
+        captureClient.sendTalk(pttHeld, connectionSerial)
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val useAec = prefs.getBoolean(KEY_AEC, false)
         val source = if (useAec) MediaRecorder.AudioSource.VOICE_COMMUNICATION

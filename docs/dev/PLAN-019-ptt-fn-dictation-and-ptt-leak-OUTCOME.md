@@ -76,3 +76,24 @@
 - review 阶段发现并修复：applyState 状态归一未随 RelayClient 文案变更同步（见上 2）。
 - clippy too_many_arguments（save_settings 8 参）：Tauri command 需扁平参数，加
   `#[allow]` 注释说明，未引入参数结构体（避免前端传参改造）。
+
+## 追加修正（2026-09-18，用户提出"手机断网后 Fn 悬空"场景推演）
+
+用户问：手机按住录音后断网，Mac 端 Fn 没被放下怎么办。推演结论与修正：
+
+**原有保障（无需改）**：
+- 手机断网 → server 按读超时判定（默认 40s，server/internal/server/server.go:42；
+  TCP 显式断开则立即）→ 桥接溶解 → server 向 Mac 发 PEER_STATE(offline) →
+  Mac `PeerOffline` 分支 `injector.release()` 放下 Fn。
+- 手机断网重连 → 重新桥接 → startCapture 重发当前 PTT 状态恢复语义。
+
+**本次修正的两处遗漏**：
+1. Mac↔server 断线/server 重启：Mac 走 `Reconnecting`/`Stopped` 分支原先不释放 →
+   现均在事件处理中 `injector.release()`（controller.rs），断线即放下 Fn，
+   重桥后由手机重发状态恢复。
+2. 手机断网期间松手（pttHeld=false）后重桥：原只按住才重发、不发"松开"，
+   Mac 若恰好错过掉线通知会悬空 → 改为 startCapture **无条件**重发当前状态
+   （AudioStreamService.kt）。
+
+验证：cargo clippy 0 警告、cargo test 18 例全绿、assembleDebug 通过。
+ Fn 悬空防护现在覆盖四条路径：对端掉线通知 / Mac 断线重连 / 会话停止 / 应用退出。

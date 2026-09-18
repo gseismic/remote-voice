@@ -126,3 +126,11 @@
   （TLS 集成断言 PeerTalking 事件）、clippy 0 警告、pnpm build、assembleDebug 全过。
   待真机验证：Fn 注入实际触发语音输入效果（若长按 Fn 弹输入菜单则切 double 模式）、
   辅助功能权限授权、泄流归零。
+
+- **2026-09-18 16:10** | PLAN-019 追加修正（同日，无新计划文件，记录见 OUTCOME"追加修正"节）
+  摘要：用户提出"手机按住录音后断网，Mac 端 Fn 悬空"场景。推演确认原有保障：server 40s
+  读超时（或 TCP 显式断开立即）→ 桥接溶解 → Mac PeerOffline 强制释放。修正两处遗漏：
+  ①Mac↔server 断线/server 重启时 Reconnecting/Stopped 分支现均强制 release()；
+  ②手机重桥时无条件重发当前 PTT 状态（原来松手状态不重发）。至此 Fn 悬空防护覆盖
+  对端掉线/Mac 断线/会话停止/应用退出四路径。验证：clippy 0 警告、cargo test 18 例、
+  assembleDebug 全过。
