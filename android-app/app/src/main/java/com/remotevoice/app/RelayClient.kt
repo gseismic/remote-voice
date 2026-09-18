@@ -331,8 +331,8 @@ class RelayClient(
 
     /** AUTH_ERR 原因码 → 人性化文案。 */
     private fun reasonText(reason: String): String = when (reason) {
-        "invalid-secret" -> "未找到匹配设备（该 Mac 未在线或秘密已更新）"
-        "secret-expired" -> "临时秘密已过期，请在 Mac 端更新或删除该设备后重试"
+        "invalid-secret" -> "未找到匹配设备（该 Mac 未在线或密码已更新）"
+        "secret-expired" -> "临时密码已过期，请在 Mac 端更新或删除该设备后重试"
         "peer-busy" -> "目标 Mac 正在其他会话中，稍后再试"
         "rate-limited" -> "尝试过于频繁，已被临时锁定（1 分钟后再试）"
         else -> "认证被拒（$reason）"

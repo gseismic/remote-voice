@@ -134,3 +134,12 @@
   ②手机重桥时无条件重发当前 PTT 状态（原来松手状态不重发）。至此 Fn 悬空防护覆盖
   对端掉线/Mac 断线/会话停止/应用退出四路径。验证：clippy 0 警告、cargo test 18 例、
   assembleDebug 全过。
+
+- **2026-09-18 17:05** | PLAN-019 追加修正 2（Fn 手动解除）+ 修正 3（秘密→密码）
+  摘要：①应"断线后 Mac 主动解除 Fn"需求，新增两条手动路径：物理 Fn 抬起监听
+  （CGEventTap listenOnly 只订阅 keyUp，防止合成事件自触发；tap 专用线程 CFRunLoop，
+  创建失败仅提示不致命）+ Mac 界面"放下 Fn"按钮（新 command release_fn/manual_release，
+  talking 时显示）；解除后保持释放至手机新一轮 TALK(true)。②界面用语"秘密"全部改
+  "密码"（Android strings/四 Activity + Mac web/两文件 + controller/secrets 错误文案），
+  协议字段/配置键/注释术语/历史文档不动。验证：clippy 0 警告、cargo test 18 例、
+  pnpm build、assembleDebug 全过。

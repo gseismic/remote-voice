@@ -232,7 +232,7 @@ class MainActivity : Activity() {
     }
 
     private fun showDeviceMenu(d: DeviceStore.Device) {
-        val menu = arrayOf("重命名 / 修改秘密", "删除设备")
+        val menu = arrayOf("重命名 / 修改密码", "删除设备")
         AlertDialog.Builder(this)
             .setTitle(d.name.ifBlank { "设备" })
             .setItems(menu) { _, which ->
@@ -255,7 +255,7 @@ class MainActivity : Activity() {
             setSingleLine(true)
         }
         val secret = EditText(this).apply {
-            hint = "Mac 端显示的临时/永久秘密"
+            hint = "Mac 端显示的临时/永久密码"
             setSingleLine(true)
         }
         val box = LinearLayout(this).apply {
@@ -265,12 +265,12 @@ class MainActivity : Activity() {
             addView(secret)
         }
         AlertDialog.Builder(this)
-            .setTitle("借用 Mac 的秘密添加设备")
+            .setTitle("借用 Mac 的密码添加设备")
             .setView(box)
             .setPositiveButton("添加") { _, _ ->
                 val s = secret.text.toString().trim()
                 if (s.isEmpty()) {
-                    Toast.makeText(this, "秘密不能为空", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "密码不能为空", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
                 store.add(alias.text.toString().trim(), s, typeOf(s))
@@ -290,7 +290,7 @@ class MainActivity : Activity() {
         }
         val secret = EditText(this).apply {
             setText(d.secret)
-            hint = "秘密"
+            hint = "密码"
             setSingleLine(true)
         }
         val box = LinearLayout(this).apply {
@@ -305,7 +305,7 @@ class MainActivity : Activity() {
             .setPositiveButton("保存") { _, _ ->
                 val s = secret.text.toString().trim()
                 if (s.isEmpty()) {
-                    Toast.makeText(this, "秘密不能为空", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "密码不能为空", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
                 store.update(d.id, alias.text.toString().trim(), s, typeOf(s))

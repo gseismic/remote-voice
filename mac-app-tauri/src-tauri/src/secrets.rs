@@ -9,13 +9,13 @@ const ALPHABET: &[u8] = b"23456789ABCDEFGHJKMNPQRSTUVWXYZ";
 
 #[derive(Debug, Error)]
 pub enum SecretError {
-    #[error("秘密存储失败: {0}")]
+    #[error("密码存储失败: {0}")]
     Io(#[from] std::io::Error),
-    #[error("永久秘密至少需要 12 位")]
+    #[error("永久密码至少需要 12 位")]
     TooShort,
-    #[error("无法替换已有 Keychain 永久秘密")]
+    #[error("无法替换已有 Keychain 永久密码")]
     KeychainUnavailable,
-    #[error("无法删除 Keychain 永久秘密")]
+    #[error("无法删除 Keychain 永久密码")]
     KeychainDeleteUnavailable,
 }
 

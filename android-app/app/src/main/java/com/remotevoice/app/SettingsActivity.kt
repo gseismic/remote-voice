@@ -97,8 +97,8 @@ class SettingsActivity : Activity() {
                 setTextColor(0xFFE6E9EE.toInt())
             }
             val meta = TextView(this).apply {
-                text = (if (d.type == "perm") "永久秘密" else "临时秘密") +
-                    " · 秘密已保存本机 · 长按可修改"
+                text = (if (d.type == "perm") "永久密码" else "临时密码") +
+                    " · 密码已保存本机 · 长按可修改"
                 textSize = 11f
                 setTextColor(0xFF8B949E.toInt())
             }
@@ -112,7 +112,7 @@ class SettingsActivity : Activity() {
         }
         if (devices.isEmpty()) {
             val empty = TextView(this).apply {
-                text = "尚未添加设备：先在 Mac 端确认秘密，再点下方「添加设备」"
+                text = "尚未添加设备：先在 Mac 端确认密码，再点下方「添加设备」"
                 textSize = 12f
                 setTextColor(0xFF8B949E.toInt())
             }
@@ -121,7 +121,7 @@ class SettingsActivity : Activity() {
     }
 
     private fun showDeviceMenu(d: DeviceStore.Device) {
-        val menu = arrayOf("修改名字与秘密", "删除设备")
+        val menu = arrayOf("修改名字与密码", "删除设备")
         AlertDialog.Builder(this)
             .setTitle(d.name.ifBlank { "设备" })
             .setItems(menu) { _, which ->
@@ -144,7 +144,7 @@ class SettingsActivity : Activity() {
             setSingleLine(true)
         }
         val secret = EditText(this).apply {
-            hint = "Mac 端显示的临时/永久秘密"
+            hint = "Mac 端显示的临时/永久密码"
             setSingleLine(true)
         }
         val box = LinearLayout(this).apply {
@@ -159,7 +159,7 @@ class SettingsActivity : Activity() {
             .setPositiveButton("添加") { _, _ ->
                 val s = secret.text.toString().trim()
                 if (s.isEmpty()) {
-                    Toast.makeText(this, "秘密不能为空", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "密码不能为空", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
                 store.add(alias.text.toString().trim(), s, typeOf(s))
@@ -180,7 +180,7 @@ class SettingsActivity : Activity() {
         }
         val secret = EditText(this).apply {
             setText(d.secret)
-            hint = "秘密"
+            hint = "密码"
             setSingleLine(true)
         }
         val box = LinearLayout(this).apply {
@@ -195,7 +195,7 @@ class SettingsActivity : Activity() {
             .setPositiveButton("保存") { _, _ ->
                 val s = secret.text.toString().trim()
                 if (s.isEmpty()) {
-                    Toast.makeText(this, "秘密不能为空", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "密码不能为空", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
                 store.update(d.id, alias.text.toString().trim(), s, typeOf(s))

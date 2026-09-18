@@ -97,3 +97,33 @@
 
 验证：cargo clippy 0 警告、cargo test 18 例全绿、assembleDebug 通过。
  Fn 悬空防护现在覆盖四条路径：对端掉线通知 / Mac 断线重连 / 会话停止 / 应用退出。
+
+## 追加修正 2（2026-09-18，用户要求"断线后 Mac 可主动解除 Fn"）
+
+新增两条手动解除路径（自动释放之外的手动兜底）：
+
+1. **物理 Fn 抬起即放下**：keyinject 新增 CGEventTap 监听（listenOnly，kCGHIDEventTap，
+   只订阅 keyUp/keycode 63）。悬空时用户按一次实体 Fn → tap 回调调 release() 放下。
+   - 只监听 keyUp 的原因：自身合成的 down 也会进入事件流，若监听 down 会刚按下
+     就被自己误放；keyUp 触发 + release 幂等保证链路收敛、无自触发循环。
+   - tap 在专用线程的 CFRunLoop 运行；创建失败（多为未授权）仅发事件提示，
+     不影响主功能。
+   - 已知边界：若用户恰在"物理 Fn 按住期间"手机端开始新一轮说话，松开物理 Fn
+     会连带放下刚模拟按下的 Fn（小概率，再次按住手机即恢复）。
+2. **界面"放下 Fn"按钮**：Mac 音频卡状态行右侧新增按钮（talking 且开启模拟时显示），
+   调用新 Tauri command `release_fn` → `manual_release()`（释放 + 事件日志
+   "已手动放下 Fn；手机再次按下说话时会自动恢复"）。
+
+解除后语义：Fn 保持释放，直到手机新一轮 TALK(true) 才重新按下（自然粘住）。
+验证：clippy 0 警告、cargo test 18 例、pnpm build 通过。tap 真机行为列入待验证。
+
+## 追加修正 3（2026-09-18，用户要求"把秘密改为密码"）
+
+两端界面用语"秘密"全部改为"密码"（用户可见文案：标签/提示/对话框/Toast/错误与
+事件消息）。明确不动的内容（避免破坏兼容与历史可读性）：
+- 协议字段（AUTH `secret`）、配置键（KEY_*）、函数/变量名（secretHex 等）；
+- 代码注释中描述协议模型的"配对秘密"术语（与设计文档一致）；
+- docs/ 历史文档（按追加原则不回改）。
+涉及文件：Android strings.xml / MainActivity / SettingsActivity / RelayClient /
+AudioStreamService；Mac web/index.html / app.js / controller.rs / secrets.rs（错误文案）。
+验证：clippy 0 警告、cargo test 18 例、pnpm build、assembleDebug 全过。

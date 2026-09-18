@@ -12,9 +12,9 @@
     <string name="service_started">连接中…</string>
     <string name="toast_stopped">已停止 · 点按状态胶囊恢复</string>
     <string name="big_idle_t1">准备就绪</string>
-    <string name="big_idle_t2">点状态胶囊连接服务器\n秘密配对决定接哪台 Mac</string>
+    <string name="big_idle_t2">点状态胶囊连接服务器\n密码配对决定接哪台 Mac</string>
     <string name="big_wait_t1">已连中继</string>
-    <string name="big_wait_t2">等待 Mac 上线…\n在 Mac 端确认配对秘密</string>
+    <string name="big_wait_t2">等待 Mac 上线…\n在 Mac 端确认配对密码</string>
     <string name="text_err_title">连接失败</string>
     <string name="btn_retry">重试</string>
     <string name="label_settings">设置</string>
@@ -27,8 +27,8 @@
     <string name="hint_server_desc">填公网服务器地址；本地测试时也可填局域网 IP（同一 Wi-Fi 下直达，不经公网）。</string>
     <string name="toast_addr_bad">格式无效：应为 IP:端口 或 rv://IP:端口</string>
     <string name="sect_devices">DEVICES</string>
-    <string name="label_devices_section">我的设备（秘密保存在本机）</string>
-    <string name="btn_add_device">＋ 添加设备（粘贴 Mac 端秘密）</string>
+    <string name="label_devices_section">我的设备（密码保存在本机）</string>
+    <string name="btn_add_device">＋ 添加设备（粘贴 Mac 端密码）</string>
     <string name="sect_advanced">ADVANCED</string>
     <string name="label_advanced_title">采音与信任</string>
     <string name="label_aec">回声消除</string>
@@ -39,5 +39,5 @@
     <string name="toast_trust_cleared">已清除，下次连接重新建立信任</string>
     <string name="btn_save_back">保存并返回</string>
     <string name="toast_saved">已保存</string>
-    <string name="toast_no_device">尚无激活设备，请添加 Mac 秘密</string>
+    <string name="toast_no_device">尚无激活设备，请添加 Mac 密码</string>
 </resources>

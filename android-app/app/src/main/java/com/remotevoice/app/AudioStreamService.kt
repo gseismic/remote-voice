@@ -123,7 +123,7 @@ class AudioStreamService : Service(), RelayClient.Listener {
         // 激活设备：秘密原文（规范化后本地算哈希，只传 hex 给 relay）
         val device = DeviceStore(this).active()
         if (device == null || device.secret.isBlank()) {
-            failAndStop("尚无激活设备，请添加 Mac 秘密")
+            failAndStop("尚无激活设备，请添加 Mac 密码")
             return
         }
         val secretHex = secretHashHex(device.secret)
