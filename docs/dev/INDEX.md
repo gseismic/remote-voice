@@ -143,3 +143,15 @@
   "密码"（Android strings/四 Activity + Mac web/两文件 + controller/secrets 错误文案），
   协议字段/配置键/注释术语/历史文档不动。验证：clippy 0 警告、cargo test 18 例、
   pnpm build、assembleDebug 全过。
+
+- **2026-09-18 23:58** | PLAN-020 修复 Mac 客户端持续高 CPU
+  摘要：用户报告"mac-app 几乎一直占用很大的 CPU"。排查全部常驻路径后定位主因：
+  PLAN-018 装饰电平表的 CSS 动画作用在 height（布局属性）上，说话（PTT 按住）期间
+  12 根柱子逐帧触发 WebView 主线程布局+重绘；次因：桥接期 2Hz 全量 render 中
+  renderConnectButton 无条件全文档重建 SVG 图标。修复：①keyframe 改 transform
+  scaleY（合成器线程执行，柱高固定 var(--h)，off 态补 transform:none）；
+  ②app.js 新增 lastConnectIconState 守卫，连接状态不变时跳过重建；③顺带修
+  index.html 重复 id="meter"。Rust 零改动。验证：pnpm build、浏览器实测采样
+  （height 恒定、transform 变化）、cargo test 18 例、clippy 0 警告。待真机复核
+  说话期间 WebView 进程 CPU（见 OUTCOME 待真机复核节，含非本因时的排查顺序）。
+  文件：PLAN-020-mac-meter-cpu.md / PLAN-020-mac-meter-cpu-OUTCOME.md。

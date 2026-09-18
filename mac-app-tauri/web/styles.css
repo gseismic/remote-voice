@@ -194,12 +194,14 @@ input:focus, select:focus { border-color: rgba(242, 182, 77, 0.75); }
 
 /* 装饰电平表 + 音频状态行（真振幅数据源为开放问题，当前为装饰动画） */
 .meter { height: 34px; margin-top: 14px; display: flex; align-items: flex-end; gap: 3px; }
-.meter i { flex: 1; height: var(--h, 14%); border-radius: 2px 2px 0 0; background: linear-gradient(180deg, var(--green), #1d5c26); animation: mtr 1s ease-in-out infinite alternate; }
+/* 柱高固定，动画走 transform（合成器线程执行）：height 属布局属性，
+   逐帧触发布局+重绘会让 WebView 在说话期间常驻高 CPU（PLAN-020） */
+.meter i { flex: 1; height: var(--h, 40%); border-radius: 2px 2px 0 0; background: linear-gradient(180deg, var(--green), #1d5c26); transform-origin: 50% 100%; animation: mtr 1s ease-in-out infinite alternate; }
 .meter i:nth-child(2n) { animation-delay: 0.2s; }
 .meter i:nth-child(3n) { animation-delay: 0.45s; }
 .meter i:nth-child(4n) { animation-delay: 0.65s; }
-@keyframes mtr { to { height: 14%; } }
-.meter.off i { animation: none; height: 6%; background: var(--wave-off, #27303d); }
+@keyframes mtr { from { transform: scaleY(1); } to { transform: scaleY(0.18); } }
+.meter.off i { animation: none; transform: none; height: 6%; background: var(--wave-off, #27303d); }
 .audiost { margin: 8px 0 0; color: var(--muted); font-size: 11px; }
 .audiost b { color: var(--green); font-weight: 600; }
 .audiost-row { margin-top: 2px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }

@@ -53,6 +53,9 @@ let toastTimer = null;
 let audioDevices = [];
 let expiryRefreshAttempt = 0;
 let editingSettings = false;
+// 连接按钮图标/文案只随「已连接与否」变化；桥接期间 app-state 约 2Hz 到达，
+// 状态未变时跳过重建与全文档 SVG 图标重建，避免无谓的前端开销（PLAN-020）
+let lastConnectIconState = null;
 
 function formatBytes(value) {
   if (!Number.isFinite(value) || value < 1024) return `${Math.max(0, value || 0)} B`;
@@ -162,6 +165,8 @@ function renderConnectButton() {
   const connected = statusIsConnected(state.status);
   button.classList.toggle("is-disconnect", connected);
   button.setAttribute("aria-label", connected ? "断开连接" : "连接服务器");
+  if (lastConnectIconState === connected) return;
+  lastConnectIconState = connected;
   button.replaceChildren();
   const icon = document.createElement("i");
   icon.dataset.lucide = connected ? "power-off" : "power";
