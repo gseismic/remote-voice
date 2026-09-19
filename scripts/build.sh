@@ -18,7 +18,7 @@ case "$TARGET" in
     if [[ "$OS" == "Darwin" ]]; then
       scripts/build-mac.sh
     else
-      echo "错误：macOS 客户端只能在 Mac 上构建（当前是 $OS）。" >&2
+      echo "错误：macOS 客户端只能在 Mac 上构建（当前是 ${OS}）。" >&2
       exit 1
     fi
     ;;
@@ -29,10 +29,10 @@ case "$TARGET" in
       section "mac";   scripts/build-mac.sh
     else
       section "mac（跳过）"
-      echo "当前是 $OS，macOS 客户端请把仓库拉到 Mac 上运行 scripts/build-mac.sh"
+      echo "当前是 ${OS}，macOS 客户端请把仓库拉到 Mac 上运行 scripts/build-mac.sh"
     fi
     ;;
-  *) echo "未知目标: $TARGET（可选 all|server|android|mac）" >&2; exit 1 ;;
+  *) echo "未知目标: ${TARGET}（可选 all|server|android|mac）" >&2; exit 1 ;;
 esac
 
 echo

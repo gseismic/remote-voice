@@ -38,7 +38,7 @@ case "$TARGET" in
     cp "$OUT/server-linux-amd64" "$OUT/server-linux"
     ;;
   linux-arm64) build_one linux arm64 server-linux-arm64 ;;
-  *) echo "未知目标: $TARGET（可选 all|host|linux-amd64|linux-arm64）" >&2; exit 1 ;;
+  *) echo "未知目标: ${TARGET}（可选 all|host|linux-amd64|linux-arm64）" >&2; exit 1 ;;
 esac
 
 # 顺带构建调试工具 fakephone（联调用，体积小）

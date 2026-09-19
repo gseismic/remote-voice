@@ -19,7 +19,7 @@ for arg in "$@"; do
   case "$arg" in
     --debug) BUILD_MODE="debug" ;;
     --install) DO_INSTALL=1 ;;
-    *) echo "未知参数: $arg（可选 --debug --install）" >&2; exit 1 ;;
+    *) echo "未知参数: ${arg}（可选 --debug --install）" >&2; exit 1 ;;
   esac
 done
 
@@ -46,7 +46,7 @@ echo "==> pnpm install（首次会下载前端依赖）"
 pnpm install --frozen-lockfile
 
 # 首次构建需要 crates.io 可达（webpki-roots 等会按 Cargo.lock 拉取）
-echo "==> pnpm tauri build（$BUILD_MODE）"
+echo "==> pnpm tauri build（${BUILD_MODE}）"
 if [[ "$BUILD_MODE" == "debug" ]]; then
   pnpm tauri build --debug
 else
