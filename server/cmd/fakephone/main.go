@@ -1,4 +1,4 @@
-// fakephone 调试工具（协议 v3）：模拟手机端向 server 推送 440Hz 正弦波 PCM，
+// fakephone 调试工具（协议 v4）：模拟手机端向 server 推送 440Hz 正弦波 PCM，
 // 或以 mac 身份连接注册并统计下行帧数，用于没有真机时的全链路联调。
 package main
 
@@ -29,15 +29,13 @@ const (
 	frameBytes = sampleRate / 1000 * frameMs * 2 // 960 样本 × 2 字节 = 1920
 )
 
-// 与 Mac 客户端一致的秘密字母表（剔除易混字符 0O1lI）
-const secretAlphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
-
 func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
 	addr := flag.String("addr", "127.0.0.1:9432", "server 地址 host:port")
 	fp := flag.String("fingerprint", "", "高级选项：服务端证书 SHA-256 指纹(hex)，留空自动 TOFU")
 	role := flag.String("role", "phone", "角色: phone（推流）| mac（注册并统计）")
-	secret := flag.String("secret", "", "phone: 秘密原文（或临时秘密 4+4 短码）")
+	password := flag.String("password", "", "服务器密码（phone 认证必填；mac 提供则注册/热更）")
+	target := flag.String("target", "", "phone: 目标 Mac 的 device_id（留空=仅登录并 LIST）")
 	deviceID := flag.String("device-id", "", "mac: 设备 ID（留空则本次随机生成）")
 	deviceKey := flag.String("device-key", "", "mac: 设备凭据（留空则本次随机生成）")
 	name := flag.String("name", "", "mac: 设备名（默认主机名）")
@@ -54,7 +52,7 @@ func main() {
 
 	switch *role {
 	case "phone":
-		runPhone(conn, *secret, *freq)
+		runPhone(conn, *password, *target, *freq)
 	case "mac":
 		id, key := *deviceID, *deviceKey
 		if id == "" && key == "" {
@@ -62,20 +60,21 @@ func main() {
 		} else if id == "" || key == "" {
 			log.Fatal("-device-id 与 -device-key 必须同时提供")
 		}
-		runMac(conn, id, key, *name)
+		runMac(conn, id, key, *name, *password)
 	default:
 		log.Fatalf("未知角色 %q", *role)
 	}
 }
 
-// runPhone 手机侧：认证（秘密哈希）→ 桥接后按 20ms 节拍推流。
-func runPhone(conn *tls.Conn, secretRaw string, freq float64) {
-	if secretRaw == "" {
-		log.Fatal("phone 模式必须提供 -secret")
+// runPhone 手机侧（v4）：密码哈希认证（target 空则登录会话，先 LIST 展示目录）
+// → 建桥后按 20ms 节拍推流。
+func runPhone(conn *tls.Conn, passwordRaw, target string, freq float64) {
+	if passwordRaw == "" {
+		log.Fatal("phone 模式必须提供 -password（服务器密码）")
 	}
 	authPayload, _ := json.Marshal(protocol.AuthRequest{
 		Role: protocol.RolePhone, Proto: protocol.ProtoVersion,
-		Secret: hashSecret(secretRaw),
+		Secret: hashSecret(passwordRaw), Target: target,
 	})
 	mustWrite(conn, protocol.FrameAuth, authPayload)
 
@@ -89,6 +88,25 @@ func runPhone(conn *tls.Conn, secretRaw string, freq float64) {
 	case protocol.FrameAuthOK:
 		var ok protocol.AuthOKPayload
 		_ = json.Unmarshal(payload, &ok)
+		if target == "" {
+			log.Printf("登录成功（登录会话），请求目录…")
+			mustWrite(conn, protocol.FrameList, nil)
+			lt, lp, err := protocol.ReadFrame(conn)
+			if err != nil {
+				log.Fatalf("读取目录失败: %v", err)
+			}
+			if lt != protocol.FrameList {
+				log.Fatalf("意外的帧类型 0x%02x（期望 LIST）", lt)
+			}
+			var list protocol.ListPayload
+			_ = json.Unmarshal(lp, &list)
+			for _, m := range list.Macs {
+				log.Printf("目录: device_id=%s name=%q online=%t busy=%t",
+					m.DeviceID, m.Name, m.Online, m.Busy)
+			}
+			log.Printf("目录共 %d 台；用 -target <device_id> 建桥推流", len(list.Macs))
+			return
+		}
 		log.Printf("认证成功，对端设备: %q，等待上线…", ok.Mac)
 	default:
 		log.Fatalf("意外的帧类型 0x%02x", typ)
@@ -166,9 +184,9 @@ func runPhone(conn *tls.Conn, secretRaw string, freq float64) {
 	}
 }
 
-// runMac mac 侧：设备身份认证 → 生成临时秘密并注册 → 统计下行音频帧。
-// 生成的临时秘密打印在日志里，供手机侧用同一秘密连入。
-func runMac(conn *tls.Conn, deviceID, deviceKey, name string) {
+// runMac mac 侧（v4）：设备身份认证 → 注册设备名与服务器密码哈希 → 统计下行音频帧。
+// 提供的 -password 即服务器密码（手机端用同一密码连入）。
+func runMac(conn *tls.Conn, deviceID, deviceKey, name, passwordRaw string) {
 	if name == "" {
 		name, _ = os.Hostname()
 	}
@@ -186,13 +204,15 @@ func runMac(conn *tls.Conn, deviceID, deviceKey, name string) {
 		log.Fatalf("认证被拒（%s）", payload)
 	}
 
-	tempSecret := newTempSecret()
 	regPayload, _ := json.Marshal(protocol.RegisterRequest{
-		Name: name, Temp: hashSecret(tempSecret), TempExp: time.Now().Add(8 * time.Hour).Unix(),
+		Name:         name,
+		PasswordHash: hashSecret(passwordRaw), // 空 password 时为空串=只改名
 	})
 	mustWrite(conn, protocol.FrameRegister, regPayload)
 	log.Printf("mac 已注册 name=%q", name)
-	log.Printf("临时秘密（手机端输入）: %s", tempSecret)
+	if passwordRaw != "" {
+		log.Printf("服务器密码已设置为手机端输入: %s", passwordRaw)
+	}
 
 	var inFrames, lastFrames atomic.Uint64
 	lastReport := time.Now()
@@ -234,23 +254,6 @@ func runMac(conn *tls.Conn, deviceID, deviceKey, name string) {
 		default:
 		}
 	}
-}
-
-// newTempSecret 生成 4+4 位 base32 短码（与 Mac 客户端同规格）。
-func newTempSecret() string {
-	buf := make([]byte, 8)
-	if _, err := rand.Read(buf); err != nil {
-		panic(err)
-	}
-	var s []byte
-	for i := 0; i < 4; i++ {
-		s = append(s, secretAlphabet[int(buf[i*2])%len(secretAlphabet)])
-	}
-	s = append(s, '-')
-	for i := 0; i < 4; i++ {
-		s = append(s, secretAlphabet[int(buf[i*2+1])%len(secretAlphabet)])
-	}
-	return string(s)
 }
 
 // sha256Hex 计算字符串的 SHA-256 十六进制摘要。

@@ -234,6 +234,18 @@
                 android:minWidth="120dp"
                 android:text="@string/btn_retry"
                 android:textColor="@color/rv_tx" />
+
+            <!-- 证书更换专用：清除本机记录并重新连接（PLAN-025，默认隐藏） -->
+            <Button
+                android:id="@+id/btn_retrust"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_iconbtn"
+                android:minWidth="160dp"
+                android:text="重新信任并重连"
+                android:textColor="@color/rv_tx"
+                android:visibility="gone" />
         </LinearLayout>
     </FrameLayout>
 

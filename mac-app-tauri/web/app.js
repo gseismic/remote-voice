@@ -28,17 +28,15 @@ const statusDetail = {
 const fallbackState = {
   status: "stopped",
   detail: "等待连接",
+  fatal_code: "",
   server: "",
   name: "",
   audio_device: "BlackHole",
-  temp_secret: "--------",
-  temp_exp: 0,
-  temp_duration: 28800,
-  keep: false,
+  password_set: false,
+  auto_reconnect: true,
   talking: false,
   dictation_enabled: true,
   dictation_mode: "hold",
-  permanent_enabled: false,
   peer_name: "",
   audio_frames: 0,
   audio_bytes: 0,
@@ -51,7 +49,6 @@ let state = fallbackState;
 let renderStarted = false;
 let toastTimer = null;
 let audioDevices = [];
-let expiryRefreshAttempt = 0;
 let editingSettings = false;
 // 连接按钮图标/文案只随「已连接与否」变化；桥接期间 app-state 约 2Hz 到达，
 // 状态未变时跳过重建与全文档 SVG 图标重建，避免无谓的前端开销（PLAN-020）
@@ -62,19 +59,14 @@ let lastEventsSignature = null;
 let lastAudioOptionsSignature = null;
 let lastAudioAlertText = null;
 let lastMeterHtml = null;
+// 「显示密码」是显式动作：显示后保持，直到状态/密码变化或再次点按
+let passwordRevealed = false;
+let cachedPassword = "";
 
 function formatBytes(value) {
   if (!Number.isFinite(value) || value < 1024) return `${Math.max(0, value || 0)} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatTime(seconds) {
-  const value = Math.max(0, Math.floor(seconds));
-  const hours = String(Math.floor(value / 3600)).padStart(2, "0");
-  const minutes = String(Math.floor((value % 3600) / 60)).padStart(2, "0");
-  const remainder = String(value % 60).padStart(2, "0");
-  return `${hours}:${minutes}:${remainder}`;
 }
 
 function formatEventTime(timestamp) {
@@ -248,6 +240,9 @@ function render(next) {
   const cluster = $("status-cluster");
   if (cluster.dataset.status !== status) cluster.dataset.status = status;
   setText($("status-label"), displayStatus(status));
+  // 证书更换恢复弹层：只在 fatal 且后端标记 cert-changed 时出现（PLAN-025）
+  const certChanged = status === "fatal" && state.fatal_code === "cert-changed";
+  if ($("cert-overlay").hidden !== !certChanged) $("cert-overlay").hidden = !certChanged;
   setText($("server-summary"), state.server || "尚未配置服务器");
   setText($("connection-detail"), state.detail || statusDetail[status] || "等待连接");
   setText(
@@ -256,20 +251,22 @@ function render(next) {
       ? `${state.peer_name} 已连接`
       : status === "bridged" ? "手机已连接" : "手机未连接",
   );
-  setText($("temp-secret"), state.temp_secret || "--------");
-  // 配对二维码可用性：需要临时密码 + 可解析的服务器地址（设计 docs/design/qr-pairing-20260919-overview.md §3）
-  const qrReady = Boolean(
-    state.temp_secret && state.temp_secret !== "--------" && pairingServerPart(),
-  );
-  if ($("qr-temp").disabled !== !qrReady) $("qr-temp").disabled = !qrReady;
-  $("qr-temp").title = pairingServerPart()
-    ? "出示配对二维码（手机扫码添加本机）"
-    : "先在连接设置里填写服务器地址";
-  setText($("permanent-state"), state.permanent_enabled ? "已启用" : "未设置");
-  const permanentEnabled = state.permanent_enabled ? "true" : "false";
-  if ($("permanent-state").dataset.enabled !== permanentEnabled) {
-    $("permanent-state").dataset.enabled = permanentEnabled;
-  }
+  // 配对动作可用性：需要已设置的服务器密码 + 可解析的服务器地址
+  const pairingReady = Boolean(state.password_set && pairingServerPart());
+  $("btn-qr").disabled = !pairingReady;
+  $("btn-qr").title = pairingReady
+    ? "出示配对二维码（手机扫码一键添加）"
+    : state.password_set
+      ? "先在连接设置里填写服务器地址"
+      : "先在连接设置里设置服务器密码";
+  $("btn-copy-password").disabled = !state.password_set;
+  $("btn-show-password").disabled = !state.password_set;
+  // 密码展示：默认掩码；显式「显示密码」后展示明文（缓存的配对载荷里解析）
+  const code = $("password-code");
+  const shown = state.password_set
+    ? (passwordRevealed && cachedPassword ? cachedPassword : "••••-••••")
+    : "未设置";
+  setText(code, shown);
   setText($("device-status"), state.name ? `设备：${state.name}` : "身份：首次连接自动建立");
   renderCounters();
 
@@ -277,15 +274,10 @@ function render(next) {
   if (!editingSettings) {
     setValueIfIdle($("server"), state.server);
     setValueIfIdle($("device-name"), state.name);
-    const expiryChoice = String(state.temp_duration || 28800);
-    const expirySelect = $("temp-expiry-choice");
-    if (document.activeElement !== expirySelect && expirySelect.value !== expiryChoice) {
-      expirySelect.value = expiryChoice;
-    }
-    const keepChecked = Boolean(state.keep);
-    const keepInput = $("keep-temp");
-    if (document.activeElement !== keepInput && keepInput.checked !== keepChecked) {
-      keepInput.checked = keepChecked;
+    const reconnectChecked = state.auto_reconnect !== false;
+    const reconnectInput = $("auto-reconnect");
+    if (document.activeElement !== reconnectInput && reconnectInput.checked !== reconnectChecked) {
+      reconnectInput.checked = reconnectChecked;
     }
   }
   renderRelayLine(status);
@@ -313,24 +305,6 @@ function renderAudioAlert() {
   alert.textContent = text;
 }
 
-function renderCountdown() {
-  const seconds = Number(state.temp_exp || 0) - Math.floor(Date.now() / 1000);
-  const expiry = $("temp-expiry");
-  setText(expiry, seconds > 0 ? formatTime(seconds) : "已过期");
-  const expired = seconds > 0 ? "false" : "true";
-  if (expiry.dataset.expired !== expired) expiry.dataset.expired = expired;
-  if (
-    seconds <= 0 &&
-    state.temp_exp > 0 &&
-    tauriReady &&
-    renderStarted &&
-    expiryRefreshAttempt !== state.temp_exp
-  ) {
-    expiryRefreshAttempt = state.temp_exp;
-    runAction(() => call("regenerate_temp"), "临时密码已自动更新");
-  }
-}
-
 async function refreshAudioDevices(quiet = false) {
   try {
     audioDevices = await call("list_audio_devices");
@@ -354,27 +328,30 @@ async function runAction(action, successMessage = "已完成") {
   }
 }
 
-// ---- 配对二维码（设计 docs/design/qr-pairing-20260919-overview.md §2/§3）----
+// ---- 配对（服务器密码 + 二维码）----
 
-/** 归一化配置里的服务器地址为 rv:// 的 authority 部分（host[:port]）；不可解析返回空串。 */
+/** 归一化配置里的服务器地址为 authority 部分（host[:port]）；不可解析返回空串。 */
 function pairingServerPart() {
   let s = (state.server || "").trim();
   if (s.toLowerCase().startsWith("rv://")) s = s.slice(5);
+  if (s.toLowerCase().startsWith("rvs://")) s = s.slice(6);
   s = s.split("?")[0].trim();
   // 与后端 parse_server 同规则的轻量校验：非空、无空白、无斜杠
   if (!s || /\s/.test(s) || s.includes("/")) return "";
   return s;
 }
 
-/** 组装配对载荷：rv://<host>[:<port>]?s=<密码>&n=<设备名> */
-function buildPairingUri(secret) {
-  const server = pairingServerPart();
-  if (!server || !secret) return "";
-  let uri = `rv://${server}?s=${encodeURIComponent(secret)}`;
-  if (state.name && state.name.trim()) {
-    uri += `&n=${encodeURIComponent(state.name.trim())}`;
-  }
-  return uri;
+/** 从配对载荷中解码 s=（密码原文）与 n=（设备名）。 */
+function parsePairingPayload(payload) {
+  const query = payload.split("?")[1] || "";
+  const params = new URLSearchParams(query.replace(/\+/g, "%20"));
+  return { password: params.get("s") || "", name: params.get("n") || "" };
+}
+
+async function fetchPairingPayload() {
+  const payload = await call("get_pairing_payload");
+  cachedPassword = parsePairingPayload(payload).password;
+  return payload;
 }
 
 /** 用 vendor/qrcode.js 生成模块矩阵（版本自动：从 v1 起尝试），渲染为 SVG。 */
@@ -407,19 +384,21 @@ function renderPairingQr(uri) {
     `<g fill="#111">${cells.join("")}</g></svg>`;
 }
 
-function showPairingQr() {
-  const uri = buildPairingUri(state.temp_secret);
-  if (!uri) {
-    showToast(state.temp_secret === "--------" ? "临时密码尚未生成" : "请先在连接设置里填写服务器地址", "error");
+async function showPairingQr() {
+  let payload;
+  try {
+    payload = await fetchPairingPayload();
+  } catch (error) {
+    showToast(commandError(error), "error");
     return;
   }
-  const svg = renderPairingQr(uri);
+  const svg = renderPairingQr(payload);
   if (!svg) {
     showToast("二维码生成失败", "error");
     return;
   }
   $("qr-box").innerHTML = svg;
-  setText($("qr-secret"), state.temp_secret);
+  setText($("qr-secret"), cachedPassword);
   $("qr-overlay").hidden = false;
 }
 
@@ -428,24 +407,47 @@ function closePairingQr() {
   $("qr-box").innerHTML = "";
 }
 
-async function copyTempSecret() {
-  if (!state.temp_secret || state.temp_secret === "--------") {
-    showToast("临时密码尚未生成", "error");
+async function togglePasswordVisibility() {
+  if (!state.password_set) return;
+  if (passwordRevealed && cachedPassword) {
+    passwordRevealed = false;
+    render(state);
     return;
   }
   try {
-    await navigator.clipboard.writeText(state.temp_secret);
-    showToast("临时密码已复制");
-  } catch {
+    await fetchPairingPayload();
+    passwordRevealed = true;
+    render(state);
+  } catch (error) {
+    showToast(commandError(error), "error");
+  }
+}
+
+async function copyPassword() {
+  if (!state.password_set) return;
+  let password = cachedPassword;
+  try {
+    if (!password) {
+      await fetchPairingPayload();
+      password = cachedPassword;
+    }
+    await navigator.clipboard.writeText(password);
+    showToast("服务器密码已复制");
+  } catch (error) {
+    if (typeof error === "object" && error && error.code) {
+      showToast(commandError(error), "error");
+      return;
+    }
+    // 剪贴板不可用时退化为临时 textarea
     const input = document.createElement("textarea");
-    input.value = state.temp_secret;
+    input.value = password || "";
     input.style.position = "fixed";
     input.style.opacity = "0";
     document.body.append(input);
     input.select();
     document.execCommand("copy");
     input.remove();
-    showToast("临时密码已复制");
+    showToast("服务器密码已复制");
   }
 }
 
@@ -471,10 +473,9 @@ function readSettings() {
     server: $("server").value.trim(),
     name: $("device-name").value.trim(),
     audioDevice: $("audio-device").value.trim() || "BlackHole",
-    tempDuration: Number($("temp-expiry-choice").value),
-    keep: $("keep-temp").checked,
     dictationEnabled: $("dictation-enabled").checked,
     dictationMode: $("dictation-mode").value,
+    autoReconnect: $("auto-reconnect").checked,
   };
 }
 
@@ -482,8 +483,14 @@ function openSettings() {
   editingSettings = true;
   $("server").value = state.server || "";
   $("device-name").value = state.name || "";
-  $("temp-expiry-choice").value = String(state.temp_duration || 28800);
-  $("keep-temp").checked = Boolean(state.keep);
+  $("server-password").value = "";
+  setText(
+    $("password-field-label"),
+    state.password_set
+      ? "服务器密码（留空保持不变）"
+      : "服务器密码（至少 12 位；手机端输入它即可控制本机）",
+  );
+  $("auto-reconnect").checked = state.auto_reconnect !== false;
   $("dictation-enabled").checked = state.dictation_enabled !== false;
   $("dictation-mode").value = state.dictation_mode || "hold";
   $("settings-error").hidden = true;
@@ -496,20 +503,17 @@ function closeSettings() {
   $("settings-overlay").hidden = true;
 }
 
-function togglePermFold() {
-  const panel = $("perm-panel");
-  panel.classList.toggle("open");
-  $("btn-fold").textContent = panel.classList.contains("open") ? "收起 ▴" : "展开管理 ▾";
-}
-
 async function saveSettings() {
-  const wasConnected = statusIsConnected(state.status);
   try {
     const next = await call("save_settings", readSettings());
+    // 密码输入非空 = 更新服务器密码（走 Keychain + REGISTER 热更）
+    const password = $("server-password").value.trim();
+    if (password) {
+      await call("set_server_password", { password });
+    }
     render(next);
     closeSettings();
-    // 已连接时后端保存会自动按新地址换线重连（controller.save_settings）
-    showToast(wasConnected ? "设置已保存，正在按新设置重连" : "设置已保存");
+    showToast("设置已保存");
   } catch (error) {
     const box = $("settings-error");
     box.textContent = commandError(error);
@@ -518,10 +522,9 @@ async function saveSettings() {
 }
 
 function bindEvents() {
-  $("copy-temp").addEventListener("click", copyTempSecret);
-  $("regenerate-temp").addEventListener("click", () =>
-    runAction(() => call("regenerate_temp"), "临时密码已更新"));
-  $("qr-temp").addEventListener("click", showPairingQr);
+  $("btn-show-password").addEventListener("click", togglePasswordVisibility);
+  $("btn-copy-password").addEventListener("click", copyPassword);
+  $("btn-qr").addEventListener("click", showPairingQr);
   $("close-qr").addEventListener("click", closePairingQr);
   $("qr-overlay").addEventListener("click", (event) => {
     if (event.target === $("qr-overlay")) closePairingQr();
@@ -529,7 +532,6 @@ function bindEvents() {
   $("connect-toggle").addEventListener("click", toggleConnection);
   // 右上状态胶囊点按 = 连接/断开/重试（V3.2 原型交互，与底部按钮同语义）
   $("status-cluster").addEventListener("click", toggleConnection);
-  $("btn-fold").addEventListener("click", togglePermFold);
   $("relay-panel").addEventListener("click", openSettings);
   $("open-settings").addEventListener("click", openSettings);
   $("close-settings").addEventListener("click", closeSettings);
@@ -555,26 +557,12 @@ function bindEvents() {
   $("refresh-audio").addEventListener("click", () => refreshAudioDevices(false));
   $("clear-history").addEventListener("click", () =>
     runAction(() => call("clear_history"), "事件已清空"));
-  $("set-permanent").addEventListener("click", async () => {
-    const secret = $("permanent-input").value.trim();
-    if (!secret) {
-      showToast("请输入永久密码", "error");
-      $("permanent-input").focus();
-      return;
-    }
-    const next = await runAction(() => call("set_permanent", { secret }), "永久密码已启用");
-    if (next) $("permanent-input").value = "";
-  });
-  $("clear-permanent").addEventListener("click", () =>
-    runAction(() => call("clear_permanent"), "永久密码已停用"));
 }
 
 async function boot() {
   bindEvents();
   render(fallbackState);
   renderIcons();
-  window.setInterval(renderCountdown, 1000);
-  renderCountdown();
   if (!tauriReady) {
     showToast("预览模式：请通过桌面应用连接", "normal");
     return;

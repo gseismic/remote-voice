@@ -2,14 +2,13 @@
 
 Mac 麦克风硬件损坏的替代方案：**Android 手机采音 → 中继服务器 → Mac 虚拟麦克风**。
 全链路自研、完全可控：TLS 加密，按住说话（PTT），手机按下不仅出声、还联动 Mac 端模拟 Fn
-触发系统语音输入。协议 v3 设备自助入网，支持多台 Mac 多设备管理。
+触发系统语音输入。协议 v4 服务器密码 + Mac 目录：一个密码控制服务器上全部 Mac。
 
-两种信任模式（按部署场景选）：
-
-| 配置写法 | 信任方式 | 适用场景 |
-|---|---|---|
-| `rv://IP:端口` 或裸 `IP:端口` | 自签证书 + 首次连接固定指纹（TOFU） | **无需域名**，本地联测/内网 |
-| `rvs://域名:端口` | 标准 TLS：系统 CA 链 + 主机名验证（Let's Encrypt） | **公网部署推荐**，无指纹无 mismatch |
+**用户只需三样东西：服务器地址、密码、二维码。** Mac 端设置服务器密码并出示二维码；
+手机扫码（或手填）后即见服务器上的 Mac 列表（离线也可见），点连接即可控制，可同时
+连接多台、左右滑动切换。证书全自动：裸地址先标准验证、自签自动回落首连信任，
+服务器日后配置 Let's Encrypt 证书自动升级，永不出现证书换代死局错误；
+`rvs://` 显式前缀保留为强制标准验证的逃生门。
 
 ## 架构（三端各自独立交付）
 
@@ -17,7 +16,7 @@ Mac 麦克风硬件损坏的替代方案：**Android 手机采音 → 中继服�
 Android 手机: 按住说话(PTT)              中继服务器                     Mac
 ┌──────────────────┐  出站TLS  ┌──────────────────────┐  出站TLS  ┌──────────────────┐
 │ android-app       │ ───────→│ server (Go)          │────────→│ mac-app / Tauri   │
-│ 扫码/手动配对      │        │ 秘密哈希注册表路由+桥接 │         │ 收流写 BlackHole  │
+│ 扫码/手动配对      │        │ 服务器密码+Mac目录路由 │         │ 收流写 BlackHole  │
 │ 48k/mono/s16le    │        │ Mac 设备身份登记+桥接   │         │ +模拟 Fn 触发语音输入│
 └──────────────────┘        │ 按IP限速防爆破           │        └──────────────────┘
                             └──────────────────────┘            ↑ 会议/输入法选 BlackHole 2ch
@@ -25,9 +24,9 @@ Android 手机: 按住说话(PTT)              中继服务器                  
 
 | 目录 | 运行端 | 语言 | 介绍 |
 |---|---|---|---|
-| [`server/`](server/README.md) | 公网 Linux 服务器 | Go（标准库零依赖） | 中继服务器：TLS + 秘密注册表路由 + 1:1 桥接 + 按 IP 限速防爆破；`-cert/-key` 加载 Let's Encrypt 证书；含调试工具 `cmd/fakephone` |
+| [`server/`](server/README.md) | 公网 Linux 服务器 | Go（标准库零依赖） | 中继服务器：TLS + 服务器密码认证 + Mac 目录（LIST）+ 1:1 桥接 + 按 IP 限速防爆破；`-cert/-key` 加载 Let's Encrypt 证书；含调试工具 `cmd/fakephone` |
 | [`mac-app-tauri/`](mac-app-tauri/README.md) | macOS | Rust/Tauri | 唯一受支持 Mac 客户端；首次自动生成设备身份；收流写入 BlackHole，PTT 联动模拟 Fn 触发语音输入；首页出示配对二维码 |
-| [`android-app/`](android-app/README.md) | Android 手机 | Kotlin（唯一 maven 依赖 zxing core 用于扫码） | 前台服务 + 按住说话（PTT），多设备单激活，扫码配对（扫 Mac 二维码一步完成配置+连接） |
+| [`android-app/`](android-app/README.md) | Android 手机 | Kotlin（唯一 maven 依赖 zxing core 用于扫码） | 前台服务 + 按住说话（PTT），Mac 目录一键连接、多 Mac 同时连接 + 左右滑动切换，扫码配对（扫 Mac 二维码一步完成配置+连接） |
 
 > Mac 端早期 Python 客户端已归档至 [`backup/mac-app/`](backup/mac-app/README.md)
 > （只保留 Tauri 版的决定，PLAN-013）；存储约定兼容，如需恢复 `git mv` 回即可。

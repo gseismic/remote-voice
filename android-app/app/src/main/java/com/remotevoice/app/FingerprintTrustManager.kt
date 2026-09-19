@@ -3,6 +3,7 @@ package com.remotevoice.app
 import java.security.MessageDigest
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
+import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.X509TrustManager
 
 /**
@@ -30,13 +31,17 @@ class FingerprintTrustManager(expectedFingerprintHex: String) : X509TrustManager
         }
         val actual = fingerprintOf(chain[0].encoded)
         if (actual != expected) {
-            throw CertificateException("证书指纹不符！期望=$expected 实际=$actual")
+            // 专用异常类型：TLS 层据此与普通证书错误区分（PLAN-025 证书换代=可恢复而非死局）
+            throw SSLHandshakeException(CERT_CHANGED_MESSAGE)
         }
     }
 
     override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
 
     companion object {
+        /** 指纹不符的统一文案；RelayClient 捕获后转 onCertChanged（不再作为致命错误）。 */
+        const val CERT_CHANGED_MESSAGE = "服务器证书与上次记录不一致"
+
         /** 计算证书 DER 编码的 SHA-256 hex 指纹（与 relay 启动时打印格式一致）。 */
         fun fingerprintOf(encoded: ByteArray): String =
             MessageDigest.getInstance("SHA-256").digest(encoded)

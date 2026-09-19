@@ -213,3 +213,36 @@
   部署 runbook（certbot+systemd）在 OUTCOME §部署 runbook。
   文件：PLAN-024-tls-ca-mode.md / PLAN-024-tls-ca-mode-OUTCOME.md，
   设计 docs/design/tls-ca-mode-20260919-overview.md。
+
+- **2026-09-19 12:40** | PLAN-025 TLS 证书模式自动探测——消灭 tofu-mismatch
+  摘要：裸 `host:port` 成为默认地址形态=Auto 模式（先标准 CA+主机名验证，仅证书验证
+  失败回落 TOFU；服务器日后配 LE 证书自动升级，零用户操作）；rvs:///rv:// 保留为逃生门/
+  兼容。两端 `tofu-mismatch` 字符串清零：指纹不符改为可恢复流程 Mac=`cert-changed` fatal+
+  前端「重新信任并连接」弹层（clear_server_trust+connect）/Android=`onCertChanged` 停连+
+  「重新信任并重连」按钮（retrustAndRestart 清 TrustStore 后重连）。Mac relay 拆出
+  dial_and_handshake+HandshakeFailure 分类（仅 InvalidCertificate 类回落）。验证：cargo
+  test 25 例（+4）、assembleDebug、grep 清零。
+  文件：PLAN-025-tls-auto-detect.md / PLAN-025-tls-auto-detect-OUTCOME.md，
+  设计 docs/design/connection-simplify-20260919-overview.md。
+
+- **2026-09-19 13:05** | PLAN-026 服务器密码 + Mac 目录（协议 v4，破坏性升级）
+  摘要：一个密码模型上线——Mac 端设置服务器密码（Keychain，复用原永久密码槽位），
+  REGISTER 推送 SHA-256 到 server 持久化（devices.json v2，last-write-wins）；手机输一次
+  密码登录（AUTH target 空=登录会话）后 LIST 查询全部已登记 Mac（含离线，名字持久化），
+  target 非空=按 device_id 建桥。per-Mac 秘密/临时秘密/SecretKind/v2 regkey 全删（-regkey
+  flag 移除）。Mac 前端重写（配对区+设置弹窗+get_pairing_payload 二维码）；Android
+  ServerStore（v3 数据迁移）+RelayClient v4（LIST/authed/文案）+服务=登录连接（5s 轮询）
+  +N 桥接。两端自动重连开关（默认开）。验证：go test 全绿（20 例）、cargo test 26、
+  pnpm build、assembleDebug、本机 server+fakephone 真实回环（注册→LIST→错密码拒→建桥→
+  199/175 帧透传→offline 通知）。部署 runbook 写入 server/DEPLOY.md 顶部（两端同步升级）。
+  文件：PLAN-026-server-password-mac-list.md / PLAN-026-server-password-mac-list-OUTCOME.md。
+
+- **2026-09-19 13:06** | PLAN-027 Android 多 Mac 同时连接 + 左右滑动切换
+  摘要：与 PLAN-026 Android 改造一次性落地。AudioStreamService=登录连接+
+  bridges(deviceId→Bridge) 多桥并发；采音单实例按 activeDeviceId 路由（routed 门控防串流）；
+  切换目标=旧桥 TALK-off+新桥同步 PTT（Fn 不悬空）；ACTION_SET_ACTIVE（切换或建桥）/
+  ACTION_DISCONNECT_MAC（单桥断开）。MainActivity GestureDetector fling 在已连接 Mac 间
+  循环切换；目录 chips ◉/●/○/⧖/· 五态（离线可见、长按断开）。服务器 1:1 桥零改动。
+  验证：assembleDebug；双 Mac 双桥并发由 go test TestBridgeFullDuplex 覆盖；真机滑动
+  复核待用户。
+  文件：PLAN-027-android-multi-mac.md / PLAN-027-android-multi-mac-OUTCOME.md。

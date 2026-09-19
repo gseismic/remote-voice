@@ -27,8 +27,8 @@
     <string name="sect_server">SERVER</string>
     <string name="label_server">中继服务器地址</string>
     <string name="hint_server">rv[s]://IP或域名:端口，或 IP:端口</string>
-    <string name="hint_server_desc">公网部署填 rvs://域名:端口（标准 HTTPS 证书验证）；本地测试填 rv://IP:端口 或直接 IP:端口（首连自动信任）。</string>
-    <string name="toast_addr_bad">格式无效：应为 IP:端口 或 rv://IP:端口</string>
+    <string name="hint_server_desc">填 IP:端口 或 域名:端口 即可（例如 192.168.1.10:9432）。服务器证书自动处理：首次连接自动信任，证书更换时会提示你确认。</string>
+    <string name="toast_addr_bad">格式无效：应为 IP:端口 或 域名:端口</string>
     <string name="sect_devices">DEVICES</string>
     <string name="label_devices_section">我的设备（密码保存在本机）</string>
     <string name="btn_add_device">＋ 添加设备（粘贴 Mac 端密码）</string>

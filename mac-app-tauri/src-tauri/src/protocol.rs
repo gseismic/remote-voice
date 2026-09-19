@@ -18,7 +18,7 @@ pub const FRAME_TALK: u8 = 0x0A;
 pub const PEER_OFFLINE: u8 = 0x00;
 pub const PEER_ONLINE: u8 = 0x01;
 pub const MAX_PAYLOAD: usize = 65_536;
-pub const PROTO_VERSION: i32 = 3;
+pub const PROTO_VERSION: i32 = 4;
 
 pub const REASON_INVALID_DEVICE: &str = "invalid-device";
 pub const REASON_DEVICE_BUSY: &str = "device-busy";
@@ -55,9 +55,9 @@ pub struct AuthOkPayload {
 #[derive(Debug, Clone, Serialize)]
 pub struct RegisterRequest<'a> {
     pub name: &'a str,
-    pub perm: &'a str,
-    pub temp: &'a str,
-    pub temp_exp: i64,
+    /// 服务器密码的规范化 SHA-256 hex（空=不改动服务器密码，只更新设备名）
+    #[serde(skip_serializing_if = "str::is_empty")]
+    pub password_hash: &'a str,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -112,17 +112,10 @@ pub fn auth_payload(device_id: &str, device_key: &str) -> Result<Vec<u8>, Protoc
     })?)
 }
 
-pub fn register_payload(
-    name: &str,
-    perm: &str,
-    temp: &str,
-    temp_exp: i64,
-) -> Result<Vec<u8>, ProtocolError> {
+pub fn register_payload(name: &str, password_hash: &str) -> Result<Vec<u8>, ProtocolError> {
     Ok(serde_json::to_vec(&RegisterRequest {
         name,
-        perm,
-        temp,
-        temp_exp,
+        password_hash,
     })?)
 }
 
@@ -150,7 +143,7 @@ mod tests {
         writer.await.unwrap();
         assert_eq!(got, (FRAME_AUTH, b"hello".to_vec()));
         let json = auth_payload("mac-id", &"a".repeat(64)).unwrap();
-        assert!(String::from_utf8(json).unwrap().contains("\"proto\":3"));
+        assert!(String::from_utf8(json).unwrap().contains("\"proto\":4"));
     }
 
     #[tokio::test]

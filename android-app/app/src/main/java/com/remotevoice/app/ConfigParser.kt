@@ -1,18 +1,26 @@
 package com.remotevoice.app
 
 /**
- * 当前 v3 配置串解析器：接受 rv://host[:port] 或 host[:port]。
- * 服务器身份由客户端内部 TOFU 管理，不进入用户配置。
+ * 当前 v3 配置串解析器：接受 rv[s]://host[:port] 或裸 host[:port]。
+ * 裸地址 = Auto 模式（PLAN-025）：连接时先标准 CA+主机名验证，仅证书验证失败才回落 TOFU；
+ * 服务器日后换真证书自动升级，用户全程无感。
  */
 object ConfigParser {
 
-    /**
-     * @param strict true=rvs://（标准 CA+主机名验证，无 TOFU）；false=rv://（TOFU）
-     */
+    /** TLS 信任策略（与设计 docs/design/connection-simplify-20260919-overview.md §2.1 对应）。 */
+    enum class TlsMode {
+        /** 裸地址：先标准验证，证书错误回落 TOFU。 */
+        AUTO,
+        /** rvs://：只做标准 CA+主机名验证，绝不回落。 */
+        STRICT,
+        /** rv://：只做 TOFU（旧配置兼容）。 */
+        TOFU,
+    }
+
     data class Parsed(
         val host: String,
         val port: Int,
-        val strict: Boolean = false,
+        val mode: TlsMode = TlsMode.AUTO,
     )
 
     /** 配对码解析结果（扫码配对，设计 docs/design/qr-pairing-20260919-overview.md §2）。 */
@@ -21,19 +29,21 @@ object ConfigParser {
         val port: Int,
         val secret: String,
         val name: String,
-        val strict: Boolean = false,
+        val mode: TlsMode = TlsMode.AUTO,
     )
 
     private const val DEFAULT_PORT = 9432
 
     fun parse(raw: String): Parsed? {
         var value = raw.trim()
-        var strict = false
-        if (value.startsWith("rvs://", ignoreCase = true)) {
-            value = value.substring(6)
-            strict = true
-        } else if (value.startsWith("rv://", ignoreCase = true)) {
-            value = value.substring(5)
+        val mode = when {
+            value.startsWith("rvs://", ignoreCase = true) -> {
+                value = value.substring(6); TlsMode.STRICT
+            }
+            value.startsWith("rv://", ignoreCase = true) -> {
+                value = value.substring(5); TlsMode.TOFU
+            }
+            else -> TlsMode.AUTO
         }
         if (value.isEmpty() || value.any { it.isWhitespace() }) return null
 
@@ -41,7 +51,7 @@ object ConfigParser {
         val authority = if (queryIndex < 0) value else value.substring(0, queryIndex)
         if (queryIndex >= 0) return null
         val endpoint = parseAuthority(authority) ?: return null
-        return Parsed(endpoint.first, endpoint.second, strict)
+        return Parsed(endpoint.first, endpoint.second, mode)
     }
 
     /**
@@ -51,12 +61,14 @@ object ConfigParser {
      */
     fun parsePairing(raw: String): Pairing? {
         var value = raw.trim()
-        var strict = false
-        if (value.startsWith("rvs://", ignoreCase = true)) {
-            value = value.substring(6)
-            strict = true
-        } else if (value.startsWith("rv://", ignoreCase = true)) {
-            value = value.substring(5)
+        val mode = when {
+            value.startsWith("rvs://", ignoreCase = true) -> {
+                value = value.substring(6); TlsMode.STRICT
+            }
+            value.startsWith("rv://", ignoreCase = true) -> {
+                value = value.substring(5); TlsMode.TOFU
+            }
+            else -> TlsMode.AUTO
         }
         if (value.isEmpty() || value.any { it.isWhitespace() }) return null
 
@@ -87,15 +99,18 @@ object ConfigParser {
         if (secret.isEmpty()) return null
 
         val endpoint = parseAuthority(authority) ?: return null
-        return Pairing(endpoint.first, endpoint.second, secret, name, strict)
+        return Pairing(endpoint.first, endpoint.second, secret, name, mode)
     }
 
-    /** 将解析结果格式化为不会歧义的服务器地址（rvs:// 需带前缀，否则会退化成 TOFU 模式）。 */
+    /**
+     * 将解析结果格式化为存储地址。TOFU 归一化为裸地址（AUTO 已涵盖 TOFU 行为：
+     * 先标准验证失败才回落），rvs:// 必须显式保留前缀，否则会退化为 AUTO。
+     */
     fun format(parsed: Parsed): String {
         val authority =
             if (parsed.host.contains(':')) "[${parsed.host}]:${parsed.port}"
             else "${parsed.host}:${parsed.port}"
-        return if (parsed.strict) "rvs://$authority" else authority
+        return if (parsed.mode == TlsMode.STRICT) "rvs://$authority" else authority
     }
 
     /** 解析域名、IPv4、带括号的 IPv6，以及省略端口的地址。 */

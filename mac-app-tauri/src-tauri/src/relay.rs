@@ -28,9 +28,8 @@ const AUDIO_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, Default)]
 pub struct Registration {
     pub name: String,
-    pub perm_hash: String,
-    pub temp_hash: String,
-    pub temp_exp: i64,
+    /// 服务器密码的规范化 SHA-256 hex（空=只报名字，不动服务器密码）
+    pub password_hash: String,
 }
 
 #[derive(Debug, Clone)]
@@ -52,9 +51,9 @@ pub enum RelayEvent {
     PeerTalking {
         on: bool,
     },
+    /// 手机建桥成功（协议 v4：同一服务器密码下按 target 寻址）
     AuthAccepted {
         ip: String,
-        kind: String,
     },
     AuthFailed {
         ip: String,
@@ -83,6 +82,48 @@ enum RelayFailure {
     Stopped,
     #[error("{message}")]
     Fatal { code: String, message: String },
+}
+
+/// 拨号/TLS 握手失败分类：Auto 模式仅对「证书验证失败」回落 TOFU，其余原样上抛
+/// （网络层失败回落会造成双倍超时，也会掩盖真实错误）。
+enum HandshakeFailure {
+    /// 服务器证书无法通过标准验证（自签/未知 CA/主机名不符/过期等）
+    Cert(String),
+    Network(String),
+    Stopped,
+}
+
+impl HandshakeFailure {
+    fn into_relay_failure(self) -> RelayFailure {
+        match self {
+            HandshakeFailure::Cert(detail) => {
+                RelayFailure::Network(format!("TLS 证书验证失败: {detail}"))
+            }
+            HandshakeFailure::Network(message) => RelayFailure::Network(message),
+            HandshakeFailure::Stopped => RelayFailure::Stopped,
+        }
+    }
+}
+
+impl From<HandshakeFailure> for RelayFailure {
+    fn from(failure: HandshakeFailure) -> Self {
+        failure.into_relay_failure()
+    }
+}
+
+/// 区分「证书验证失败」与其他网络错误。优先按 rustls::Error 类型判定，
+/// 不同包装路径下按错误文本兜底（invalid peer certificate 是 rustls 的固定前缀）。
+fn classify_handshake_error(error: std::io::Error) -> HandshakeFailure {
+    let by_type = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<TlsError>())
+        .map(|tls_error| matches!(tls_error, TlsError::InvalidCertificate(_)))
+        .unwrap_or(false);
+    let text = error.to_string();
+    if by_type || text.contains("invalid peer certificate") {
+        return HandshakeFailure::Cert(text);
+    }
+    HandshakeFailure::Network(text)
 }
 
 enum ClientCommand {
@@ -132,8 +173,11 @@ pub type TofuStoreHandler =
 pub(crate) struct RelayClientOptions {
     pub(crate) server: String,
     pub(crate) fingerprint: String,
-    /// rvs:// 标准 TLS（CA 链+主机名验证，无 TOFU）；false = rv:// 自签 TOFU
-    pub(crate) strict: bool,
+    /// TLS 信任策略（config::TlsMode）：Auto=先标准验证失败才回落 TOFU；
+    /// Strict=rvs:// 只做标准验证；Tofu=rv:// 旧行为
+    pub(crate) tls_mode: config::TlsMode,
+    /// 断线自动重连开关（false 时网络错误即停，等用户手动连接）
+    pub(crate) auto_reconnect: bool,
     pub(crate) device_id: String,
     pub(crate) device_key: String,
     pub(crate) registration: Registration,
@@ -148,7 +192,8 @@ pub struct RelayClient {
     device_id: String,
     device_key: String,
     initial_fingerprint: Option<String>,
-    strict: bool,
+    tls_mode: config::TlsMode,
+    auto_reconnect: bool,
     registration: Arc<RwLock<Registration>>,
     sink: Arc<dyn AudioSink>,
     audio_error: Mutex<AudioErrorLatch>,
@@ -173,7 +218,8 @@ impl RelayClient {
         Self::new_with_tofu_store(RelayClientOptions {
             server,
             fingerprint,
-            strict: false,
+            tls_mode: config::TlsMode::Tofu,
+            auto_reconnect: true,
             device_id,
             device_key,
             registration,
@@ -190,12 +236,12 @@ impl RelayClient {
             server: options.server,
             device_id: options.device_id,
             device_key: options.device_key,
-            initial_fingerprint: if options.strict {
-                None // rvs:// 不使用任何指纹
-            } else {
-                (!options.fingerprint.is_empty()).then_some(options.fingerprint)
+            initial_fingerprint: match options.tls_mode {
+                config::TlsMode::Strict => None, // 标准验证不使用任何指纹
+                _ => (!options.fingerprint.is_empty()).then_some(options.fingerprint),
             },
-            strict: options.strict,
+            tls_mode: options.tls_mode,
+            auto_reconnect: options.auto_reconnect,
             registration: Arc::new(RwLock::new(options.registration)),
             sink: options.sink,
             audio_error: Mutex::new(AudioErrorLatch::default()),
@@ -273,6 +319,11 @@ impl RelayClient {
                     if self.stop.load(Ordering::Acquire) {
                         break;
                     }
+                    // 自动重连关闭时网络错误即停（用户手动连接恢复）
+                    if !self.auto_reconnect {
+                        (self.events)(RelayEvent::Stopped);
+                        break;
+                    }
                     let detail = format!("{message}；{} 秒后重连", backoff);
                     (self.events)(RelayEvent::Reconnecting { detail });
                     if self.wait_backoff(&mut commands, backoff).await.is_err() {
@@ -319,62 +370,76 @@ impl RelayClient {
                 code: "invalid-server".to_string(),
                 message: error.to_string(),
             })?;
-        let tcp = tokio::select! {
-            result = timeout(CONNECT_TIMEOUT, TcpStream::connect((host.as_str(), port))) => {
-                result
-                    .map_err(|_| RelayFailure::Network("连接 server 超时".to_string()))?
-                    .map_err(|error| RelayFailure::Network(error.to_string()))?
-            }
-            _ = wait_until_stopped(Arc::clone(&self.stop)) => {
-                return Err(RelayFailure::Stopped);
-            }
-        };
-        tcp.set_nodelay(true)
-            .map_err(|error| RelayFailure::Network(error.to_string()))?;
-        let connector = TlsConnector::from(Arc::new(tls_config(self.strict)));
         let server_name = ServerName::try_from(host.clone()).map_err(|_| RelayFailure::Fatal {
             code: "invalid-server".to_string(),
             message: "服务器主机名无效".to_string(),
         })?;
-        let tls = tokio::select! {
-            result = timeout(CONNECT_TIMEOUT, connector.connect(server_name, tcp)) => {
-                result
-                    .map_err(|_| RelayFailure::Network("TLS 握手超时".to_string()))?
-                    .map_err(|error| RelayFailure::Network(error.to_string()))?
-            }
-            _ = wait_until_stopped(Arc::clone(&self.stop)) => {
-                return Err(RelayFailure::Stopped);
+        // TLS 信任策略（设计 docs/design/connection-simplify-20260919-overview.md §2.1）：
+        // Auto 先标准验证，仅证书验证失败才回落 TOFU——服务器日后换真证书自动升级
+        enum Dialed {
+            Verified(TlsStream<TcpStream>),
+            Unchecked(TlsStream<TcpStream>),
+        }
+        let dialed = match self.tls_mode {
+            config::TlsMode::Strict => Dialed::Verified(
+                self.dial_and_handshake(&host, port, true, &server_name)
+                    .await?,
+            ),
+            config::TlsMode::Tofu => Dialed::Unchecked(
+                self.dial_and_handshake(&host, port, false, &server_name)
+                    .await?,
+            ),
+            config::TlsMode::Auto => {
+                match self
+                    .dial_and_handshake(&host, port, true, &server_name)
+                    .await
+                {
+                    Ok(tls) => {
+                        // 标准验证通过：放弃陈旧 TOFU 记录（自签→真证书升级路径）
+                        *fingerprint = None;
+                        Dialed::Verified(tls)
+                    }
+                    // 仅证书验证失败才回落；网络层错误不重复拨号（避免双倍超时）
+                    Err(HandshakeFailure::Cert(_)) => Dialed::Unchecked(
+                        self.dial_and_handshake(&host, port, false, &server_name)
+                            .await?,
+                    ),
+                    Err(failure) => return Err(failure.into_relay_failure()),
+                }
             }
         };
-
-        if self.strict {
-            // rvs://：rustls 已完成 CA 链 + 主机名验证（ServerName 即连接主机名），
-            // 无指纹比对/记录；证书更换由 CA 体系兜底
-        } else {
-            let actual_fingerprint = certificate_fingerprint(&tls)?;
-            if let Some(expected) = fingerprint.as_deref() {
-                if actual_fingerprint != expected {
-                    return Err(RelayFailure::Fatal {
-                        code: "tofu-mismatch".to_string(),
-                        message: "服务器身份与已保存记录不符，请检查服务端配置或清除本机信任记录后重试"
-                            .to_string(),
-                    });
-                }
-            } else {
-                let key = config::server_key(&self.server).map_err(|error| RelayFailure::Fatal {
-                    code: "invalid-server".to_string(),
-                    message: error.to_string(),
-                })?;
-                (self.tofu_store)(actual_fingerprint.clone(), key.clone()).map_err(|message| {
-                    RelayFailure::Fatal {
-                        code: "tofu-store".to_string(),
-                        message: format!("无法保存服务器信任记录: {message}"),
+        let tls = match dialed {
+            Dialed::Verified(tls) => tls,
+            Dialed::Unchecked(tls) => {
+                // 应用层 TOFU：证书链由本函数校验指纹（PLAN-025：换代不再是死局）
+                let actual_fingerprint = certificate_fingerprint(&tls)?;
+                if let Some(expected) = fingerprint.as_deref() {
+                    if actual_fingerprint != expected {
+                        return Err(RelayFailure::Fatal {
+                            code: "cert-changed".to_string(),
+                            message: "服务器证书与上次记录不一致。如果是你更换了证书或重装了服务器，\
+                                      在界面选择「重新信任并连接」即可；如果不是你操作的，请先核查网络环境"
+                                .to_string(),
+                        });
                     }
-                })?;
-                *fingerprint = Some(actual_fingerprint.clone());
-                (self.events)(RelayEvent::TofuEstablished);
+                } else {
+                    let key =
+                        config::server_key(&self.server).map_err(|error| RelayFailure::Fatal {
+                            code: "invalid-server".to_string(),
+                            message: error.to_string(),
+                        })?;
+                    (self.tofu_store)(actual_fingerprint.clone(), key.clone()).map_err(
+                        |message| RelayFailure::Fatal {
+                            code: "tofu-store".to_string(),
+                            message: format!("无法保存服务器信任记录: {message}"),
+                        },
+                    )?;
+                    *fingerprint = Some(actual_fingerprint.clone());
+                    (self.events)(RelayEvent::TofuEstablished);
+                }
+                tls
             }
-        }
+        };
 
         let (reader, mut writer) = split(tls);
         let (frame_sender, mut frames) = mpsc::channel(256);
@@ -386,6 +451,44 @@ impl RelayClient {
         let _ = reader_task.await;
         self.sink.stop();
         result
+    }
+
+    /// 拨号 + TLS 握手。strict=true 走标准 CA 链+主机名验证（rustls 内建）；
+    /// false 走信任任意证书的 TOFU 配置（指纹校验在应用层完成）。
+    async fn dial_and_handshake(
+        &self,
+        host: &str,
+        port: u16,
+        strict: bool,
+        server_name: &ServerName<'static>,
+    ) -> Result<TlsStream<TcpStream>, HandshakeFailure> {
+        let tcp = tokio::select! {
+            result = timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port))) => {
+                match result {
+                    Err(_) => return Err(HandshakeFailure::Network("连接 server 超时".to_string())),
+                    Ok(Err(error)) => return Err(HandshakeFailure::Network(error.to_string())),
+                    Ok(Ok(tcp)) => tcp,
+                }
+            }
+            _ = wait_until_stopped(Arc::clone(&self.stop)) => {
+                return Err(HandshakeFailure::Stopped);
+            }
+        };
+        tcp.set_nodelay(true)
+            .map_err(|error| HandshakeFailure::Network(error.to_string()))?;
+        let connector = TlsConnector::from(Arc::new(tls_config(strict)));
+        tokio::select! {
+            result = timeout(CONNECT_TIMEOUT, connector.connect(server_name.clone(), tcp)) => {
+                match result {
+                    Err(_) => Err(HandshakeFailure::Network("TLS 握手超时".to_string())),
+                    Ok(Err(error)) => Err(classify_handshake_error(error)),
+                    Ok(Ok(tls)) => Ok(tls),
+                }
+            }
+            _ = wait_until_stopped(Arc::clone(&self.stop)) => {
+                Err(HandshakeFailure::Stopped)
+            }
+        }
     }
 
     async fn drive_connection<W>(
@@ -476,13 +579,8 @@ impl RelayClient {
                 message: "注册状态锁已损坏".to_string(),
             })?
             .clone();
-        let payload = protocol::register_payload(
-            &registration.name,
-            &registration.perm_hash,
-            &registration.temp_hash,
-            registration.temp_exp,
-        )
-        .map_err(protocol_failure)?;
+        let payload = protocol::register_payload(&registration.name, &registration.password_hash)
+            .map_err(protocol_failure)?;
         self.write_frame_or_stop(writer, protocol::FRAME_REGISTER, &payload)
             .await
     }
@@ -600,10 +698,7 @@ impl RelayClient {
             }
             protocol::FRAME_EVENT => match protocol::parse_event(payload) {
                 Ok(event) if event.event == "auth-ok" => {
-                    (self.events)(RelayEvent::AuthAccepted {
-                        ip: event.ip,
-                        kind: event.kind,
-                    });
+                    (self.events)(RelayEvent::AuthAccepted { ip: event.ip });
                     Ok(())
                 }
                 Ok(event) if event.event == "auth-fail" => {
@@ -803,9 +898,7 @@ mod tests {
             "a".repeat(64),
             Registration {
                 name: "Test Mac".to_string(),
-                temp_hash: "b".repeat(64),
-                temp_exp: 1_900_000_000,
-                ..Default::default()
+                password_hash: "b".repeat(64),
             },
             Arc::new(NullSink::default()),
             Arc::new(|_| {}),
@@ -821,7 +914,7 @@ mod tests {
             assert_eq!(frame_type, protocol::FRAME_AUTH);
             let auth: Value = serde_json::from_slice(&auth_payload).unwrap();
             assert_eq!(auth["role"], "mac");
-            assert_eq!(auth["proto"], 3);
+            assert_eq!(auth["proto"], 4);
             assert_eq!(auth["device_id"], "mac-test");
 
             protocol::write_frame(&mut server_io, protocol::FRAME_AUTH_OK, b"{}")
@@ -832,7 +925,7 @@ mod tests {
             assert_eq!(frame_type, protocol::FRAME_REGISTER);
             let registration: Value = serde_json::from_slice(&register_payload).unwrap();
             assert_eq!(registration["name"], "Test Mac");
-            assert_eq!(registration["temp"], "b".repeat(64));
+            assert_eq!(registration["password_hash"], "b".repeat(64));
             command_sender.send(ClientCommand::Stop).unwrap();
             // 保持 server 端存活，确保客户端先处理 Stop，而不是与 EOF 竞态。
             let _ = release_receiver.await;
@@ -978,7 +1071,7 @@ mod tests {
             assert_eq!(frame_type, protocol::FRAME_AUTH);
             let auth: Value = serde_json::from_slice(&auth_payload).unwrap();
             assert_eq!(auth["role"], "mac");
-            assert_eq!(auth["proto"], 3);
+            assert_eq!(auth["proto"], 4);
             assert_eq!(auth["device_id"], "integration-mac");
             protocol::write_frame(&mut writer, protocol::FRAME_AUTH_OK, b"{}")
                 .await
@@ -989,7 +1082,7 @@ mod tests {
             assert_eq!(frame_type, protocol::FRAME_REGISTER);
             let registration: Value = serde_json::from_slice(&registration_payload).unwrap();
             assert_eq!(registration["name"], "Integration Mac");
-            assert_eq!(registration["temp"], "b".repeat(64));
+            assert_eq!(registration["password_hash"], "b".repeat(64));
             protocol::write_frame(
                 &mut writer,
                 protocol::FRAME_PEER_STATE,
@@ -1020,14 +1113,13 @@ mod tests {
         let client = RelayClient::new_with_tofu_store(RelayClientOptions {
             server: addr.to_string(),
             fingerprint: String::new(),
-            strict: false,
+            tls_mode: config::TlsMode::Tofu,
+            auto_reconnect: true,
             device_id: "integration-mac".to_string(),
             device_key: "a".repeat(64),
             registration: Registration {
                 name: "Integration Mac".to_string(),
-                temp_hash: "b".repeat(64),
-                temp_exp: 1_900_000_000,
-                ..Default::default()
+                password_hash: "b".repeat(64),
             },
             sink,
             events,
@@ -1067,5 +1159,267 @@ mod tests {
             tofu.lock().unwrap().as_ref(),
             Some(&(fingerprint, format!("127.0.0.1:{}", addr.port())))
         );
+    }
+
+    /// 接受一个 TLS 连接；Auto 模式客户端先做标准验证握手（对自签必然失败），
+    /// 因此跳过握手失败的连接直到回落 TOFU 的那次成功。
+    async fn accept_tls_lenient(
+        acceptor: &TlsAcceptor,
+        listener: &TcpListener,
+    ) -> tokio_rustls::server::TlsStream<TcpStream> {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            if let Ok(tls) = acceptor.accept(stream).await {
+                return tls;
+            }
+        }
+    }
+
+    /// v3 假中继的 AUTH/REGISTER/推流脚本（与 tls_tofu 用例的服务端行为一致）。
+    async fn serve_v3_script<S>(tls_stream: S)
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        let (mut reader, mut writer) = split(tls_stream);
+        let (frame_type, auth_payload) = protocol::read_frame(&mut reader).await.unwrap();
+        assert_eq!(frame_type, protocol::FRAME_AUTH);
+        let auth: Value = serde_json::from_slice(&auth_payload).unwrap();
+        assert_eq!(auth["role"], "mac");
+        protocol::write_frame(&mut writer, protocol::FRAME_AUTH_OK, b"{}")
+            .await
+            .unwrap();
+        let (frame_type, _registration) = protocol::read_frame(&mut reader).await.unwrap();
+        assert_eq!(frame_type, protocol::FRAME_REGISTER);
+        protocol::write_frame(
+            &mut writer,
+            protocol::FRAME_PEER_STATE,
+            &[protocol::PEER_ONLINE],
+        )
+        .await
+        .unwrap();
+        protocol::write_frame(&mut writer, protocol::FRAME_TALK, &[0x01])
+            .await
+            .unwrap();
+        // 等待客户端 Stop；连接关闭后的读错误属于预期收尾路径。
+        let _ = protocol::read_frame(&mut reader).await;
+    }
+
+    #[tokio::test]
+    async fn tls_auto_falls_back_to_tofu_on_self_signed() {
+        // 测试目的：裸地址（Auto）对自签服务器先标准验证失败，回落 TOFU 后正常注册。
+        let certs = CertificateDer::pem_slice_iter(TEST_CERT_CHAIN.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let key = PrivateKeyDer::from_pem_slice(TEST_PRIVATE_KEY.as_bytes()).unwrap();
+        let server_config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs.clone(), key)
+            .unwrap();
+        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_task = tokio::spawn(async move {
+            let tls = accept_tls_lenient(&acceptor, &listener).await;
+            serve_v3_script(tls).await;
+        });
+
+        let tofu = Arc::new(StdMutex::new(None::<(String, String)>));
+        let tofu_capture = Arc::clone(&tofu);
+        let events_log = Arc::new(StdMutex::new(Vec::<RelayEvent>::new()));
+        let events_capture = Arc::clone(&events_log);
+        let events = Arc::new(move |event: RelayEvent| {
+            events_capture.lock().unwrap().push(event);
+        });
+        let sink = Arc::new(NullSink::default());
+        let sink_capture = Arc::clone(&sink);
+        let client = RelayClient::new_with_tofu_store(RelayClientOptions {
+            server: addr.to_string(),
+            fingerprint: String::new(),
+            tls_mode: config::TlsMode::Auto,
+            device_id: "integration-mac".to_string(),
+            device_key: "a".repeat(64),
+            auto_reconnect: true,
+            registration: Registration {
+                name: "Auto Mac".to_string(),
+                password_hash: String::new(),
+            },
+            sink,
+            events,
+            tofu_store: Arc::new(move |got, key| {
+                *tofu_capture.lock().unwrap() = Some((got, key));
+                Ok(())
+            }),
+        });
+        let client_thread = client.start();
+        timeout(Duration::from_secs(3), async {
+            loop {
+                let got_talk = events_log
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|event| matches!(event, RelayEvent::PeerTalking { on: true }));
+                if got_talk {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        client.stop();
+        client_thread.join().unwrap();
+        server_task.await.unwrap();
+
+        // 断言回落确实发生过（存在 TOFU 记录）且从未进入 cert-changed 死局
+        assert!(tofu.lock().unwrap().is_some());
+        assert!(sink_capture.stats().frames >= 0);
+        assert!(!events_log
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event, RelayEvent::Fatal { .. })));
+    }
+
+    #[tokio::test]
+    async fn tls_auto_pin_mismatch_reports_cert_changed_without_tofu_word() {
+        // 测试目的：证书换代（指纹不符）不再产生旧版的死局错误码，
+        // 而是 code=cert-changed 的可恢复错误，文案不含技术术语与指纹。
+        let certs = CertificateDer::pem_slice_iter(TEST_CERT_CHAIN.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let key = PrivateKeyDer::from_pem_slice(TEST_PRIVATE_KEY.as_bytes()).unwrap();
+        let server_config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .unwrap();
+        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_task = tokio::spawn(async move {
+            // 第一次连接是标准验证尝试（客户端以 alert 拒绝），第二次是 TOFU 回落；
+            // 客户端在应用层校验指纹失败即断开，读错误即收尾
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                match acceptor.accept(stream).await {
+                    Ok(tls) => {
+                        let (mut reader, _writer) = split(tls);
+                        let _ = protocol::read_frame(&mut reader).await;
+                        return;
+                    }
+                    Err(_) => continue,
+                }
+            }
+        });
+
+        let events_log = Arc::new(StdMutex::new(Vec::<RelayEvent>::new()));
+        let events_capture = Arc::clone(&events_log);
+        let events = Arc::new(move |event: RelayEvent| {
+            events_capture.lock().unwrap().push(event);
+        });
+        let client = RelayClient::new_with_tofu_store(RelayClientOptions {
+            server: addr.to_string(),
+            fingerprint: "f".repeat(64), // 与真实证书不符的旧记录
+            tls_mode: config::TlsMode::Auto,
+            device_id: "integration-mac".to_string(),
+            device_key: "a".repeat(64),
+            auto_reconnect: true,
+            registration: Registration::default(),
+            sink: Arc::new(NullSink::default()),
+            events,
+            tofu_store: Arc::new(|_, _| Ok(())),
+        });
+        let client_thread = client.start();
+        timeout(Duration::from_secs(3), async {
+            loop {
+                let fatal = events_log.lock().unwrap().iter().any(|event| {
+                    matches!(event, RelayEvent::Fatal { code, .. } if code == "cert-changed")
+                });
+                if fatal {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        client.stop();
+        client_thread.join().unwrap();
+        server_task.await.unwrap();
+
+        let events = events_log.lock().unwrap();
+        let fatal = events
+            .iter()
+            .find_map(|event| match event {
+                RelayEvent::Fatal { code, message } if code == "cert-changed" => {
+                    Some(message.clone())
+                }
+                _ => None,
+            })
+            .expect("必须报告 cert-changed");
+        assert!(!fatal.to_lowercase().contains("tofu"));
+        assert!(!fatal.contains("f".repeat(64).as_str()));
+    }
+
+    #[tokio::test]
+    async fn tls_strict_mode_never_falls_back_to_tofu() {
+        // 测试目的：rvs:// 显式标准验证对自签证书保持拒绝（负例），绝不回落 TOFU。
+        let certs = CertificateDer::pem_slice_iter(TEST_CERT_CHAIN.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let key = PrivateKeyDer::from_pem_slice(TEST_PRIVATE_KEY.as_bytes()).unwrap();
+        let server_config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .unwrap();
+        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_task = tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let _ = acceptor.accept(stream).await; // 客户端会以 alert 拒绝
+            }
+        });
+
+        let events_log = Arc::new(StdMutex::new(Vec::<RelayEvent>::new()));
+        let events_capture = Arc::clone(&events_log);
+        let events = Arc::new(move |event: RelayEvent| {
+            events_capture.lock().unwrap().push(event);
+        });
+        let client = RelayClient::new_with_tofu_store(RelayClientOptions {
+            server: addr.to_string(),
+            fingerprint: String::new(),
+            tls_mode: config::TlsMode::Strict,
+            auto_reconnect: true,
+            device_id: "integration-mac".to_string(),
+            device_key: "a".repeat(64),
+            registration: Registration::default(),
+            sink: Arc::new(NullSink::default()),
+            events,
+            tofu_store: Arc::new(|_, _| Ok(())),
+        });
+        let client_thread = client.start();
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        client.stop();
+        client_thread.join().unwrap();
+        server_task.abort();
+
+        let events = events_log.lock().unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, RelayEvent::Reconnecting { .. })),
+            "标准验证失败应作为网络错误进入重连"
+        );
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, RelayEvent::TofuEstablished)));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, RelayEvent::Registered)));
     }
 }

@@ -40,14 +40,15 @@ pub struct UiEvent {
 pub struct AppState {
     pub status: String,
     pub detail: String,
+    /// fatal 事件的机器可读代码（如 cert-changed）；前端据此渲染专用恢复 UI
+    pub fatal_code: String,
     pub server: String,
     pub name: String,
     pub audio_device: String,
-    pub temp_secret: String,
-    pub temp_exp: i64,
-    pub temp_duration: i64,
-    pub keep: bool,
-    pub permanent_enabled: bool,
+    /// 服务器密码是否已设置（密码本身永不进入 AppState）
+    pub password_set: bool,
+    /// 断线自动重连开关（默认开）
+    pub auto_reconnect: bool,
     pub peer_name: String,
     pub talking: bool,
     pub dictation_enabled: bool,
@@ -60,23 +61,16 @@ pub struct AppState {
 }
 
 impl AppState {
-    fn from_config(
-        config: &AppConfig,
-        temp_secret: String,
-        temp_exp: i64,
-        permanent: bool,
-    ) -> Self {
+    fn from_config(config: &AppConfig, password_set: bool) -> Self {
         Self {
             status: "stopped".to_string(),
             detail: String::new(),
+            fatal_code: String::new(),
             server: config.server.clone(),
             name: config.name.clone(),
             audio_device: config.audio_device.clone(),
-            temp_secret,
-            temp_exp,
-            temp_duration: config.temp_duration,
-            keep: config.keep,
-            permanent_enabled: permanent,
+            password_set,
+            auto_reconnect: config.auto_reconnect,
             peer_name: String::new(),
             talking: false,
             dictation_enabled: config.dictation_enabled,
@@ -95,7 +89,8 @@ pub struct AppController {
     config_dir: std::path::PathBuf,
     config: Mutex<AppConfig>,
     state: Mutex<AppState>,
-    perm_hash: Mutex<String>,
+    /// 服务器密码哈希（原文只在 Keychain/回退文件中）
+    password_hash: Mutex<String>,
     history_lock: Mutex<()>,
     lifecycle_lock: Mutex<()>,
     client: Mutex<Option<Arc<RelayClient>>>,
@@ -112,40 +107,18 @@ impl AppController {
         let mut config =
             config::load().map_err(|error| CommandError::new("config-read", error.to_string()))?;
         config.apply_defaults();
-        if !config.keep {
-            let had_persisted_temp = !config.temp_secret.is_empty() || config.temp_exp != 0;
-            config.temp_secret.clear();
-            config.temp_exp = 0;
-            if had_persisted_temp {
-                config::save(&config)
-                    .map_err(|error| CommandError::new("config-write", error.to_string()))?;
-            }
-        }
-        let now = unix_now();
-        let (temp_secret, temp_exp, generated_temp) =
-            if config.keep && !config.temp_secret.is_empty() && config.temp_exp > now {
-                (config.temp_secret.clone(), config.temp_exp, false)
-            } else {
-                (secrets::generate_temp(), now + config.temp_duration, true)
-            };
-        if config.keep && generated_temp {
-            config.temp_secret = temp_secret.clone();
-            config.temp_exp = temp_exp;
-            config::save(&config)
-                .map_err(|error| CommandError::new("config-write", error.to_string()))?;
-        }
-        let permanent_secret = secrets::load_system(&config_dir);
-        let permanent = permanent_secret.is_some();
-        let perm_hash = permanent_secret
+        let password = secrets::load_system(&config_dir);
+        let password_set = password.is_some();
+        let password_hash = password
             .as_deref()
             .map(secrets::hash_of)
             .unwrap_or_default();
-        let mut state = AppState::from_config(&config, temp_secret, temp_exp, permanent);
+        let mut state = AppState::from_config(&config, password_set);
         state.events = load_history_events(&config_dir);
         Ok(Self {
             state: Mutex::new(state),
             config: Mutex::new(config),
-            perm_hash: Mutex::new(perm_hash),
+            password_hash: Mutex::new(password_hash),
             history_lock: Mutex::new(()),
             lifecycle_lock: Mutex::new(()),
             client: Mutex::new(None),
@@ -199,21 +172,18 @@ impl AppController {
             .map_err(|error| CommandError::new("invalid-server", error.to_string()))?;
         let device = identity::load_or_create()
             .map_err(|error| CommandError::new("device-identity", error.to_string()))?;
-        let strict_tls = config::is_strict_tls(&config.server);
-        let fingerprint = if strict_tls {
-            String::new() // rvs:// 不使用指纹
-        } else {
-            config::trusted_fingerprint(&config, &config.server)
+        let tls_mode = config::tls_mode(&config.server);
+        let fingerprint = match tls_mode {
+            config::TlsMode::Strict => String::new(), // 标准验证不使用指纹
+            _ => config::trusted_fingerprint(&config, &config.server),
         };
         let registration = Registration {
             name: state.name.clone(),
-            perm_hash: self
-                .perm_hash
+            password_hash: self
+                .password_hash
                 .lock()
-                .map_err(|_| CommandError::new("state-lock", "永久密码状态锁已损坏"))?
+                .map_err(|_| CommandError::new("state-lock", "服务器密码状态锁已损坏"))?
                 .clone(),
-            temp_hash: secrets::hash_of(&state.temp_secret),
-            temp_exp: state.temp_exp,
         };
         let sink: Arc<dyn AudioSink> = Arc::new(CpalSink::new(state.audio_device.clone()));
         let weak = Arc::downgrade(self);
@@ -234,7 +204,8 @@ impl AppController {
         let client = RelayClient::new_with_tofu_store(RelayClientOptions {
             server: config.server.clone(),
             fingerprint,
-            strict: strict_tls,
+            tls_mode,
+            auto_reconnect: config.auto_reconnect,
             device_id: device.device_id,
             device_key: device.device_key,
             registration,
@@ -246,6 +217,7 @@ impl AppController {
         self.update_state(|state| {
             state.status = "connecting".to_string();
             state.detail = config.server.clone();
+            state.fatal_code.clear();
             state.audio_error.clear();
             state.peer_name.clear();
             state.talking = false;
@@ -278,6 +250,7 @@ impl AppController {
         self.update_state(|state| {
             state.status = "stopped".to_string();
             state.detail.clear();
+            state.fatal_code.clear();
             state.talking = false;
         });
     }
@@ -301,10 +274,9 @@ impl AppController {
         server: String,
         name: String,
         audio_device: String,
-        temp_duration: i64,
-        keep: bool,
         dictation_enabled: bool,
         dictation_mode: String,
+        auto_reconnect: bool,
     ) -> Result<AppState, CommandError> {
         config::parse_server(&server)
             .map_err(|error| CommandError::new("invalid-server", error.to_string()))?;
@@ -316,9 +288,6 @@ impl AppController {
         }
         if audio_device.trim().is_empty() || audio_device.chars().count() > 128 {
             return Err(CommandError::new("invalid-audio-device", "音频设备名无效"));
-        }
-        if !matches!(temp_duration, 600 | 3600 | 28_800 | 86_400) {
-            return Err(CommandError::new("invalid-expiry", "临时密码有效期无效"));
         }
         if dictation_mode != "hold" && dictation_mode != "double" {
             return Err(CommandError::new(
@@ -335,12 +304,6 @@ impl AppController {
             current_state.status.as_str(),
             "connecting" | "registered" | "bridged" | "reconnecting"
         );
-        let duration_changed = current_state.temp_duration != temp_duration;
-        let temp_exp = if duration_changed {
-            unix_now() + temp_duration
-        } else {
-            current_state.temp_exp
-        };
         let server = server.trim().to_string();
         let name = name.trim().to_string();
         let audio_device = audio_device.trim().to_string();
@@ -352,17 +315,9 @@ impl AppController {
             config.server = server.clone();
             config.name = name.clone();
             config.audio_device = audio_device.clone();
-            config.temp_duration = temp_duration;
-            config.keep = keep;
+            config.auto_reconnect = auto_reconnect;
             config.dictation_enabled = dictation_enabled;
             config.dictation_mode = dictation_mode.clone();
-            if keep {
-                config.temp_secret = current_state.temp_secret.clone();
-                config.temp_exp = temp_exp;
-            } else {
-                config.temp_secret.clear();
-                config.temp_exp = 0;
-            }
             config::save(&config)
                 .map_err(|error| CommandError::new("config-write", error.to_string()))?;
         }
@@ -370,13 +325,9 @@ impl AppController {
             state.server = server.clone();
             state.name = name.clone();
             state.audio_device = audio_device.clone();
-            state.temp_duration = temp_duration;
-            state.keep = keep;
+            state.auto_reconnect = auto_reconnect;
             state.dictation_enabled = dictation_enabled;
             state.dictation_mode = dictation_mode.clone();
-            if duration_changed {
-                state.temp_exp = temp_exp;
-            }
         });
         // 配置切换（关闭功能/换模式）时强制释放，避免旧模式下的 Fn 悬空
         self.injector.release();
@@ -388,33 +339,18 @@ impl AppController {
         self.snapshot()
     }
 
-    pub fn regenerate_temp(&self) -> Result<AppState, CommandError> {
+    /// 设置服务器密码（协议 v4）：原文进 Keychain，REGISTER 把哈希推送给服务器。
+    pub fn set_server_password(
+        self: &Arc<Self>,
+        password: String,
+    ) -> Result<AppState, CommandError> {
         let _lifecycle_guard = self
             .lifecycle_lock
             .lock()
             .map_err(|_| CommandError::new("lifecycle-lock", "连接生命周期锁已损坏"))?;
-        let current = self.snapshot()?;
-        let duration = current.temp_duration;
-        let secret = secrets::generate_temp();
-        let exp = unix_now() + duration;
-        self.persist_temp_if_needed(&secret, exp, current.keep)?;
-        self.update_state(|state| {
-            state.temp_secret = secret.clone();
-            state.temp_exp = exp;
-        });
-        self.update_registration();
-        self.add_event("info", "已重新生成临时密码");
-        self.snapshot()
-    }
-
-    pub fn set_permanent(&self, secret: String) -> Result<AppState, CommandError> {
-        let _lifecycle_guard = self
-            .lifecycle_lock
-            .lock()
-            .map_err(|_| CommandError::new("lifecycle-lock", "连接生命周期锁已损坏"))?;
-        let secret = secret.trim().to_string();
-        let in_keychain = secrets::save_permanent(&self.config_dir, &SystemKeychain, &secret)
-            .map_err(|error| CommandError::new("permanent-write", error.to_string()))?;
+        let password = password.trim().to_string();
+        let in_keychain = secrets::save_permanent(&self.config_dir, &SystemKeychain, &password)
+            .map_err(|error| CommandError::new("password-write", error.to_string()))?;
         {
             let mut config = self
                 .config
@@ -426,24 +362,25 @@ impl AppController {
         }
         {
             let mut hash = self
-                .perm_hash
+                .password_hash
                 .lock()
-                .map_err(|_| CommandError::new("state-lock", "永久密码状态锁已损坏"))?;
-            *hash = secrets::hash_of(&secret);
+                .map_err(|_| CommandError::new("state-lock", "服务器密码状态锁已损坏"))?;
+            *hash = secrets::hash_of(&password);
         }
-        self.update_state(|state| state.permanent_enabled = true);
+        self.update_state(|state| state.password_set = true);
         self.update_registration();
-        self.add_event("info", "永久密码已启用");
+        self.add_event("info", "服务器密码已更新，手机端输入该密码即可控制本机");
         self.snapshot()
     }
 
-    pub fn clear_permanent(&self) -> Result<AppState, CommandError> {
+    /// 停用服务器密码（清空后 Mac 只注册设备名，手机端无法再认证）。
+    pub fn clear_server_password(&self) -> Result<AppState, CommandError> {
         let _lifecycle_guard = self
             .lifecycle_lock
             .lock()
             .map_err(|_| CommandError::new("lifecycle-lock", "连接生命周期锁已损坏"))?;
         secrets::clear_permanent(&self.config_dir, &SystemKeychain)
-            .map_err(|error| CommandError::new("permanent-delete", error.to_string()))?;
+            .map_err(|error| CommandError::new("password-delete", error.to_string()))?;
         {
             let mut config = self
                 .config
@@ -455,15 +392,44 @@ impl AppController {
         }
         {
             let mut hash = self
-                .perm_hash
+                .password_hash
                 .lock()
-                .map_err(|_| CommandError::new("state-lock", "永久密码状态锁已损坏"))?;
+                .map_err(|_| CommandError::new("state-lock", "服务器密码状态锁已损坏"))?;
             hash.clear();
         }
-        self.update_state(|state| state.permanent_enabled = false);
+        self.update_state(|state| state.password_set = false);
         self.update_registration();
-        self.add_event("info", "永久密码已停用");
+        self.add_event("warning", "服务器密码已停用，手机端将无法连接");
         self.snapshot()
+    }
+
+    /// 手机扫码配对载荷：rv://<host>[:<port>]?s=<服务器密码>&n=<设备名>。
+    /// 需要密码原文，只在用户显式出示二维码时从 Keychain 读取。
+    pub fn get_pairing_payload(&self) -> Result<String, CommandError> {
+        let password = secrets::load_system(&self.config_dir).ok_or_else(|| {
+            CommandError::new("password-missing", "请先在连接设置里设置服务器密码")
+        })?;
+        let state = self.snapshot()?;
+        let authority = state
+            .server
+            .trim()
+            .split('?')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if authority.is_empty() {
+            return Err(CommandError::new(
+                "server-missing",
+                "请先在连接设置里填写服务器地址",
+            ));
+        }
+        let mut payload = format!("rv://{authority}?s={}", urlencode(&password));
+        if !state.name.trim().is_empty() {
+            payload.push_str("&n=");
+            payload.push_str(&urlencode(state.name.trim()));
+        }
+        Ok(payload)
     }
 
     pub fn list_audio_devices(&self) -> Result<Vec<String>, CommandError> {
@@ -522,26 +488,6 @@ impl AppController {
         self.add_event("info", "已手动放下 Fn；手机再次按下说话时会自动恢复");
     }
 
-    fn persist_temp_if_needed(
-        &self,
-        temp_secret: &str,
-        temp_exp: i64,
-        keep: bool,
-    ) -> Result<(), CommandError> {
-        let mut config = self
-            .config
-            .lock()
-            .map_err(|_| CommandError::new("config-lock", "配置状态锁已损坏"))?;
-        if keep {
-            config.temp_secret = temp_secret.to_string();
-            config.temp_exp = temp_exp;
-        } else {
-            config.temp_secret.clear();
-            config.temp_exp = 0;
-        }
-        config::save(&config).map_err(|error| CommandError::new("config-write", error.to_string()))
-    }
-
     fn persist_fingerprint(&self, server: &str, fingerprint: &str) -> Result<(), CommandError> {
         let mut config = self
             .config
@@ -556,19 +502,17 @@ impl AppController {
     }
 
     fn update_registration(&self) {
-        let (client, state, perm_hash) = match (
+        let (client, state, password_hash) = match (
             self.client.lock().ok().and_then(|client| client.clone()),
             self.state.lock().ok().map(|state| state.clone()),
-            self.perm_hash.lock().ok().map(|hash| hash.clone()),
+            self.password_hash.lock().ok().map(|hash| hash.clone()),
         ) {
-            (Some(client), Some(state), Some(perm_hash)) => (client, state, perm_hash),
+            (Some(client), Some(state), Some(password_hash)) => (client, state, password_hash),
             _ => return,
         };
         client.update_registration(Registration {
             name: state.name,
-            perm_hash,
-            temp_hash: secrets::hash_of(&state.temp_secret),
-            temp_exp: state.temp_exp,
+            password_hash,
         });
     }
 
@@ -636,18 +580,17 @@ impl AppController {
                     }
                 }
             }
-            RelayEvent::AuthAccepted { ip, kind } => {
-                let label = if kind == "perm" { "永久" } else { "临时" };
+            RelayEvent::AuthAccepted { ip } => {
                 self.add_history(HistoryEntry {
                     ts: unix_now() as f64,
                     device: self.snapshot().map(|state| state.name).unwrap_or_default(),
-                    kind: label.to_string(),
+                    kind: "手机连接".to_string(),
                     ip: ip.clone(),
                     dur_s: 0.0,
                     bytes: 0,
                     result: "✓ 已桥接".to_string(),
                 });
-                self.add_event("success", format!("手机已连接 · {} · {}", label, ip));
+                self.add_event("success", format!("手机已连接 · {}", ip));
             }
             RelayEvent::AuthFailed { ip, reason } => {
                 self.add_history(HistoryEntry {
@@ -670,9 +613,13 @@ impl AppController {
                 self.update_state(|state| {
                     state.status = "fatal".to_string();
                     state.detail = message.clone();
+                    state.fatal_code = code.clone();
                     state.peer_name.clear();
                 });
-                self.add_event("error", format!("{}: {}", code, message));
+                // 证书更换是可恢复操作而非故障：不进错误事件流，前端有专用恢复入口
+                if code != "cert-changed" {
+                    self.add_event("error", format!("{}: {}", code, message));
+                }
             }
             RelayEvent::Stopped => {
                 self.injector.release();
@@ -755,6 +702,20 @@ impl Drop for AppController {
     }
 }
 
+/// 配对载荷的 query 值编码（与前端 encodeURIComponent 等价的子集：组件编码）。
+fn urlencode(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 fn load_history_events(config_dir: &std::path::Path) -> Vec<UiEvent> {
     let Ok(entries) = history::load(config_dir) else {
         return Vec::new();
@@ -820,38 +781,38 @@ pub fn save_settings(
     server: String,
     name: String,
     audio_device: String,
-    temp_duration: i64,
-    keep: bool,
     dictation_enabled: bool,
     dictation_mode: String,
+    auto_reconnect: bool,
 ) -> Result<AppState, CommandError> {
     state.save_settings(
         server,
         name,
         audio_device,
-        temp_duration,
-        keep,
         dictation_enabled,
         dictation_mode,
+        auto_reconnect,
     )
 }
 
 #[tauri::command]
-pub fn regenerate_temp(state: State<'_, Arc<AppController>>) -> Result<AppState, CommandError> {
-    state.regenerate_temp()
-}
-
-#[tauri::command]
-pub fn set_permanent(
+pub fn set_server_password(
     state: State<'_, Arc<AppController>>,
-    secret: String,
+    password: String,
 ) -> Result<AppState, CommandError> {
-    state.set_permanent(secret)
+    state.set_server_password(password)
 }
 
 #[tauri::command]
-pub fn clear_permanent(state: State<'_, Arc<AppController>>) -> Result<AppState, CommandError> {
-    state.clear_permanent()
+pub fn clear_server_password(
+    state: State<'_, Arc<AppController>>,
+) -> Result<AppState, CommandError> {
+    state.clear_server_password()
+}
+
+#[tauri::command]
+pub fn get_pairing_payload(state: State<'_, Arc<AppController>>) -> Result<String, CommandError> {
+    state.get_pairing_payload()
 }
 
 #[tauri::command]
@@ -908,9 +869,9 @@ pub fn run_tauri() {
             connect,
             disconnect,
             save_settings,
-            regenerate_temp,
-            set_permanent,
-            clear_permanent,
+            set_server_password,
+            clear_server_password,
+            get_pairing_payload,
             list_audio_devices,
             clear_history,
             clear_server_trust,
@@ -935,7 +896,7 @@ mod tests {
             HistoryEntry {
                 ts: 1_700_000_002.0,
                 device: "Mac B".to_string(),
-                kind: "临时".to_string(),
+                kind: "手机连接".to_string(),
                 ip: "203.0.113.2".to_string(),
                 result: "✗ 拒绝".to_string(),
                 ..Default::default()
@@ -943,7 +904,7 @@ mod tests {
             HistoryEntry {
                 ts: 1_700_000_001.0,
                 device: "Mac B".to_string(),
-                kind: "永久".to_string(),
+                kind: "手机连接".to_string(),
                 ip: "203.0.113.1".to_string(),
                 result: "✓ 已桥接".to_string(),
                 ..Default::default()
@@ -968,7 +929,7 @@ mod tests {
         // 不产生状态差异（否则音频失败时约 50 次/秒全量 UI 推送），清除能识别。
         let mut config = AppConfig::default();
         config.apply_defaults();
-        let mut state = AppState::from_config(&config, "TEMP-PASSWORD".to_string(), 1, false);
+        let mut state = AppState::from_config(&config, false);
         let idle = state.clone();
         state.audio_error = "音频输出尚未启动".to_string();
         assert_ne!(state, idle);
@@ -977,5 +938,13 @@ mod tests {
         assert_eq!(state, failed);
         state.audio_error.clear();
         assert_ne!(state, failed);
+    }
+
+    #[test]
+    fn pairing_payload_encodes_query_values() {
+        // 测试目的：配对载荷的密码/设备名必须按组件规则编码，& 等字符不得破坏结构。
+        assert_eq!(urlencode("AB-CD 12"), "AB-CD%2012");
+        assert_eq!(urlencode("a&b=c"), "a%26b%3Dc");
+        assert_eq!(urlencode("书房"), "%E4%B9%A6%E6%88%BF");
     }
 }

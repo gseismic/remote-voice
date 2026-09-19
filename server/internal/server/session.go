@@ -53,7 +53,7 @@ func (s *session) close() {
 
 // readLoop 逐帧读取并分发：
 // PING→PONG；AUDIO→经桥接转发对端（未架桥时丢弃但计数）；
-// REGISTER→Mac 注册/热更；未知类型丢弃（向前兼容）。
+// REGISTER→Mac 注册/热更；LIST→手机目录查询；未知类型丢弃（向前兼容）。
 // 读超时（心跳判定）由每次读取前的 SetReadDeadline 实现。
 func (s *Server) readLoop(sess *session) {
 	for {
@@ -85,6 +85,11 @@ func (s *Server) readLoop(sess *session) {
 				s.handleRegister(sess, payload)
 			}
 			// 手机发 REGISTER 非法：丢弃不拒绝（向前兼容）
+		case protocol.FrameList:
+			// 目录查询（v4）：登录/桥接会话均可；其他角色丢弃（向前兼容）
+			if sess.role == protocol.RolePhone {
+				s.handleList(sess)
+			}
 		default:
 			// 未知类型：payload 已被 ReadFrame 消费，继续运行（向前兼容）
 		}

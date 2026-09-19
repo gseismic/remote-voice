@@ -5,8 +5,6 @@ use std::io::Write;
 use std::path::Path;
 use thiserror::Error;
 
-const ALPHABET: &[u8] = b"23456789ABCDEFGHJKMNPQRSTUVWXYZ";
-
 #[derive(Debug, Error)]
 pub enum SecretError {
     #[error("密码存储失败: {0}")]
@@ -28,25 +26,6 @@ pub fn normalize(raw: &str) -> String {
 
 pub fn hash_of(raw: &str) -> String {
     hex::encode(Sha256::digest(normalize(raw).as_bytes()))
-}
-
-pub fn generate_temp() -> String {
-    let mut rng = rand::thread_rng();
-    let pick = |rng: &mut rand::rngs::ThreadRng| -> char {
-        use rand::Rng;
-        ALPHABET[rng.gen_range(0..ALPHABET.len())] as char
-    };
-    format!(
-        "{}{}{}{}-{}{}{}{}",
-        pick(&mut rng),
-        pick(&mut rng),
-        pick(&mut rng),
-        pick(&mut rng),
-        pick(&mut rng),
-        pick(&mut rng),
-        pick(&mut rng),
-        pick(&mut rng)
-    )
 }
 
 pub fn valid_permanent(raw: &str) -> bool {

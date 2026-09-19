@@ -26,22 +26,21 @@
       <main>
         <section class="signal-band" aria-labelledby="signal-title">
           <div class="signal-copy">
-            <p class="eyebrow">PAIRING SIGNAL</p>
-            <h2 id="signal-title">临时配对密码</h2>
+            <p class="eyebrow">PAIRING</p>
+            <h2 id="signal-title">配对</h2>
           <p class="server-line" id="server-summary">尚未配置服务器</p>
           </div>
           <div class="secret-display">
-            <span class="secret-code" id="temp-secret">--------</span>
-            <span class="expiry" id="temp-expiry">--:--:--</span>
+            <span class="secret-code" id="password-code">未设置</span>
           </div>
           <div class="signal-actions">
-            <button class="button button-accent" id="copy-temp" title="复制临时密码">
+            <button class="button button-accent" id="btn-show-password" title="显示服务器密码">
+              <i data-lucide="eye" aria-hidden="true"></i><span>显示密码</span>
+            </button>
+            <button class="button button-quiet" id="btn-copy-password" title="复制服务器密码">
               <i data-lucide="copy" aria-hidden="true"></i><span>复制</span>
             </button>
-            <button class="button button-quiet" id="regenerate-temp" title="重新生成临时密码">
-              <i data-lucide="refresh-cw" aria-hidden="true"></i><span>重新生成</span>
-            </button>
-            <button class="button button-quiet" id="qr-temp" title="出示配对二维码（手机扫码添加本机）">
+            <button class="button button-quiet" id="btn-qr" title="出示配对二维码（手机扫码一键添加）">
               <i data-lucide="qr-code" aria-hidden="true"></i><span>二维码</span>
             </button>
           </div>
@@ -99,34 +98,6 @@
             </div>
             <p class="audio-alert" id="audio-alert" hidden></p>
           </section>
-
-          <section class="panel panel-permanent panel-span" id="perm-panel" aria-labelledby="permanent-title">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">LONG-LIVED ACCESS</p>
-                <h2 id="permanent-title">永久密码</h2>
-              </div>
-              <div class="panel-actions">
-                <span class="state-tag" id="permanent-state">未设置</span>
-                <button class="text-button" id="btn-fold">展开管理 ▾</button>
-              </div>
-            </div>
-            <p class="masked-row" id="masked-secret">••••-••••-••••</p>
-            <div class="perm-body"id="perm-body">
-              <div class="permanent-row">
-                <label class="field grow">
-                  <span>新密码</span>
-                  <input id="permanent-input" type="password" autocomplete="new-password" placeholder="至少 12 位" />
-                </label>
-                <button class="icon-button" id="set-permanent" title="保存永久密码" aria-label="保存永久密码">
-                  <i data-lucide="key-round" aria-hidden="true"></i>
-                </button>
-                <button class="icon-button danger" id="clear-permanent" title="停用永久密码" aria-label="停用永久密码">
-                  <i data-lucide="trash-2" aria-hidden="true"></i>
-                </button>
-              </div>
-            </div>
-          </section>
         </div>
 
         <section class="activity-section" aria-labelledby="activity-title">
@@ -156,7 +127,7 @@
         </button>
       </footer>
     </div>
-    <!-- 连接设置弹窗：低频配置（服务器地址/设备名/有效期/信任）收在这里，首页只留中继服务器状态行 -->
+    <!-- 连接设置弹窗：服务器地址 / 设备名 / 服务器密码 / 自动重连 / 语音输入联动 -->
     <div class="modal-overlay" id="settings-overlay" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
       <div class="modal-dialog">
         <div class="modal-head">
@@ -170,27 +141,22 @@
         </div>
         <div class="settings-fields">
           <label class="field modal-span">
-            <span>服务器地址（host:端口）</span>
-            <input id="server" type="text" inputmode="url" placeholder="host:9432 或 rvs://域名:9432" autocomplete="url" />
+            <span>服务器地址</span>
+            <input id="server" type="text" inputmode="url" placeholder="例如 192.168.1.10:9432 或 voice.example.com" autocomplete="url" />
           </label>
           <label class="field modal-span">
             <span>设备名（手机端看到的本机名字）</span>
             <input id="device-name" type="text" placeholder="MacBook" autocomplete="organization" />
           </label>
           <label class="field modal-span">
-            <span>临时密码有效期</span>
-            <select id="temp-expiry-choice">
-              <option value="600">10 分钟</option>
-              <option value="3600">1 小时</option>
-              <option value="28800" selected>8 小时</option>
-              <option value="86400">24 小时</option>
-            </select>
+            <span id="password-field-label">服务器密码（至少 12 位；手机端输入它即可控制本机）</span>
+            <input id="server-password" type="password" autocomplete="new-password" placeholder="输入新密码即更新；留空不变" />
           </label>
         </div>
         <label class="toggle-field modal-toggle">
-          <input id="keep-temp" type="checkbox" />
+          <input id="auto-reconnect" type="checkbox" checked />
           <span class="toggle-track" aria-hidden="true"></span>
-          <span>重启后保持临时密码</span>
+          <span>断线自动重连</span>
         </label>
         <div class="settings-fields dictation-fields">
           <label class="toggle-field modal-toggle">
@@ -209,7 +175,7 @@
         </div>
         <p class="modal-error" id="settings-error" hidden></p>
         <div class="modal-footer">
-          <button class="text-button text-danger" id="clear-trust" title="清除当前服务器的 TOFU 信任记录">
+          <button class="text-button text-danger" id="clear-trust" title="忘记本机保存的该服务器证书记录，下次连接重新接受">
             <i data-lucide="shield-off" aria-hidden="true"></i><span>清除服务器信任</span>
           </button>
           <div class="modal-footer-actions">
@@ -221,7 +187,7 @@
         </div>
       </div>
     </div>
-    <!-- 配对二维码弹层：展示 rv:// 载荷（服务器+临时密码+设备名），手机扫码一键添加 -->
+    <!-- 配对二维码弹层：展示配对载荷（服务器+密码+设备名），手机扫码一键添加 -->
     <div class="modal-overlay" id="qr-overlay" role="dialog" aria-modal="true" aria-labelledby="qr-title" hidden>
       <div class="modal-dialog qr-dialog">
         <div class="modal-head">
@@ -234,8 +200,32 @@
           </button>
         </div>
         <div class="qr-box" id="qr-box" aria-label="配对二维码"></div>
-        <p class="qr-hint">手机端「＋ 添加 → 扫码配对」对准本二维码；内含服务器地址与临时密码</p>
+        <p class="qr-hint">手机端「＋ 添加 → 扫码配对」对准本二维码；内含服务器地址与密码</p>
         <p class="qr-secret" id="qr-secret"></p>
+      </div>
+    </div>
+    <!-- 证书更换恢复弹层：服务器证书与上次记录不一致时给出一键重新信任（PLAN-025） -->
+    <div class="modal-overlay" id="cert-overlay" role="dialog" aria-modal="true" aria-labelledby="cert-title" hidden>
+      <div class="modal-dialog">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">SERVER CERTIFICATE</p>
+            <h2 id="cert-title">服务器证书已更换</h2>
+          </div>
+        </div>
+        <p class="field-hint modal-span">
+          本机记录的服务器证书与上一次连接不一致。如果这来自你自己的操作（更换证书、重装服务器），
+          点「重新信任并连接」即可继续；如果不是你操作的，请先检查网络环境，不要重新信任。
+        </p>
+        <div class="modal-footer">
+          <span></span>
+          <div class="modal-footer-actions">
+            <button class="button" id="cert-dismiss"><span>暂不连接</span></button>
+            <button class="button button-primary" id="cert-retrust">
+              <i data-lucide="shield-check" aria-hidden="true"></i><span>重新信任并连接</span>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

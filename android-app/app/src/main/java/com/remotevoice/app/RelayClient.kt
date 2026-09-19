@@ -28,6 +28,10 @@ import javax.net.ssl.X509TrustManager
  * v3 认证模型：手机只携带 规范化秘密的 SHA-256 hex（长度固定 64），
  * AUTH_OK 附目标 Mac 设备名（app 用于"首次连接自动命名"）。
  * 当前流程中任何 AUTH_ERR 均视为不可自动恢复（原因码转人性化文案交给 UI）。
+ *
+ * TLS 策略（PLAN-025）：AUTO 先标准 CA+主机名验证，仅证书验证失败回落 TOFU
+ * （服务器换真证书自动升级）；STRICT 只标准验证；TOFU 只 TOFU。
+ * TOFU 指纹不符 = 可恢复的 onCertChanged（UI 提供"重新信任"入口），绝不报死局错误。
  */
 class RelayClient(
     private val host: String,
@@ -35,7 +39,11 @@ class RelayClient(
     private val secretHex: String,
     private val fingerprintFor: (host: String, port: Int) -> String,
     private val listener: Listener,
-    private val strict: Boolean = false,
+    private val mode: ConfigParser.TlsMode = ConfigParser.TlsMode.AUTO,
+    /** v4：目标 Mac 的 device_id；空=登录会话（仅 LIST/状态，不建桥）。 */
+    private val target: String = "",
+    /** 断线自动重连开关（false 时网络错误即停，等用户手动重试）。 */
+    private val autoReconnect: Boolean = true,
 ) {
     interface Listener {
         /** 状态文本变化（已本地化，可直接展示）。 */
@@ -50,7 +58,7 @@ class RelayClient(
         /** 对端掉线：暂停采音（连接保持）。 */
         fun onPeerOffline()
 
-        /** 致命错误（认证被拒/指纹不符）：不应重试。 */
+        /** 致命错误（认证被拒等）：不应重试。 */
         fun onFatal(message: String)
 
         /**
@@ -58,7 +66,21 @@ class RelayClient(
          * 此后本实例后续连接以该指纹固定校验。
          */
         fun onPeerFingerprint(fingerprint: String, serverKey: String) {}
+
+        /** 服务器证书与本地记录不一致（PLAN-025）：停止重连，等待用户选择重新信任。 */
+        fun onCertChanged() {}
+
+        /** 目录应答（v4 LIST）：登录/桥接会话均可查询。 */
+        fun onMacs(macs: List<MacInfo>) {}
     }
+
+    /** 请求服务器 Mac 目录（v4 LIST 帧；需已完成认证）。 */
+    fun requestList() {
+        sendFrame(frameList, ByteArray(0))
+    }
+
+    /** 服务器认证是否仍然有效（AUTH_OK 后为 true，连接断开即 false）。 */
+    fun isAuthed(): Boolean = authed
 
     // ---- 协议常量（必须与 server/internal/protocol 保持一致；v3）----
     private val frameAuth = 0x01
@@ -69,11 +91,12 @@ class RelayClient(
     private val framePong = 0x06
     private val framePeerState = 0x07
     private val frameTalk = 0x0A
+    private val frameList = 0x0B
     private val peerOnlineByte = 0x01
     private val talkOnByte: Byte = 0x01
 
     private val maxPayload = 65536
-    private val protoVersion = 3
+    private val protoVersion = 4
     private val rolePhone = "phone"
 
     private val pingIntervalMs = 10_000L   // NAT 保活 + 活性探测（设计文档 §4.3）
@@ -88,6 +111,8 @@ class RelayClient(
     @Volatile var peerName: String = ""
         private set
     @Volatile private var socket: SSLSocket? = null
+    /** AUTH_OK 已到达且连接未断（服务器连通判定的权威信号）。 */
+    @Volatile private var authed = false
     /** TCP 拨号期间也登记原始 socket，停止服务时可立即打断阻塞的 connect。 */
     private var connectingSocket: Socket? = null
     private val outLock = Any()
@@ -103,7 +128,7 @@ class RelayClient(
     private val trusted = HashMap<String, String>()
 
     init {
-        if (!strict) {
+        if (mode != ConfigParser.TlsMode.STRICT) {
             val known = fingerprintFor(host, port).trim().lowercase()
             if (known.isNotEmpty()) trusted[serverKey()] = known
         }
@@ -123,6 +148,11 @@ class RelayClient(
                 listener.onState(if (attempts == 0) "连接中…" else "重连中(第${attempts}次)…")
                 connectAndServe()
                 attempts = 0 // 正常退出（stop）时归零
+            } catch (changed: CertChangedException) {
+                // 证书换代不是死局：停下等用户在界面上选择「重新信任」（PLAN-025）
+                Log.w(TAG, "cert changed: ${changed.message}")
+                listener.onCertChanged()
+                running = false
             } catch (fatal: FatalProtocolError) {
                 Log.w(TAG, "fatal: ${fatal.message}")
                 listener.onFatal(fatal.message ?: "协议错误")
@@ -139,6 +169,10 @@ class RelayClient(
                 if (wasPeerOnline) listener.onPeerOffline()
             }
             if (!running) break
+            if (!autoReconnect) {
+                listener.onState("已断开")
+                break
+            }
             attempts++
             val delay = minOf(1000L shl minOf(attempts - 1, 5), backoffMaxMs)
             listener.onState("断开，${delay / 1000}秒后重连(第$attempts 次)")
@@ -207,87 +241,22 @@ class RelayClient(
     }
 
     private fun connectOne() {
-        val ctx = if (strict) {
-            // rvs:// 标准 TLS：系统 CA 信任 + 握手后主机名校验（设计 tls-ca-mode §4.3）；
-            // 绝不进入 TrustAll/TOFU 分支
-            SSLContext.getInstance("TLS").apply { init(null, null, null) }
-        } else {
-            val serverKey = serverKey()
-            val knownFingerprint = trusted[serverKey].orEmpty()
-            // 已知指纹=固定校验；空=TOFU（首次连接自动信任并记录）
-            val tm = if (knownFingerprint.isNotEmpty()) {
-                FingerprintTrustManager(knownFingerprint)
-            } else {
-                TrustAllTrustManager()
-            }
-            SSLContext.getInstance("TLS").apply { init(null, arrayOf(tm), null) }
-        }
-        listener.onState("连接 $host…")
-
-        val raw = Socket()
-        var connectedSocket: SSLSocket? = null
-        var handedToTls = false
-        synchronized(this) { connectingSocket = raw }
-        try {
-            raw.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
-            if (!running) throw IOException("客户端已停止")
-            val sock = ctx.socketFactory.createSocket(raw, host, port, true) as SSLSocket
-            handedToTls = true
-            synchronized(this) {
-                connectingSocket = null
-                if (!running) {
-                    sock.close()
-                    throw IOException("客户端已停止")
-                }
-                socket = sock
-            }
-            connectedSocket = sock
-            sock.soTimeout = readTimeoutMs
-            sock.tcpNoDelay = true
-            try {
-                sock.startHandshake()
-            } catch (e2: SSLHandshakeException) {
-                var cause: Throwable? = e2
-                while (cause != null) {
-                    val message = cause.message.orEmpty()
-                    if (message.contains("证书指纹不符")) {
-                        throw FatalProtocolError(message)
-                    }
-                    cause = cause.cause
-                }
-                throw e2
-            }
-            // 裸 SSLSocket 不做主机名校验，rvs:// 必须显式补上（设计 tls-ca-mode §7）
-            if (strict && !HttpsURLConnection.getDefaultHostnameVerifier()
-                    .verify(host, sock.session)
-            ) {
-                throw SSLHandshakeException("服务器证书与主机名 $host 不匹配")
-            }
-        } finally {
-            synchronized(this) {
-                if (connectingSocket === raw) connectingSocket = null
-            }
-            if (!handedToTls) {
-                try {
-                    raw.close()
-                } catch (_: IOException) {
-                }
-            }
-        }
-        val sock = connectedSocket ?: throw IOException("TLS 连接未建立")
-        if (!strict && (trusted[serverKey()] ?: "").isEmpty()) {
-            // TOFU：握手后记录实际证书指纹，本 endpoint 后续重连以之校验（rvs:// 不做）
+        val (sock, standardVerified) = openTlsConnection()
+        if (!standardVerified && (trusted[serverKey()] ?: "").isEmpty()) {
+            // TOFU：握手后记录实际证书指纹，本 endpoint 后续重连以之校验（标准验证通过时不做）
             val chain = sock.session.peerCertificates
             val fp = FingerprintTrustManager.fingerprintOf((chain[0] as X509Certificate).encoded)
             trusted[serverKey()] = fp
             listener.onPeerFingerprint(fp, serverKey())
             Log.i(TAG, "tofu trusted fingerprint=$fp")
         }
-        Log.i(TAG, "tls connected ($host)")
+        Log.i(TAG, "tls connected ($host, standard=$standardVerified)")
 
         // AUTH 必须是首帧（服务器 10s 内等待）：v3 手机只带秘密哈希
         sock.soTimeout = AUTH_TIMEOUT_MS
-        val authJson = "{\"role\":\"$rolePhone\",\"secret\":\"${jsonEscape(secretHex)}\",\"proto\":$protoVersion}"
+        val targetPart = if (target.isBlank()) "" else ",\"target\":\"${jsonEscape(target)}\""
+        val authJson =
+            "{\"role\":\"$rolePhone\",\"secret\":\"${jsonEscape(secretHex)}\",\"proto\":$protoVersion$targetPart}"
         sendFrame(frameAuth, authJson.toByteArray(Charsets.UTF_8))
         listener.onState("认证中…")
 
@@ -315,7 +284,8 @@ class RelayClient(
             else -> throw FatalProtocolError("认证应答异常 type=0x%02x".format(type))
         }
 
-        listener.onState(if (peerName.isBlank()) "已连接，等待 Mac 上线…" else "已连接 · $peerName")
+        authed = true
+        listener.onState(if (peerName.isBlank()) "已连接服务器" else "已连接 · $peerName")
         peerOnline = false
         sock.soTimeout = readTimeoutMs
 
@@ -343,6 +313,7 @@ class RelayClient(
                     framePing -> sendFrameTo(out, framePong, ByteArray(0))
                     frameAudio -> {} // 手机端不接收音频
                     framePeerState -> handlePeerState(payload)
+                    frameList -> handleList(payload)
                     // AUTH/AUTH_OK/AUTH_ERR 及未知类型：忽略（向前兼容）
                 }
             }
@@ -350,6 +321,131 @@ class RelayClient(
             heartbeat.interrupt()
         }
     }
+
+    /**
+     * 建立 TLS 连接并判定是否通过了标准验证。
+     * AUTO：先标准 CA+主机名验证，仅证书验证失败才重拨回落 TOFU（服务器换真证书自动升级）；
+     * STRICT：只标准验证；TOFU：只 TOFU。指纹不符抛 [CertChangedException]。
+     */
+    private fun openTlsConnection(): Pair<SSLSocket, Boolean> {
+        return when (mode) {
+            ConfigParser.TlsMode.TOFU -> dialTls(strictTls = false) to false
+            ConfigParser.TlsMode.STRICT -> dialTls(strictTls = true) to true
+            ConfigParser.TlsMode.AUTO -> try {
+                dialTls(strictTls = true) to true
+            } catch (changed: CertChangedException) {
+                throw changed
+            } catch (e: SSLHandshakeException) {
+                if (isCertificateVerifyError(e)) dialTls(strictTls = false) to false else throw e
+            }
+        }
+    }
+
+    /** 拨号 + TLS 握手。strictTls=true 走系统 CA 信任；false 走 TOFU（指纹固定/信任任意）。 */
+    private fun dialTls(strictTls: Boolean): SSLSocket {
+        val ctx = if (strictTls) {
+            // 标准 TLS：系统 CA 信任 + 握手后主机名校验（设计 tls-ca-mode §4.3）
+            SSLContext.getInstance("TLS").apply { init(null, null, null) }
+        } else {
+            val serverKey = serverKey()
+            val knownFingerprint = trusted[serverKey].orEmpty()
+            // 已知指纹=固定校验；空=TOFU（首次连接自动信任并记录）
+            val tm = if (knownFingerprint.isNotEmpty()) {
+                FingerprintTrustManager(knownFingerprint)
+            } else {
+                TrustAllTrustManager()
+            }
+            SSLContext.getInstance("TLS").apply { init(null, arrayOf(tm), null) }
+        }
+        listener.onState("连接 $host…")
+
+        val raw = Socket()
+        var handedToTls = false
+        synchronized(this) { connectingSocket = raw }
+        try {
+            raw.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
+            if (!running) throw IOException("客户端已停止")
+            val sock = ctx.socketFactory.createSocket(raw, host, port, true) as SSLSocket
+            handedToTls = true
+            synchronized(this) {
+                connectingSocket = null
+                if (!running) {
+                    closeSslQuietly(sock)
+                    throw IOException("客户端已停止")
+                }
+                socket = sock
+            }
+            sock.soTimeout = readTimeoutMs
+            sock.tcpNoDelay = true
+            try {
+                sock.startHandshake()
+            } catch (e: SSLHandshakeException) {
+                closeSslQuietly(sock)
+                if (causeChainContains(e, FingerprintTrustManager.CERT_CHANGED_MESSAGE)) {
+                    throw CertChangedException()
+                }
+                throw e
+            }
+            // 裸 SSLSocket 不做主机名校验，标准验证分支必须显式补上（设计 tls-ca-mode §7）
+            if (strictTls && !HttpsURLConnection.getDefaultHostnameVerifier()
+                    .verify(host, sock.session)
+            ) {
+                closeSslQuietly(sock)
+                // 主机名不符按证书验证失败对待：AUTO 模式据此回落 TOFU
+                throw SSLHandshakeException("服务器证书与主机名 $host 不匹配")
+            }
+            return sock
+        } finally {
+            synchronized(this) {
+                if (connectingSocket === raw) connectingSocket = null
+            }
+            if (!handedToTls) {
+                try {
+                    raw.close()
+                } catch (_: IOException) {
+                }
+            }
+        }
+    }
+
+    private fun closeSslQuietly(sock: SSLSocket) {
+        synchronized(this) {
+            if (socket === sock) socket = null
+        }
+        try {
+            sock.close()
+        } catch (_: IOException) {
+        }
+    }
+
+    /** 证书验证类失败判定（自签/未知 CA/主机名不符等）：AUTO 回落 TOFU 的唯一信号。 */
+    private fun isCertificateVerifyError(e: Throwable): Boolean {
+        var t: Throwable? = e
+        while (t != null) {
+            val m = (t.message ?: "").lowercase()
+            if (m.contains("trust anchor") || m.contains("certpathvalidator") ||
+                m.contains("certificateException".lowercase()) || m.contains("certific") ||
+                m.contains("主机名")
+            ) {
+                return true
+            }
+            t = t.cause
+        }
+        return false
+    }
+
+    private fun causeChainContains(e: Throwable, needle: String): Boolean {
+        var t: Throwable? = e
+        while (t != null) {
+            if ((t.message ?: "").contains(needle)) return true
+            t = t.cause
+        }
+        return false
+    }
+
+    /** 服务器证书与本地记录不一致（可恢复；UI 提供重新信任入口，PLAN-025）。 */
+    private class CertChangedException :
+        IOException(FingerprintTrustManager.CERT_CHANGED_MESSAGE)
 
     private fun handlePeerState(payload: ByteArray) {
         if (payload.isEmpty()) return
@@ -365,10 +461,32 @@ class RelayClient(
         }
     }
 
-    /** AUTH_ERR 原因码 → 人性化文案。 */
+    /** 目录应答（v4 LIST）解析：[{device_id,name,online,busy}]。 */
+    private fun handleList(payload: ByteArray) {
+        val macs = ArrayList<MacInfo>()
+        try {
+            val arr = org.json.JSONArray(String(payload, Charsets.UTF_8))
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                macs.add(
+                    MacInfo(
+                        deviceId = o.getString("device_id"),
+                        name = o.optString("name", ""),
+                        online = o.optBoolean("online", false),
+                        busy = o.optBoolean("busy", false),
+                    )
+                )
+            }
+        } catch (_: Exception) {
+            return
+        }
+        listener.onMacs(macs)
+    }
+
+    /** AUTH_ERR 原因码 → 人性化文案（v4）。 */
     private fun reasonText(reason: String): String = when (reason) {
-        "invalid-secret" -> "未找到匹配设备（该 Mac 未在线或密码已更新）"
-        "secret-expired" -> "临时密码已过期，请在 Mac 端更新或删除该设备后重试"
+        "invalid-secret" -> "服务器密码错误（也可能服务器尚未设置密码）"
+        "invalid-target" -> "目标 Mac 不在线"
         "peer-busy" -> "目标 Mac 正在其他会话中，稍后再试"
         "rate-limited" -> "尝试过于频繁，已被临时锁定（1 分钟后再试）"
         else -> "认证被拒（$reason）"
@@ -423,6 +541,8 @@ class RelayClient(
             raw = connectingSocket
             connectingSocket = null
         }
+        authed = false
+        peerOnline = false
         try {
             tls?.close()
         } catch (_: IOException) {
@@ -457,12 +577,6 @@ class RelayClient(
 
     /** 异常 → 排障可读文案（供状态条/通知直接展示）。 */
     private fun describeError(e: Throwable): String {
-        var t: Throwable? = e
-        while (t != null) {
-            val m = t.message ?: ""
-            if (m.contains("指纹不符")) return m.take(120)
-            t = t.cause
-        }
         return when (e) {
             is SocketTimeoutException -> "连接超时（服务器未响应或防火墙拦了端口）"
             is UnknownHostException -> "域名解析失败（检查设置中的服务器地址）"

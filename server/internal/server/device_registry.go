@@ -12,26 +12,32 @@ import (
 	"time"
 )
 
-const deviceRegistryVersion = 1
+// v2 新增顶层 password_hash（服务器密码）与 deviceRecord.Name；
+// 读取时兼容 v1（视为未设密码、无名字），首次持久化时升级为 v2。
+const deviceRegistryVersion = 2
 
 // deviceRecord 是 server 保存的 Mac 身份记录。
 // 只保存设备凭据哈希，不保存客户端传来的设备凭据原文。
 type deviceRecord struct {
 	CredentialHash string `json:"credential_hash"`
 	CreatedAt      int64  `json:"created_at"`
+	Name           string `json:"name,omitempty"` // 目录展示名（REGISTER 上报）
 }
 
 type deviceRegistryFile struct {
-	Version int                     `json:"version"`
-	Devices map[string]deviceRecord `json:"devices"`
+	Version      int                     `json:"version"`
+	PasswordHash string                  `json:"password_hash,omitempty"` // 服务器密码哈希（v4）
+	Devices      map[string]deviceRecord `json:"devices"`
 }
 
-// deviceRegistry 管理多台 Mac 的持久身份。
-// 调用方必须在 Server.mu 已持有时调用 verifyOrEnroll，保证检查、登记和在线占位原子化。
+// deviceRegistry 管理多台 Mac 的持久身份与服务器密码。
+// 调用方必须在 Server.mu 已持有时调用 verifyOrEnroll / SetPasswordHash /
+// SetDeviceName，保证检查、登记和在线占位原子化。
 type deviceRegistry struct {
-	path    string
-	devices map[string]deviceRecord
-	loadErr error
+	path         string
+	passwordHash string
+	devices      map[string]deviceRecord
+	loadErr      error
 }
 
 func newDeviceRegistry(path string) (*deviceRegistry, error) {
@@ -53,7 +59,8 @@ func newDeviceRegistry(path string) (*deviceRegistry, error) {
 	if err := json.Unmarshal(b, &file); err != nil {
 		return nil, fmt.Errorf("解析设备身份文件: %w", err)
 	}
-	if file.Version != deviceRegistryVersion {
+	// v1 = 历史 per-Mac 秘密时代的文件：设备身份沿用，密码视为未设置
+	if file.Version != deviceRegistryVersion && file.Version != 1 {
 		return nil, fmt.Errorf("设备身份文件版本不支持: %d", file.Version)
 	}
 	for id, record := range file.Devices {
@@ -62,6 +69,7 @@ func newDeviceRegistry(path string) (*deviceRegistry, error) {
 		}
 		r.devices[id] = record
 	}
+	r.passwordHash = file.PasswordHash
 	return r, nil
 }
 
@@ -88,9 +96,73 @@ func (r *deviceRegistry) verifyOrEnroll(deviceID, deviceKey string) (bool, error
 	return true, nil
 }
 
-func (r *deviceRegistry) persist(devices map[string]deviceRecord) error {
+// SetDeviceName 持久化设备目录名（REGISTER 上报）；不存在设备或名字未变时为 no-op。
+func (r *deviceRegistry) SetDeviceName(deviceID, name string) error {
+	if r.loadErr != nil {
+		return r.loadErr
+	}
+	old, ok := r.devices[deviceID]
+	if !ok || old.Name == name {
+		return nil
+	}
+	updated := make(map[string]deviceRecord, len(r.devices))
+	for id, rec := range r.devices {
+		updated[id] = rec
+	}
+	updated[deviceID] = deviceRecord{
+		CredentialHash: old.CredentialHash,
+		CreatedAt:      old.CreatedAt,
+		Name:           name,
+	}
+	if err := r.persist(updated); err != nil {
+		return err
+	}
+	r.devices = updated
+	return nil
+}
+
+// PasswordHash 返回服务器密码哈希（空=尚未设置）。
+func (r *deviceRegistry) PasswordHash() string {
+	return r.passwordHash
+}
+
+// SetPasswordHash 持久化服务器密码哈希（last-write-wins：任一 Mac 的 REGISTER 均可热更）。
+func (r *deviceRegistry) SetPasswordHash(hash string) error {
+	if r.loadErr != nil {
+		return r.loadErr
+	}
+	if r.passwordHash == hash {
+		return nil
+	}
+	updated := make(map[string]deviceRecord, len(r.devices))
+	for id, rec := range r.devices {
+		updated[id] = rec
+	}
+	if err := r.persist(updated, hash); err != nil {
+		return err
+	}
+	r.passwordHash = hash
+	return nil
+}
+
+// Devices 返回设备记录快照（id → record），供目录（LIST）使用。
+func (r *deviceRegistry) Devices() map[string]deviceRecord {
+	out := make(map[string]deviceRecord, len(r.devices))
+	for id, rec := range r.devices {
+		out[id] = rec
+	}
+	return out
+}
+
+// persist 原子写回设备文件。passwordHash 不定参：nil=沿用当前值，
+// 非 nil=本次要写入的新值（SetPasswordHash 用，密码未变时也走全量写）。
+func (r *deviceRegistry) persist(devices map[string]deviceRecord, passwordHash ...string) error {
 	if r.path == "" {
 		return nil
+	}
+	hash := r.passwordHash
+	if len(passwordHash) > 0 {
+		hash = passwordHash[0]
 	}
 	dir := filepath.Dir(r.path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -106,7 +178,11 @@ func (r *deviceRegistry) persist(devices map[string]deviceRecord) error {
 		_ = tmp.Close()
 		return fmt.Errorf("设置设备身份文件权限: %w", err)
 	}
-	file := deviceRegistryFile{Version: deviceRegistryVersion, Devices: devices}
+	file := deviceRegistryFile{
+		Version:      deviceRegistryVersion,
+		PasswordHash: hash,
+		Devices:      devices,
+	}
 	enc := json.NewEncoder(tmp)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(file); err != nil {

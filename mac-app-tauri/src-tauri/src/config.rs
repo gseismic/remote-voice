@@ -7,7 +7,6 @@ use thiserror::Error;
 
 pub const DEFAULT_PORT: u16 = 9432;
 pub const DEFAULT_AUDIO_DEVICE: &str = "BlackHole";
-pub const DEFAULT_TEMP_DURATION: i64 = 8 * 60 * 60;
 pub const DEFAULT_DICTATION_MODE: &str = "hold";
 
 #[derive(Debug, Error)]
@@ -30,11 +29,11 @@ pub struct AppConfig {
     pub server: String,
     pub name: String,
     pub audio_device: String,
-    pub keep: bool,
-    pub temp_secret: String,
-    pub temp_exp: i64,
-    pub temp_duration: i64,
+    /// 断线自动重连（默认开；关闭后网络断开即停止，等用户手动连接）
+    pub auto_reconnect: bool,
+    /// 本机信任过的服务器证书指纹（按 server key 隔离；仅 Tofu/Auto 回落路径使用）
     pub fingerprints: BTreeMap<String, String>,
+    /// 服务器密码是否已存入 Keychain（false=回退文件）
     pub perm_in_keychain: bool,
     /// 手机 PTT 是否联动模拟 Fn（macOS 语音输入）；关闭后仅音频转发
     pub dictation_enabled: bool,
@@ -54,10 +53,7 @@ impl Default for AppConfig {
             server: String::new(),
             name: String::new(),
             audio_device: DEFAULT_AUDIO_DEVICE.to_string(),
-            keep: false,
-            temp_secret: String::new(),
-            temp_exp: 0,
-            temp_duration: DEFAULT_TEMP_DURATION,
+            auto_reconnect: true,
             fingerprints: BTreeMap::new(),
             perm_in_keychain: false,
             dictation_enabled: true,
@@ -72,9 +68,6 @@ impl AppConfig {
     pub fn apply_defaults(&mut self) {
         if self.audio_device.trim().is_empty() {
             self.audio_device = DEFAULT_AUDIO_DEVICE.to_string();
-        }
-        if !matches!(self.temp_duration, 600 | 3600 | 28_800 | 86_400) {
-            self.temp_duration = DEFAULT_TEMP_DURATION;
         }
         if self.dictation_mode != "hold" && self.dictation_mode != "double" {
             self.dictation_mode = DEFAULT_DICTATION_MODE.to_string();
@@ -152,10 +145,25 @@ pub fn save_to(path: &Path, config: &AppConfig) -> Result<(), ConfigError> {
     result.map_err(ConfigError::Io)
 }
 
-/// rvs:// 前缀 = 标准 TLS（系统 CA 链 + 主机名验证，无 TOFU）；rv:// = 现行 TOFU。
-/// 设计：docs/design/tls-ca-mode-20260919-overview.md §3。
-pub fn is_strict_tls(raw: &str) -> bool {
-    raw.trim().to_ascii_lowercase().starts_with("rvs://")
+/// TLS 信任策略（设计 docs/design/connection-simplify-20260919-overview.md §2.1）：
+/// Auto=裸地址（默认用户形态）：先标准 CA+主机名验证，仅证书验证失败才回落 TOFU；
+/// Strict=rvs:// 显式要求标准验证（逃生门，绝不回落）；Tofu=rv:// 旧行为（兼容旧配置）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TlsMode {
+    Auto,
+    Strict,
+    Tofu,
+}
+
+pub fn tls_mode(raw: &str) -> TlsMode {
+    let value = raw.trim().to_ascii_lowercase();
+    if value.starts_with("rvs://") {
+        TlsMode::Strict
+    } else if value.starts_with("rv://") {
+        TlsMode::Tofu
+    } else {
+        TlsMode::Auto
+    }
 }
 
 pub fn parse_server(raw: &str) -> Result<(String, u16), ConfigError> {
@@ -308,6 +316,15 @@ mod tests {
             server_key("rv://Relay.Example:9432?f=old").unwrap(),
             "relay.example:9432"
         );
+    }
+
+    #[test]
+    fn tls_mode_parses_three_address_forms() {
+        // 测试目的：裸地址=auto（默认用户形态）、rvs://=强制标准、rv://=TOFU 兼容
+        assert_eq!(tls_mode("192.168.1.10:9432"), TlsMode::Auto);
+        assert_eq!(tls_mode(" voice.example.com "), TlsMode::Auto);
+        assert_eq!(tls_mode("RVS://voice.example.com:9432"), TlsMode::Strict);
+        assert_eq!(tls_mode("rv://192.168.1.10:9432"), TlsMode::Tofu);
     }
 
     #[test]
