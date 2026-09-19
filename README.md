@@ -10,6 +10,15 @@ Mac 麦克风硬件损坏的替代方案：**Android 手机采音 → 中继服�
 服务器日后配置 Let's Encrypt 证书自动升级，永不出现证书换代死局错误；
 `rvs://` 显式前缀保留为强制标准验证的逃生门。
 
+## 构建（scripts/）
+
+```bash
+scripts/build.sh all        # 一键：当前机器上能构建的全部（Linux=server+android；Mac=全部）
+scripts/build-server.sh     # 服务器二进制 → server/dist/（含 server-linux 兼容名、arm64、fakephone）
+scripts/build-android.sh    # Android debug APK（--release 出未签名 release）
+scripts/build-mac.sh        # ⚠️ 仅 Mac 上运行：Tauri .app/.dmg（--debug 快速包，--install 装入 /Applications）
+```
+
 ## 架构（三端各自独立交付）
 
 ```

@@ -246,3 +246,12 @@
   验证：assembleDebug；双 Mac 双桥并发由 go test TestBridgeFullDuplex 覆盖；真机滑动
   复核待用户。
   文件：PLAN-027-android-multi-mac.md / PLAN-027-android-multi-mac-OUTCOME.md。
+
+- **2026-09-19 13:40** | PLAN-028 一键构建脚本（scripts/）
+  摘要：新增 build-server.sh（Go 交叉编译 amd64/arm64 + server-linux 兼容名 + fakephone，
+  产物 server/dist/）、build-android.sh（debug/release，含 adb install 提示）、
+  build-mac.sh（仅 macOS：rustc≥1.88 预检 + pnpm tauri build + --install 入
+  /Applications）、build.sh 总入口（按 OS 构建可构建项）。server/dist/ 入 .gitignore。
+  验证：Linux 上 server 三产物+可执行冒烟、android debug/release、总入口与 mac 守卫
+  全部实测通过；mac 脚本待 Mac 实机复核。README 增「构建（scripts/）」章节。
+  文件：PLAN-028-build-scripts.md / PLAN-028-build-scripts-OUTCOME.md。

@@ -31,3 +31,6 @@ mac-app-tauri/node_modules/
 mac-app-tauri/dist/
 mac-app-tauri/src-tauri/target/
 mac-app-tauri/src-tauri/gen/
+
+# 构建产物（build 脚本输出）
+server/dist/
