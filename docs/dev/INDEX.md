@@ -264,3 +264,22 @@
   fail-fast 设计、go 版本自报错、无 --help（头部注释即用法）、mac 路径待实机复核。
   修复后复验：语法检查、server 全产物重建+可执行冒烟、android debug、总入口全过。
   文件：20260919-2026-REVIEW-184c1e6-build-scripts.md。
+
+- **2026-09-19 21:10** | REVIEW Mac 客户端「服务器证书已更换」现象（commit 4db249f）
+  摘要：现象排查+系统走查。结论：提示是 TOFU 按设计工作，根因=本机测试 server
+  data 目录漂移（/tmp/rv-joint-data 67b2051d → server/data 45d1d730，同地址换实例）；
+  ssh 实测公网证书未变且 v4 未部署。发现：P0 web/app.js 未绑定 cert 弹层
+  #cert-retrust/#cert-dismiss（PLAN-025 前端半截缺失，验证表缺 UI 冒烟）；
+  P1 公网需同步 v4；P2 测试 data 目录漂移；P3 HANDOFF 已知 bug 条目过时。
+  文件：20260919-2110-REVIEW-4db249f-cert-changed-mac-client.md。
+
+- **2026-09-19 21:25** | PLAN-029 cert 弹层修复 + v4 公网部署 + 文档对账
+  摘要：修复 review 全部发现。F1 app.js 补两按钮绑定（重新信任=clear_server_trust
+  +connect；暂不连接=disconnect 让状态离开 fatal），浏览器 mock 冒烟 4 步全过
+  （IAB 物理点击不派发事件属环境局限，程序化点击证明链路）。F2 v4 部署公网
+  （go build + restart，横幅/active/TLS 握手验证）；部署事故：rsync 未排除
+  server/data/ 覆盖公网证书，处置=删污染密钥对让服务器自签新证书（4701635e…，
+  私钥仅存服务器），标准 rsync 命令（含 --exclude server/data/）固化进 HANDOFF；
+  v3 二进制备份 server-linux.v3.bak，systemd Description 改 v4。F3/F4 HANDOFF：
+  本地测试统一 -data ./data、/tmp 实例废弃、删过时已知 bug 条目、遗留问题对账。
+  文件：PLAN-029-cert-overlay-fix-and-deploy.md / PLAN-029-cert-overlay-fix-and-deploy-OUTCOME.md。

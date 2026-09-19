@@ -1,6 +1,6 @@
 # 交接文档 (HANDOFF)
 
-更新时间：2026-09-18 05:15 (UTC+8)
+更新时间：2026-09-19 21:25 (UTC+8)
 
 ## 项目背景（零上下文可读）
 
@@ -13,8 +13,8 @@ Linux 服务器中继，写入 Mac 的 BlackHole 虚拟声卡**，使任意 Mac 
 - UI 设计稿：`docs/ui-design/`（v1/v2 历史，**v3 为当前待评审的可交互原型**）
 - 计划与结果：`docs/dev/`（PLAN-XXX / -OUTCOME + INDEX.md；PLAN-014 已撤销，见其文件头）
 - 评审文档：`docs/dev/` 下 REVIEW-* 文件
-- 协议现状：v3（Mac 设备身份认证 + 秘密哈希注册表 + 多 Mac 1:1 桥接 + IP 限速防爆破），
-  v1/v2 已淘汰（v2 regkey 仅作 server 可选兼容）
+- 协议现状：v4（服务器密码 + Mac 目录 LIST + 多 Mac 连接），v1/v2/v3 已淘汰；
+  **v4 已于 2026-09-19 部署公网**（见部署机备忘）
 
 ## 运行端状态总表
 
@@ -25,9 +25,20 @@ Linux 服务器中继，写入 Mac 的 BlackHole 虚拟声卡**，使任意 Mac 
 | `android-app/` | Android | Kotlin 采音（PTT、多设备单激活、局域网扫描、本地/远程双地址） | ✅ assembleDebug 通过；真机验收进行中（见联测记录） |
 | `backup/mac-app/` | （已归档） | 早期 Python 客户端（GUI+CLI），PLAN-013 归档，仅参考实现 | 📦 协议变更不再同步 |
 
-## 当前状态（截至 2026-09-18）
+## 当前状态（截至 2026-09-19）
 
 ### 最近完成的重点
+
+1. **PLAN-029（cert 弹层修复 + v4 公网部署）**：Mac 前端「服务器证书已更换」弹层
+   两个按钮此前未绑定事件（PLAN-025 实现缺口，review
+   `docs/dev/20260919-2110-REVIEW-4db249f-cert-changed-mac-client.md` 发现），
+   现已修复：重新信任=清 pin+重连、暂不连接=disconnect；浏览器 mock 冒烟 4 步
+   全过。**v4 服务器已部署公网**（见部署机备忘），systemd Description 同步更新。
+   部署教训：rsync 曾把本机 `server/data/` 测试证书覆盖到公网（已处理，服务器
+   自签了新专属证书），**今后 rsync 必须加 `--exclude server/data/`**。
+2. **协议 v4 三端实现**（PLAN-025/026/027，commit 5338f41）：证书概念对用户归零
+   （裸地址=Auto：先标准 CA 验证、自签回落 TOFU、证书换代一键恢复）、服务器
+   一个密码 + Mac 目录（含离线）+ 手机多 Mac 连接；PLAN-028 一键构建脚本。
 
 1. **PLAN-019（PTT→Fn 语音输入 + 泄流修复）**：协议加 `FRAME_TALK=0x0A`（手机→Mac
    说话状态，server 透传）；Mac 端 keyinject 模块把手机 PTT 映射为 Fn 按键
@@ -56,36 +67,40 @@ Linux 服务器中继，写入 Mac 的 BlackHole 虚拟声卡**，使任意 Mac 
 1. **云安全组放行（用户操作，卡住公网验收）**：118.193.40.160 的云控制台放行入站
    **TCP 9432**（必须）+ **UDP 9432**（仅局域网扫描需要，公网可不放）。实测公网 TCP/UDP 均
    被安全组拦截；服务器侧监听正常、主机无防火墙（ufw inactive、iptables ACCEPT）。
-2. **UI V3.2 评审 → 实施简化**：`docs/ui-design/v3/` 三个可交互原型（android/mac/index）已改为
-   纯公网单链路，待用户最终确认后实施：① 两端真实界面按 V3.2 稿落地；② Android 代码简化——
-   移除 LanDiscovery/KEY_SERVER_LOCAL/RelayClient 多端点（恢复单一服务器地址）；③ server
-   `-discovery` 默认已改为 false（部署机需重新 rsync+构建+重启生效）。
-4. **UI V3.2 可交互原型（待用户评审确认）**：`docs/ui-design/v3/`（index/android/mac 三个 HTML，
-   全部按钮可点）。V3.2 设计决定（用户拍板，实施时必须遵守）：
-   - **只保留公网连接**：本地局域网仅用于测试——测试时把服务器地址填成局域网 IP 即可，
-     不需要"本地链路"这个产品概念（V3.1 的双链路分组/扫描/蓝牙式列表全部移除）；
-   - server 的 UDP 发现应答降级为本地测试工具（`-discovery` 默认关，仅本地测试显式开启）；
-   - 秘密配对决定接哪台 Mac；历史连接信息（设备名等）只来自既往成功连接的本地记录。
-3. **真 Mac 端三端联测**：Mac 上构建 Tauri（pnpm），连 `192.168.1.103:9432`（本机 server）或
-   公网 server，手机连家里 Wi-Fi 用扫描选本地 server；替换手机端预置的旧秘密（`2TWU-KF8U`
-   属于已弃用的 Linux 临时客户端注册的设备，Mac 新客户端会生成新秘密）。
-4. Tauri macOS 真机验收：Keychain、BlackHole 实际出声、签名/公证（沿用 PLAN-010 遗留）+
-   **PLAN-019 新增**：辅助功能权限授权与 Fn→语音输入真机效果（见上 PLAN-019 摘要）；
-   **两端必须安装新版**（旧 Android APK 会恢复 handsfree 泄流）。
-5. 音频演化方向（远期）：UDP+Opus+FEC、反向声道、波形真实数据源。
+   v4 已部署就绪，放行后即可三端公网联测。
+2. **真 Mac 端三端联测（v4）**：Mac 重新构建安装（`scripts/build-mac.sh`）→ 连
+   公网 118.193.40.160:9432（v4；注意 9-19 已换新证书，若 Mac 曾固定旧指纹会弹
+   「服务器证书已更换」，点「重新信任并连接」即可——**这同时完成 PLAN-025 遗留的
+   cert 弹层真机复核**）；Android 装新 APK，扫码或手填，输服务器密码。
+3. Tauri macOS 真机验收：Keychain、BlackHole 实际出声、签名/公证（沿用 PLAN-010 遗留）+
+   辅助功能权限授权与 Fn→语音输入真机效果（PLAN-019）；两端必须安装新版。
+4. 音频演化方向（远期）：UDP+Opus+FEC、反向声道、波形真实数据源。
 
 ## 部署机备忘（118.193.40.160，ubuntu@，免密 sudo）
 
 - 源码：`/home/ubuntu/services/`（**该目录即仓库根**，与开发机 rsync 同步；
-  同步命令**必须带 `--exclude ThinkTime`**，那里有用户的其他项目；
-  **禁用 `--delete`**——曾险些误删 ThinkTime，靠 root 权限拦下）。
+  **标准同步命令**（红灯⚠：`--exclude server/data/` 防止本地测试证书覆盖公网
+  证书——2026-09-19 实际踩过；禁用 `--delete`——曾险些误删 ThinkTime）：
+  ```
+  rsync -av --exclude ThinkTime --exclude .git --exclude node_modules \
+    --exclude target --exclude .gradle --exclude build --exclude dist \
+    --exclude local.properties --exclude server/data/ --exclude server/server \
+    ./ ubuntu@118.193.40.160:/home/ubuntu/services/
+  ```
+  然后服务器上 `cd server && go build -o server-linux . && sudo systemctl
+  restart remote-voice-server`。
 - 服务：`/home/ubuntu/services/server/server-linux` + systemd `remote-voice-server`
-  （User=ubuntu，WorkingDirectory=server/，`-addr :9432 -data ./data`，已 enable）。
-  数据目录 `server/data/` 含 TLS 私钥与设备登记，勿删。
+  （User=ubuntu，WorkingDirectory=server/，`-addr :9432 -data ./data`，已 enable；
+  Description 已改 v4）。**v3 二进制备份**：`server-linux.v3.bak`（回滚用）。
+- **v4 已于 2026-09-19 21:16 部署**：启动横幅应为「客户端接入（共两样，别无其他）」。
+- 数据目录 `server/data/` 含 TLS 私钥与设备登记，勿删、勿被 rsync 覆盖。
 - 服务器 Go：apt 的 golang-go 1.22.2（满足 go.mod）。
 - 历史残留：services 根目录有 8 月旧部署文件（旧 server-linux、token.txt 等），未清理，
   用户确认后可删。
-- 证书指纹（部署时生成）：`d123ce4dc4b80a3125306b0e83addb9d0062709812296fc1ffae3daf072aa47f`。
+- 证书指纹（2026-09-19 起新）：`4701635ee29ce5cb2c24ae588c137f528d74c5d4119eed9045c3785e20f543c3`。
+  旧指纹 `d123ce4d…`（9-17 生成）已作废：9-19 rsync 误将开发机测试证书覆盖到
+  data/，处置为删除后让服务器自签新证书（私钥仅存服务器）。因公网 TCP 一直被
+  安全组拦截，预计没有客户端固定过旧指纹；若有，客户端点一次「重新信任并连接」即可。
 
 ## 本机环境备忘（Linux 开发机）
 
@@ -96,9 +111,12 @@ Linux 服务器中继，写入 Mac 的 BlackHole 虚拟声卡**，使任意 Mac 
 - **pnpm**：10.5.2；在线 install 会被 TUN 代理挂起，用 `pnpm install --offline`（store 2.3G）。
 - Android 真机：小米 21091116AC（adb id 5LFAJ7TWUGUCCERO）；联测技巧 `adb reverse tcp:9432
   tcp:9432` 可让手机经 USB 连本机 server（手机不在 Wi-Fi 时）。
-- 已知 bug 待修：mac-app-tauri 的 Rust 单元测试会把测试数据写进真实
-  `~/.config/remote-voice/config.json`（测试未隔离 HOME），联测时发现。
-- 本地联测遗留进程：`/tmp/rv-server`（本地 server，数据 /tmp/rv-joint-data，重启即失）。
+- **本地测试 server 数据目录规范**：统一 `-data ./data`（即 `server/data/`，持久
+  目录，与 gitignore 一致）；**禁止再用 /tmp 等易失目录起 server**——每次实例
+  重建=新证书=客户端一次「证书已更换」，钝化真实 MITM 告警（2026-09-19 review
+  教训）。`/tmp/rv-server`（数据 /tmp/rv-joint-data）已废弃，残留待系统自清。
+- Rust 单元测试已全部 tempdir 隔离，不再污染真实 `~/.config/remote-voice/config.json`
+  （2026-09-19 复核确认，此前 HANDOFF 记录的已知 bug 已不存在）。
 
 ## 关键技术决策速查
 

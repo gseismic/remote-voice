@@ -554,6 +554,16 @@ function bindEvents() {
       "服务器信任已清除，下次连接将重新建立",
     );
   });
+  // 证书更换恢复弹层：重新信任 = 清 pin 后显式连接——fatal 不属于后端 active
+  // 状态，clear_server_trust 不会自动重连；「暂不连接」必须走 disconnect 让状态
+  // 离开 fatal（只隐藏弹层会被下一次 render 按 fatal+cert-changed 盖回）
+  $("cert-retrust").addEventListener("click", () =>
+    runAction(async () => {
+      await call("clear_server_trust");
+      return call("connect");
+    }, "已重新信任服务器，正在连接"));
+  $("cert-dismiss").addEventListener("click", () =>
+    runAction(() => call("disconnect"), null));
   $("refresh-audio").addEventListener("click", () => refreshAudioDevices(false));
   $("clear-history").addEventListener("click", () =>
     runAction(() => call("clear_history"), "事件已清空"));
