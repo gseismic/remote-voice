@@ -62,11 +62,14 @@ echo "产物："
 [[ -n "$DMG" ]] && echo "  $DMG"
 
 if (( DO_INSTALL )); then
-  if pgrep -xq "remote-voice|Remote Voice" 2>/dev/null; then
+  # 按完整命令行匹配 .app 路径（-x 精确进程名对打包后名称是猜测，REVIEW F3）
+  if pgrep -qf "Remote Voice\.app" 2>/dev/null; then
     echo "提示：检测到 Remote Voice 正在运行，请先退出再安装（或手动覆盖）。跳过安装。" >&2
     exit 0
   fi
   echo "==> 安装到 /Applications"
+  # 先删旧包再拷贝：ditto 是合并语义，直接覆盖会残留旧版本文件（REVIEW F2）
+  rm -rf "/Applications/Remote Voice.app"
   ditto "$APP" "/Applications/Remote Voice.app"
   echo "已安装 /Applications/Remote Voice.app"
 fi

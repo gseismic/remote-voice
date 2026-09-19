@@ -255,3 +255,12 @@
   验证：Linux 上 server 三产物+可执行冒烟、android debug/release、总入口与 mac 守卫
   全部实测通过；mac 脚本待 Mac 实机复核。README 增「构建（scripts/）」章节。
   文件：PLAN-028-build-scripts.md / PLAN-028-build-scripts-OUTCOME.md。
+
+- **2026-09-19 20:30** | REVIEW 构建脚本（scripts/，commit 184c1e6）
+  摘要：逐行复查四脚本+Linux 复验。4 项修复：F1 build-server 的 sha256sum 在 macOS
+  缺失（回退 shasum，否则 Mac 上 host 构建清单阶段必失败）；F2 build-mac --install 的
+  ditto 合并语义残留旧版文件（改先 rm -rf 再拷）；F3 运行检测 pgrep -x 猜进程名（改
+  pgrep -qf "Remote Voice\.app"）；F4 java -version 管道 SIGPIPE 防御。4 项记录不修：
+  fail-fast 设计、go 版本自报错、无 --help（头部注释即用法）、mac 路径待实机复核。
+  修复后复验：语法检查、server 全产物重建+可执行冒烟、android debug、总入口全过。
+  文件：20260919-2026-REVIEW-184c1e6-build-scripts.md。

@@ -45,10 +45,18 @@ esac
 echo "==> 构建 fakephone（联调工具）"
 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$OUT/fakephone" ./cmd/fakephone
 
+hash16() { # sha256sum 在 macOS 不存在，回退 shasum（REVIEW F1）
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -c1-16
+  else
+    shasum -a 256 "$1" | cut -c1-16
+  fi
+}
+
 echo
 echo "产物清单："
 for f in "$OUT"/*; do
-  printf '  %-40s %s\n' "$f" "$(sha256sum "$f" | cut -c1-16)…"
+  printf '  %-40s %s\n' "$f" "$(hash16 "$f")…"
 done
 echo
 echo "部署提示：上传 server-linux-amd64 到服务器后 chmod +x 即可运行"

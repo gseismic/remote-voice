@@ -21,7 +21,7 @@ command -v java >/dev/null 2>&1 || {
   echo "  macOS:         brew install openjdk@17" >&2
   exit 1
 }
-JAVA_VER=$(java -version 2>&1 | head -1)
+JAVA_VER=$(java -version 2>&1 | head -n 1 || true)  # || true：pipefail 下防 SIGPIPE（REVIEW F4）
 echo "==> Java: $JAVA_VER"
 
 # 传 SDK 路径（local.properties 优先，其次 ANDROID_HOME）
