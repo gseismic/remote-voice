@@ -40,14 +40,16 @@ Android 手机: 按住说话(PTT)              中继服务器                  
 > Mac 端早期 Python 客户端已归档至 [`backup/mac-app/`](backup/mac-app/README.md)
 > （只保留 Tauri 版的决定，PLAN-013）；存储约定兼容，如需恢复 `git mv` 回即可。
 
-- 协议 v3：`[1B type][4B len BE][payload]`；Mac 首次自动登记本机设备身份后注册秘密哈希，
-  手机认证只带规范化秘密的 SHA-256 hex（全程无明文）；桥接 1:1；
+- 协议 v4：`[1B type][4B len BE][payload]`；Mac 首次自动登记本机设备身份，REGISTER 上报
+  设备名与**服务器密码**哈希（server 持久化）；手机认证只带服务器密码的 SHA-256 hex
+  （全程无明文），AUTH 带 target（空=登录会话可查目录 LIST，非空=与指定 Mac 建 1:1 桥）；
   IP 滑窗限速（60s/5 失败 → 1m/5m/30m 递增锁）
-- `FRAME_TALK=0x0A`（v3.1 增补）：手机→Mac 的说话状态帧，Mac 据此模拟 Fn 触发/放下语音输入，
-  帧丢失由重桥时无条件同步纠偏
+- `FRAME_TALK=0x0A`：手机→Mac 的说话状态帧，Mac 据此模拟 Fn 触发/放下语音输入，
+  帧丢失由重桥/切页时无条件同步纠偏
 - 音频：48kHz/mono/s16le/20ms 帧裸 PCM（1920B），server 不解析内容
-- 安全模型：`rv://` 自签证书 + 客户端内部 TOFU 固定；`rvs://` 标准 CA 验证（服务器加载
-  Let's Encrypt 证书）。配对秘密只传 SHA-256 哈希；设备凭据按 Mac 隔离并持久化
+- 证书模型：客户端对裸地址**自动探测**——先标准 CA+主机名验证，自签自动回落首连信任并固定，
+  服务器日后配置 Let's Encrypt 证书自动升级；`rvs://` 显式前缀=强制标准验证。
+  手机同服务器只需一个密码；多台 Mac 请设相同密码（后注册覆盖，server 日志留痕）
 
 ## 快速启动
 
@@ -58,8 +60,8 @@ Android 手机: 按住说话(PTT)              中继服务器                  
 ```bash
 cd server && go build -o server .
 ./server -addr :9432 -data ./data
-# 打印客户端可导入的 rv://<IP>:9432 地址；证书指纹仅供诊断
-# 公网部署（有域名）追加：-cert fullchain.pem -key privkey.pem，客户端改填 rvs://域名:9432
+# 公网部署（有域名）追加：-cert fullchain.pem -key privkey.pem
+# 客户端始终只填 IP/域名:端口，证书模式自动探测，无需区分
 ```
 
 ### 2. Mac（唯一客户端：Tauri）
@@ -70,9 +72,9 @@ brew install pnpm                           # 或 corepack enable pnpm
 cd mac-app-tauri && pnpm install && pnpm run tauri build   # 开发调试用 pnpm run tauri dev
 ```
 
-启动后连接设置里填一次服务器地址（`rv://IP:9432` 或 `rvs://域名:9432`，可选设备名），首次
-连接自动生成本机设备身份，**不需要输入 regkey 或证书指纹**。首页显示临时配对密码——手机
-「＋ 添加 → 扫码配对」对准 Mac 的**二维码**即可一步完成；也可以手动抄密码输入。
+启动后连接设置里填一次服务器地址并设置**服务器密码**（≥12 位），首次连接自动生成本机设备
+身份，不需要输入 regkey、指纹或任何 scheme 前缀。首页点「二维码」出示配对码——手机
+「＋ 添加 → 扫码配对」对准即可一步完成（或手动抄密码输入）。
 会议软件/输入法把麦克风选成 BlackHole 2ch；手机按住说话时 Mac 自动模拟 Fn 触发语音输入。
 
 ### 3. Android
@@ -81,22 +83,20 @@ cd mac-app-tauri && pnpm install && pnpm run tauri build   # 开发调试用 pnp
 cd android-app && ./gradlew assembleDebug && adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
-主屏「＋ 添加」→ **扫码配对**（扫 Mac 端二维码，自动完成服务器+密码配置并连接），或手动输入
-Mac 显示的短码 → 返回后**自动连接** → **按住说话**（状态胶囊点按可停止/恢复）。
-设备芯片长按可改名/改密码/删除。
+主屏「＋ 添加」→ **扫码配对**（扫 Mac 端二维码，自动完成服务器+密码配置），或手动输入
+地址+密码 → 登录后显示服务器上的 **Mac 列表**（离线也可见）→ 点一台**连接** → **按住说话**
+（状态胶囊点按可停止/恢复）。可同时连接多台 Mac，**左右滑动切换**控制目标；长按已连接的
+chip 可断开。
 
 ## 开发验证
 
 ```bash
-# server：构建 + 竞态测试
-cd server && go build ./... && go vet ./... && go test ./... -count=1 -race
+scripts/build.sh all            # 三端构建（按当前 OS 自动取舍）
 
-# android-app：构建
+# 测试
+cd server && go vet ./... && go test ./... -count=1 -race
+cd mac-app-tauri/src-tauri && cargo test && cd .. && pnpm run build
 cd android-app && ./gradlew assembleDebug
-
-# Tauri Mac GUI：核心测试与前端构建（包管理器统一用 pnpm）
-cd mac-app-tauri/src-tauri && cargo test
-cd .. && pnpm run build
 ```
 
 ## 文档索引
