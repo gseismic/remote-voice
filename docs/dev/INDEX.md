@@ -283,3 +283,6 @@
   v3 二进制备份 server-linux.v3.bak，systemd Description 改 v4。F3/F4 HANDOFF：
   本地测试统一 -data ./data、/tmp 实例废弃、删过时已知 bug 条目、遗留问题对账。
   文件：PLAN-029-cert-overlay-fix-and-deploy.md / PLAN-029-cert-overlay-fix-and-deploy-OUTCOME.md。
+
+- **2026-09-19 22:32** | [PLAN-030-cert-recovery-local.md](PLAN-030-cert-recovery-local.md) → [PLAN-030-cert-recovery-local-OUTCOME.md](PLAN-030-cert-recovery-local-OUTCOME.md)
+  摘要：完成本机证书恢复链路验收。执行 `scripts/build-mac.sh` 将包含弹层按钮绑定的当前源码安装到 `/Applications`；本机 server 固定使用 `server/data`，停止/重启前后证书指纹均为 `1f824482…`；临时恢复旧 pin 后实机验证「暂不连接」与「重新信任并连接」，后者完成清 pin、重连、TLS/TOFU、Mac 鉴权和 REGISTER。当前本机配置切换为 `127.0.0.1:9432` 并保存当前 pin，`.103` 不可达旧记录保留。验证：Go vet/race、Rust 26 测试、pnpm build、macOS release build/install、git diff --check 全部通过。
