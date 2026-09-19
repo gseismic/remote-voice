@@ -16,7 +16,7 @@ Mac 麦克风硬件损坏的替代方案：**Android 手机采音 → 中继服�
 scripts/build.sh all        # 一键：当前机器上能构建的全部（Linux=server+android；Mac=全部）
 scripts/build-server.sh     # 服务器二进制 → server/dist/（含 server-linux 兼容名、arm64、fakephone）
 scripts/build-android.sh    # Android debug APK（--release 出未签名 release）
-scripts/build-mac.sh        # ⚠️ 仅 Mac 上运行：Tauri .app/.dmg（--debug 快速包，--install 装入 /Applications）
+scripts/build-mac.sh        # ⚠️ 仅 Mac 上运行：Tauri .app/.dmg（默认构建后装入 /Applications；--debug 快速包；--no-install 只构建）
 ```
 
 ## 架构（三端各自独立交付）

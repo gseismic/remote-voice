@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # 构建 macOS 客户端（Tauri 2：pnpm + Rust）。⚠️ 只能在 Mac 上运行。
-# 用法: scripts/build-mac.sh [--debug] [--install]
-#   --debug   构建调试版（更快，适合日常自用验证）
-#   --install 构建完成后把 App 拷入 /Applications
+# 用法: scripts/build-mac.sh [--debug] [--no-install]
+#   --debug      构建调试版（更快，适合日常自用验证）
+#   --no-install 只构建不安装（默认构建完成后装入 /Applications——
+#                只构建不装很容易跑的还是旧版 App，故默认安装）
+#   （--install 仍被接受，与默认行为一致，保持旧用法兼容）
 # 产物：src-tauri/target/release/bundle/macos/Remote Voice.app 与 dmg。
 set -euo pipefail
 cd "$(dirname "$0")/../mac-app-tauri"
@@ -14,12 +16,13 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 BUILD_MODE="release"
-DO_INSTALL=0
+DO_INSTALL=1
 for arg in "$@"; do
   case "$arg" in
     --debug) BUILD_MODE="debug" ;;
     --install) DO_INSTALL=1 ;;
-    *) echo "未知参数: ${arg}（可选 --debug --install）" >&2; exit 1 ;;
+    --no-install) DO_INSTALL=0 ;;
+    *) echo "未知参数: $arg（可选 --debug --no-install）" >&2; exit 1 ;;
   esac
 done
 
@@ -62,9 +65,10 @@ echo "产物："
 [[ -n "$DMG" ]] && echo "  $DMG"
 
 if (( DO_INSTALL )); then
-  # 按完整命令行匹配 .app 路径（-x 精确进程名对打包后名称是猜测，REVIEW F3）
+  # 先删旧包再拷贝：ditto 是合并语义，直接覆盖会残留旧版本文件（REVIEW F2）
   if pgrep -qf "Remote Voice\.app" 2>/dev/null; then
-    echo "提示：检测到 Remote Voice 正在运行，请先退出再安装（或手动覆盖）。跳过安装。" >&2
+    echo "⚠️  检测到 Remote Voice 正在运行，已跳过安装（避免覆盖运行中的 App）。" >&2
+    echo "    ⚠️  此时 /Applications 里仍是旧版！请退出 Remote Voice（⌘Q）后重新运行本脚本。" >&2
     exit 0
   fi
   echo "==> 安装到 /Applications"
