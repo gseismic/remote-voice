@@ -175,6 +175,7 @@ class AudioStreamService : Service(), RelayClient.Listener {
             secretHex,
             { h, p -> TrustStore.load(prefs, TrustStore.serverKey(h, p)) },
             relayListener,
+            server.strict,
         )
         client = relay
         clientThread = Thread({ relay.runForever() }, "relay-client").apply {

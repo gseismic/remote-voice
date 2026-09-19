@@ -6,9 +6,13 @@ package com.remotevoice.app
  */
 object ConfigParser {
 
+    /**
+     * @param strict true=rvs://（标准 CA+主机名验证，无 TOFU）；false=rv://（TOFU）
+     */
     data class Parsed(
         val host: String,
         val port: Int,
+        val strict: Boolean = false,
     )
 
     /** 配对码解析结果（扫码配对，设计 docs/design/qr-pairing-20260919-overview.md §2）。 */
@@ -17,13 +21,18 @@ object ConfigParser {
         val port: Int,
         val secret: String,
         val name: String,
+        val strict: Boolean = false,
     )
 
     private const val DEFAULT_PORT = 9432
 
     fun parse(raw: String): Parsed? {
         var value = raw.trim()
-        if (value.startsWith("rv://", ignoreCase = true)) {
+        var strict = false
+        if (value.startsWith("rvs://", ignoreCase = true)) {
+            value = value.substring(6)
+            strict = true
+        } else if (value.startsWith("rv://", ignoreCase = true)) {
             value = value.substring(5)
         }
         if (value.isEmpty() || value.any { it.isWhitespace() }) return null
@@ -32,17 +41,21 @@ object ConfigParser {
         val authority = if (queryIndex < 0) value else value.substring(0, queryIndex)
         if (queryIndex >= 0) return null
         val endpoint = parseAuthority(authority) ?: return null
-        return Parsed(endpoint.first, endpoint.second)
+        return Parsed(endpoint.first, endpoint.second, strict)
     }
 
     /**
-     * 配对码解析：rv://<host>[:<port>]?s=<密码>&n=<设备名>。
+     * 配对码解析：rv[s]://<host>[:<port>]?s=<密码>&n=<设备名>。
      * `s` 必填；`n` 选填（URL 解码，UTF-8）；未知 query 参数忽略。
      * 与 [parse] 分开：手填地址不允许带 query 的既有语义不变。
      */
     fun parsePairing(raw: String): Pairing? {
         var value = raw.trim()
-        if (value.startsWith("rv://", ignoreCase = true)) {
+        var strict = false
+        if (value.startsWith("rvs://", ignoreCase = true)) {
+            value = value.substring(6)
+            strict = true
+        } else if (value.startsWith("rv://", ignoreCase = true)) {
             value = value.substring(5)
         }
         if (value.isEmpty() || value.any { it.isWhitespace() }) return null
@@ -74,13 +87,16 @@ object ConfigParser {
         if (secret.isEmpty()) return null
 
         val endpoint = parseAuthority(authority) ?: return null
-        return Pairing(endpoint.first, endpoint.second, secret, name)
+        return Pairing(endpoint.first, endpoint.second, secret, name, strict)
     }
 
-    /** 将解析结果格式化为不会歧义的服务器地址，尤其是 IPv6。 */
-    fun format(parsed: Parsed): String =
-        if (parsed.host.contains(':')) "[${parsed.host}]:${parsed.port}"
-        else "${parsed.host}:${parsed.port}"
+    /** 将解析结果格式化为不会歧义的服务器地址（rvs:// 需带前缀，否则会退化成 TOFU 模式）。 */
+    fun format(parsed: Parsed): String {
+        val authority =
+            if (parsed.host.contains(':')) "[${parsed.host}]:${parsed.port}"
+            else "${parsed.host}:${parsed.port}"
+        return if (parsed.strict) "rvs://$authority" else authority
+    }
 
     /** 解析域名、IPv4、带括号的 IPv6，以及省略端口的地址。 */
     private fun parseAuthority(authority: String): Pair<String, Int>? {

@@ -13,6 +13,7 @@ import java.net.UnknownHostException
 import java.security.cert.X509Certificate
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLSocket
@@ -34,6 +35,7 @@ class RelayClient(
     private val secretHex: String,
     private val fingerprintFor: (host: String, port: Int) -> String,
     private val listener: Listener,
+    private val strict: Boolean = false,
 ) {
     interface Listener {
         /** 状态文本变化（已本地化，可直接展示）。 */
@@ -101,8 +103,10 @@ class RelayClient(
     private val trusted = HashMap<String, String>()
 
     init {
-        val known = fingerprintFor(host, port).trim().lowercase()
-        if (known.isNotEmpty()) trusted[serverKey()] = known
+        if (!strict) {
+            val known = fingerprintFor(host, port).trim().lowercase()
+            if (known.isNotEmpty()) trusted[serverKey()] = known
+        }
     }
 
     private fun serverKey(): String = TrustStore.serverKey(host, port)
@@ -203,17 +207,21 @@ class RelayClient(
     }
 
     private fun connectOne() {
-        val serverKey = serverKey()
-        val knownFingerprint = trusted[serverKey].orEmpty()
-        // 已知指纹=固定校验；空=TOFU（首次连接自动信任并记录）
-        val tm = if (knownFingerprint.isNotEmpty()) {
-            FingerprintTrustManager(knownFingerprint)
+        val ctx = if (strict) {
+            // rvs:// 标准 TLS：系统 CA 信任 + 握手后主机名校验（设计 tls-ca-mode §4.3）；
+            // 绝不进入 TrustAll/TOFU 分支
+            SSLContext.getInstance("TLS").apply { init(null, null, null) }
         } else {
-            TrustAllTrustManager()
+            val serverKey = serverKey()
+            val knownFingerprint = trusted[serverKey].orEmpty()
+            // 已知指纹=固定校验；空=TOFU（首次连接自动信任并记录）
+            val tm = if (knownFingerprint.isNotEmpty()) {
+                FingerprintTrustManager(knownFingerprint)
+            } else {
+                TrustAllTrustManager()
+            }
+            SSLContext.getInstance("TLS").apply { init(null, arrayOf(tm), null) }
         }
-        val ctx = SSLContext.getInstance("TLS")
-        // 信任根来自指纹而非 CA：跳过默认信任链，由 FingerprintTrustManager 校验
-        ctx.init(null, arrayOf(tm), null)
         listener.onState("连接 $host…")
 
         val raw = Socket()
@@ -249,6 +257,12 @@ class RelayClient(
                 }
                 throw e2
             }
+            // 裸 SSLSocket 不做主机名校验，rvs:// 必须显式补上（设计 tls-ca-mode §7）
+            if (strict && !HttpsURLConnection.getDefaultHostnameVerifier()
+                    .verify(host, sock.session)
+            ) {
+                throw SSLHandshakeException("服务器证书与主机名 $host 不匹配")
+            }
         } finally {
             synchronized(this) {
                 if (connectingSocket === raw) connectingSocket = null
@@ -261,12 +275,12 @@ class RelayClient(
             }
         }
         val sock = connectedSocket ?: throw IOException("TLS 连接未建立")
-        if (knownFingerprint.isEmpty()) {
-            // TOFU：握手后记录实际证书指纹，本 endpoint 后续重连以之校验
+        if (!strict && (trusted[serverKey()] ?: "").isEmpty()) {
+            // TOFU：握手后记录实际证书指纹，本 endpoint 后续重连以之校验（rvs:// 不做）
             val chain = sock.session.peerCertificates
             val fp = FingerprintTrustManager.fingerprintOf((chain[0] as X509Certificate).encoded)
-            trusted[serverKey] = fp
-            listener.onPeerFingerprint(fp, serverKey)
+            trusted[serverKey()] = fp
+            listener.onPeerFingerprint(fp, serverKey())
             Log.i(TAG, "tofu trusted fingerprint=$fp")
         }
         Log.i(TAG, "tls connected ($host)")

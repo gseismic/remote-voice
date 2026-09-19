@@ -199,7 +199,12 @@ impl AppController {
             .map_err(|error| CommandError::new("invalid-server", error.to_string()))?;
         let device = identity::load_or_create()
             .map_err(|error| CommandError::new("device-identity", error.to_string()))?;
-        let fingerprint = config::trusted_fingerprint(&config, &config.server);
+        let strict_tls = config::is_strict_tls(&config.server);
+        let fingerprint = if strict_tls {
+            String::new() // rvs:// 不使用指纹
+        } else {
+            config::trusted_fingerprint(&config, &config.server)
+        };
         let registration = Registration {
             name: state.name.clone(),
             perm_hash: self
@@ -229,6 +234,7 @@ impl AppController {
         let client = RelayClient::new_with_tofu_store(RelayClientOptions {
             server: config.server.clone(),
             fingerprint,
+            strict: strict_tls,
             device_id: device.device_id,
             device_key: device.device_key,
             registration,

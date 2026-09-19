@@ -152,9 +152,17 @@ pub fn save_to(path: &Path, config: &AppConfig) -> Result<(), ConfigError> {
     result.map_err(ConfigError::Io)
 }
 
+/// rvs:// 前缀 = 标准 TLS（系统 CA 链 + 主机名验证，无 TOFU）；rv:// = 现行 TOFU。
+/// 设计：docs/design/tls-ca-mode-20260919-overview.md §3。
+pub fn is_strict_tls(raw: &str) -> bool {
+    raw.trim().to_ascii_lowercase().starts_with("rvs://")
+}
+
 pub fn parse_server(raw: &str) -> Result<(String, u16), ConfigError> {
     let mut value = raw.trim();
-    if let Some(rest) = value.strip_prefix("rv://") {
+    if let Some(rest) = value.strip_prefix("rvs://") {
+        value = rest;
+    } else if let Some(rest) = value.strip_prefix("rv://") {
         value = rest;
     }
     value = value.split('?').next().unwrap_or(value).trim();

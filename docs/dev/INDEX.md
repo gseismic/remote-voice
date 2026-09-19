@@ -200,3 +200,16 @@
   遗留：永久密码 QR 需 Rust 命令读 Keychain（前端无明文），下次 Mac 构建时做。
   文件：PLAN-023-qr-pairing.md / PLAN-023-qr-pairing-OUTCOME.md，
   设计 docs/design/qr-pairing-20260919-overview.md。
+
+- **2026-09-19 12:00** | PLAN-024 TLS CA 模式（rvs://）——server 加载真证书、客户端标准 HTTPS 验证
+  摘要：用户有域名，公网部署走 Let's Encrypt。语义：rvs://=标准 TLS（系统 CA+主机名验证，
+  无 TOFU），rv://=现行 TOFU 不变，两者并存（设计文档含方案比较与 2 轮自查）。server 增
+  -cert/-key（PEM，LoadX509KeyPair，零新依赖）；Mac 增 webpki-roots 0.26 标准验证分支
+  （strict 时跳过指纹逻辑，cargo check+21 测试本机过）；Android strict=默认 SSLContext+
+  握手后 HostnameVerifier 补校验（裸 SSLSocket 不自带），parse/format/parsePairing 全链
+  保留 rvs:// 前缀。验证：openssl 正负例、fakephone 混连回归、真机「rvs://+公网 TLS 连通 /
+  rvs://+自签正确拒绝 / rv://+自签回归」三例、pnpm build、assembleDebug。未真机验证：
+  rvs:// 配对码落地（图案锁阻挡，核心链路已被用例 2 覆盖）、LE 实连（部署后自然验收）。
+  部署 runbook（certbot+systemd）在 OUTCOME §部署 runbook。
+  文件：PLAN-024-tls-ca-mode.md / PLAN-024-tls-ca-mode-OUTCOME.md，
+  设计 docs/design/tls-ca-mode-20260919-overview.md。

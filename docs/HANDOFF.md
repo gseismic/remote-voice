@@ -117,6 +117,11 @@ Linux 服务器中继，写入 Mac 的 BlackHole 虚拟声卡**，使任意 Mac 
   Keychain）；Android「＋ 添加→扫码配对」解析落地（服务器切换+添加+自动重连），
   zxing:core 3.5.3 为唯一 maven 依赖（零依赖约束修订，走腾讯 maven 镜像——开发机直连
   Maven Central 不通）
+- TLS 信任双模式（PLAN-024）：`rvs://host:port`=标准 TLS（系统 CA+主机名验证，无 TOFU，
+  公网域名部署用）；`rv://`=自签 TOFU 不变。server `-cert/-key` 加载 LE 证书（缺省自签）。
+  公网部署：域名 A 记录 → certbot certonly → systemd ExecStart 加 -cert/-key +
+  renew deploy-hook 重启 → 客户端填 rvs://域名:9432（端口默认 9432，按 server 实际 -addr）。
+  Mac 标准验证根来自 webpki-roots（新 Rust 依赖，Mac 构建时 cargo fetch）
 
 - 认证：v3 Mac 设备身份（server 存 SHA-256(device_key)）→ REGISTER 秘密哈希；
   手机只带规范化秘密的 SHA-256 hex

@@ -132,6 +132,8 @@ pub type TofuStoreHandler =
 pub(crate) struct RelayClientOptions {
     pub(crate) server: String,
     pub(crate) fingerprint: String,
+    /// rvs:// 标准 TLS（CA 链+主机名验证，无 TOFU）；false = rv:// 自签 TOFU
+    pub(crate) strict: bool,
     pub(crate) device_id: String,
     pub(crate) device_key: String,
     pub(crate) registration: Registration,
@@ -146,6 +148,7 @@ pub struct RelayClient {
     device_id: String,
     device_key: String,
     initial_fingerprint: Option<String>,
+    strict: bool,
     registration: Arc<RwLock<Registration>>,
     sink: Arc<dyn AudioSink>,
     audio_error: Mutex<AudioErrorLatch>,
@@ -170,6 +173,7 @@ impl RelayClient {
         Self::new_with_tofu_store(RelayClientOptions {
             server,
             fingerprint,
+            strict: false,
             device_id,
             device_key,
             registration,
@@ -186,7 +190,12 @@ impl RelayClient {
             server: options.server,
             device_id: options.device_id,
             device_key: options.device_key,
-            initial_fingerprint: (!options.fingerprint.is_empty()).then_some(options.fingerprint),
+            initial_fingerprint: if options.strict {
+                None // rvs:// 不使用任何指纹
+            } else {
+                (!options.fingerprint.is_empty()).then_some(options.fingerprint)
+            },
+            strict: options.strict,
             registration: Arc::new(RwLock::new(options.registration)),
             sink: options.sink,
             audio_error: Mutex::new(AudioErrorLatch::default()),
@@ -322,7 +331,7 @@ impl RelayClient {
         };
         tcp.set_nodelay(true)
             .map_err(|error| RelayFailure::Network(error.to_string()))?;
-        let connector = TlsConnector::from(Arc::new(tls_config()));
+        let connector = TlsConnector::from(Arc::new(tls_config(self.strict)));
         let server_name = ServerName::try_from(host.clone()).map_err(|_| RelayFailure::Fatal {
             code: "invalid-server".to_string(),
             message: "服务器主机名无效".to_string(),
@@ -338,28 +347,33 @@ impl RelayClient {
             }
         };
 
-        let actual_fingerprint = certificate_fingerprint(&tls)?;
-        if let Some(expected) = fingerprint.as_deref() {
-            if actual_fingerprint != expected {
-                return Err(RelayFailure::Fatal {
-                    code: "tofu-mismatch".to_string(),
-                    message: "服务器身份与已保存记录不符，请检查服务端配置或清除本机信任记录后重试"
-                        .to_string(),
-                });
-            }
+        if self.strict {
+            // rvs://：rustls 已完成 CA 链 + 主机名验证（ServerName 即连接主机名），
+            // 无指纹比对/记录；证书更换由 CA 体系兜底
         } else {
-            let key = config::server_key(&self.server).map_err(|error| RelayFailure::Fatal {
-                code: "invalid-server".to_string(),
-                message: error.to_string(),
-            })?;
-            (self.tofu_store)(actual_fingerprint.clone(), key.clone()).map_err(|message| {
-                RelayFailure::Fatal {
-                    code: "tofu-store".to_string(),
-                    message: format!("无法保存服务器信任记录: {message}"),
+            let actual_fingerprint = certificate_fingerprint(&tls)?;
+            if let Some(expected) = fingerprint.as_deref() {
+                if actual_fingerprint != expected {
+                    return Err(RelayFailure::Fatal {
+                        code: "tofu-mismatch".to_string(),
+                        message: "服务器身份与已保存记录不符，请检查服务端配置或清除本机信任记录后重试"
+                            .to_string(),
+                    });
                 }
-            })?;
-            *fingerprint = Some(actual_fingerprint.clone());
-            (self.events)(RelayEvent::TofuEstablished);
+            } else {
+                let key = config::server_key(&self.server).map_err(|error| RelayFailure::Fatal {
+                    code: "invalid-server".to_string(),
+                    message: error.to_string(),
+                })?;
+                (self.tofu_store)(actual_fingerprint.clone(), key.clone()).map_err(|message| {
+                    RelayFailure::Fatal {
+                        code: "tofu-store".to_string(),
+                        message: format!("无法保存服务器信任记录: {message}"),
+                    }
+                })?;
+                *fingerprint = Some(actual_fingerprint.clone());
+                (self.events)(RelayEvent::TofuEstablished);
+            }
         }
 
         let (reader, mut writer) = split(tls);
@@ -650,11 +664,20 @@ fn certificate_fingerprint(tls: &TlsStream<TcpStream>) -> Result<String, RelayFa
     Ok(hex::encode(Sha256::digest(cert.as_ref())))
 }
 
-fn tls_config() -> ClientConfig {
-    ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(TofuVerifier))
-        .with_no_client_auth()
+fn tls_config(strict: bool) -> ClientConfig {
+    if strict {
+        // rvs:// 标准 TLS：Mozilla 根 bundle（含 Let's Encrypt）+ 主机名验证
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth()
+    } else {
+        ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(TofuVerifier))
+            .with_no_client_auth()
+    }
 }
 
 /// 证书链由应用层 TOFU 校验；此 verifier 只让自签证书完成 TLS 握手。
@@ -997,6 +1020,7 @@ mod tests {
         let client = RelayClient::new_with_tofu_store(RelayClientOptions {
             server: addr.to_string(),
             fingerprint: String::new(),
+            strict: false,
             device_id: "integration-mac".to_string(),
             device_key: "a".repeat(64),
             registration: Registration {

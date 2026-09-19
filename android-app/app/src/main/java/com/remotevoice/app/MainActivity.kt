@@ -297,7 +297,7 @@ class MainActivity : Activity() {
         // 服务器地址与当前不同则切换（扫码即把 Mac 的 relay 地址带给本机）
         val current = prefs.getString(KEY_SERVER, null)?.takeIf { it.isNotBlank() }
             ?: AudioStreamService.DEFAULT_SERVER
-        val target = ConfigParser.format(ConfigParser.Parsed(pairing.host, pairing.port))
+        val target = ConfigParser.format(ConfigParser.Parsed(pairing.host, pairing.port, pairing.strict))
         if (current != target) {
             prefs.edit().putString(KEY_SERVER, target).apply()
             Toast.makeText(this, "服务器已切换为 $target", Toast.LENGTH_LONG).show()
