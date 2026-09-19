@@ -58,19 +58,22 @@ func main() {
 			log.Fatalf("初始化证书失败: %v", err)
 		}
 	}
-	fmt.Println("==================================================")
-	fmt.Printf("服务端证书指纹 (SHA-256 hex，仅供诊断；rv:// 客户端首次连接自动信任):\n%s\n", fingerprint)
-	if *certFile != "" {
-		fmt.Println("已加载外部证书：rvs:// 客户端按标准 CA+主机名验证")
-	}
-
-	// 打印手机端可粘贴的一行配置（host 为空时用占位符提示）。
-	// 协议 v3：客户端只需服务器地址，证书身份由内部 TOFU 管理。
+	// 启动横幅（协议 v4 语义）：客户端只需「服务器地址 + 服务器密码」，
+	// 证书由客户端自动处理；指纹仅作诊断，不构成任何客户端配置项。
 	hostPart, portPart, _ := net.SplitHostPort(*addr)
 	if hostPart == "" {
 		hostPart = "<服务器IP>"
 	}
-	fmt.Printf("客户端配置串（App 设置 → 导入配置串）:\n  rv://%s:%s\n", hostPart, portPart)
+	fmt.Println("==================================================")
+	fmt.Println("客户端接入（共两样，别无其他）:")
+	fmt.Printf("  1) 服务器地址: %s:%s   ← 填在 Mac 客户端「连接设置」；手机扫 Mac 二维码或手动添加\n", hostPart, portPart)
+	fmt.Println("  2) 服务器密码: 在 Mac 客户端「连接设置 → 服务器密码」设置（≥12 位），手机输入同一密码")
+	if *certFile != "" {
+		fmt.Println("证书: 外部证书（客户端按标准 CA+主机名验证，自动处理）")
+	} else {
+		fmt.Println("证书: 自签（客户端首次连接自动信任并固定，自动处理，无需任何配置）")
+		fmt.Printf("  诊断指纹 (SHA-256，仅排障用，客户端不消费): %s\n", fingerprint)
+	}
 	fmt.Println("==================================================")
 
 	if *pprofAddr != "" {
