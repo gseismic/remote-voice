@@ -148,8 +148,8 @@ ssh user@<服务器IP> chmod +x /opt/remote-voice/server-linux
 |---|---|---|
 | `-addr :9432` | TLS 监听地址。`:9432` 表示监听**所有网卡**的 9432 端口；只想内网测试可用 `127.0.0.1:9432` | `main.go` |
 | `-data ./data` | 证书、私钥和设备身份的存放目录，不存在会自动创建 | `main.go`、`selfcert.go`、`device_registry.go` |
-| `-regkeyfile ./regkey.txt` | 可选：启用旧 v2 Mac 兼容认证（见 §4） | `main.go` |
 | `-pprof 127.0.0.1:6060` | （可选）开启 Go 性能分析端点，排查性能问题时才需要 | `main.go` |
+| `-cert/-key` | （可选）外部证书 PEM（如 Let's Encrypt）；不提供则用 data 目录自签证书（10 年有效） | `main.go` |
 
 启动成功会打印 `server 启动，监听 :9432`。停止：`Ctrl+C`
 （程序捕获 SIGINT/SIGTERM 后优雅关闭）。
