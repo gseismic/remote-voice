@@ -8,6 +8,8 @@ use crate::keyinject::{
 use crate::relay::{Registration, RelayClient, RelayClientOptions, RelayEvent};
 use crate::secrets;
 use crate::storage::SystemKeychain;
+#[cfg(target_os = "macos")]
+use crate::tray;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -275,6 +277,16 @@ impl AppController {
                 let _ = thread.join();
             }
         }
+    }
+
+    fn shutdown(&self) {
+        // 先解绑界面，再等待连接结束。最后兜底释放可能仍处于按下状态的 Fn。
+        if let Ok(mut app) = self.app.lock() {
+            *app = None;
+        }
+        let _lifecycle_guard = self.lifecycle_lock.lock().ok();
+        self.stop_client();
+        self.injector.release();
     }
 
     #[allow(clippy::too_many_arguments)] // Tauri command 参数须扁平供前端按名调用
@@ -697,15 +709,14 @@ impl AppController {
         }
         let snapshot = state.clone();
         drop(state);
-        self.emit(snapshot);
-    }
-
-    fn emit(&self, state: AppState) {
-        if let Ok(app) = self.app.lock() {
-            if let Some(app) = app.as_ref() {
-                let _ = app.emit("app-state", state);
-            }
+        let Some(app) = self.app.lock().ok().and_then(|app| app.clone()) else {
+            return;
+        };
+        #[cfg(target_os = "macos")]
+        if tray::status_text(&before) != tray::status_text(&snapshot) {
+            tray::refresh_status(&app);
         }
+        let _ = app.emit("app-state", snapshot);
     }
 }
 
@@ -901,10 +912,14 @@ pub fn run_tauri() {
         }
     };
     let setup_controller = Arc::clone(&controller);
-    let run = tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(controller)
         .setup(move |app| {
             setup_controller.attach_app(app.handle().clone());
+            #[cfg(target_os = "macos")]
+            if let Err(error) = tray::setup(app) {
+                setup_controller.add_event("warning", format!("菜单栏入口创建失败 · {error}"));
+            }
             // 物理 Fn 抬起即可手动放下悬空的模拟 Fn；失败仅提示（界面按钮仍可用）
             if let Err(message) = install_fn_release_tap(Arc::clone(&setup_controller.injector)) {
                 setup_controller.add_event("warning", message);
@@ -918,10 +933,15 @@ pub fn run_tauri() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if matches!(event, WindowEvent::Focused(true)) {
-                window.state::<Arc<AppController>>().refresh_fn_accessibility();
+        .on_window_event(|window, event| match event {
+            WindowEvent::Focused(true) => {
+                window
+                    .state::<Arc<AppController>>()
+                    .refresh_fn_accessibility();
             }
+            #[cfg(target_os = "macos")]
+            WindowEvent::CloseRequested { api, .. } => tray::hide_on_close(window, api),
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
@@ -938,9 +958,15 @@ pub fn run_tauri() {
             request_fn_accessibility,
             open_fn_accessibility
         ])
-        .run(tauri::generate_context!());
-    if let Err(error) = run {
-        eprintln!("Tauri 运行失败: {error}");
+        .build(tauri::generate_context!());
+    match app {
+        Ok(app) => app.run(|app, event| match event {
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => tray::show_main_window(app),
+            tauri::RunEvent::Exit => app.state::<Arc<AppController>>().shutdown(),
+            _ => {}
+        }),
+        Err(error) => eprintln!("Tauri 运行失败: {error}"),
     }
 }
 

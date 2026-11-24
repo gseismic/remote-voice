@@ -31,6 +31,7 @@ webpki-roots = "0.26"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10.1"
+tauri = { version = "2.11.5", features = ["tray-icon"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

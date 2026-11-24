@@ -319,3 +319,6 @@
 
 - **2026-11-24 19:43** | [PLAN-041-android-busy-reconnect.md](PLAN-041-android-busy-reconnect.md) → [PLAN-041-android-busy-reconnect-OUTCOME.md](PLAN-041-android-busy-reconnect-OUTCOME.md)
   摘要：Android 将暂时占用视为等待状态，旧桥释放后自动或单次手动恢复，其他桥接可继续传音。最新 APK 已安装到 Redmi 并更新下载。公网复测 Mac 重启自动接回、Fn 按下与松开、BlackHole 电平和真机扫码往返均通过。
+
+- **2026-11-25 01:36** | [PLAN-042-macos-menu-bar.md](PLAN-042-macos-menu-bar.md) → [PLAN-042-macos-menu-bar-OUTCOME.md](PLAN-042-macos-menu-bar-OUTCOME.md)
+  Mac 菜单栏新增状态、窗口恢复及退出操作。真机复测关闭窗口后仍能收到手机 PTT 状态，测试音频到达 BlackHole。菜单可恢复窗口，退出后中继确认客户端下线。
