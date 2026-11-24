@@ -325,3 +325,6 @@
 
 - **2026-11-25 01:48** | [PLAN-043-deploy-macos-menu-bar.md](PLAN-043-deploy-macos-menu-bar.md) → [PLAN-043-deploy-macos-menu-bar-OUTCOME.md](PLAN-043-deploy-macos-menu-bar-OUTCOME.md)
   已在目标 Mac 安装菜单栏版本并备份原包。正式版复测关闭后仍在线，菜单可以恢复窗口。新版已向 macOS 请求 Fn 联动的辅助功能授权。
+
+- **2026-11-25 01:58** | [PLAN-044-macos-tray-hide-dock.md](PLAN-044-macos-tray-hide-dock.md) → [PLAN-044-macos-tray-hide-dock-OUTCOME.md](PLAN-044-macos-tray-hide-dock-OUTCOME.md)
+  点击关闭时一并收起 Dock 运行图标，从菜单栏恢复窗口时再次显示。修复已安装到目标 Mac，快速恢复再关闭后 Dock 图标消失，后台中继保持在线。

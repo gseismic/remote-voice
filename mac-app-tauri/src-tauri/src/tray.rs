@@ -2,7 +2,7 @@ use crate::controller::{AppController, AppState};
 use std::sync::Arc;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{App, AppHandle, CloseRequestApi, Manager, Window, Wry};
+use tauri::{ActivationPolicy, App, AppHandle, CloseRequestApi, Manager, Window, Wry};
 
 const MAIN_WINDOW: &str = "main";
 const SHOW_WINDOW: &str = "tray-show-window";
@@ -41,13 +41,17 @@ pub(super) fn hide_on_close(window: &Window, api: &CloseRequestApi) {
         return;
     }
     match window.hide() {
-        Ok(()) => api.prevent_close(),
+        Ok(()) => {
+            api.prevent_close();
+            set_activation_policy(window.app_handle(), ActivationPolicy::Accessory);
+        }
         Err(error) => eprintln!("收起主窗口失败：{error}"),
     }
 }
 
 pub(super) fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        set_activation_policy(app, ActivationPolicy::Regular);
         let result = window
             .unminimize()
             .and_then(|()| window.show())
@@ -55,6 +59,12 @@ pub(super) fn show_main_window(app: &AppHandle) {
         if let Err(error) = result {
             eprintln!("显示主窗口失败：{error}");
         }
+    }
+}
+
+fn set_activation_policy(app: &AppHandle, policy: ActivationPolicy) {
+    if let Err(error) = app.set_activation_policy(policy) {
+        eprintln!("切换 Dock 显示状态失败 · {error}");
     }
 }
 

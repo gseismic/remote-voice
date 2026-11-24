@@ -2,7 +2,7 @@
 
 用户在 Mac 上使用其他应用时，Remote Voice 需要持续接收手机音频和按住说话事件。关闭主窗口应能收起界面，菜单栏应提供查看状态、回到主窗口和退出应用的入口。
 
-现在主窗口由 Tauri 配置创建，中继线程由 `AppController` 管理。窗口事件只在获得焦点时刷新 Fn 授权状态，最后一个窗口关闭时由 Tauri 默认结束进程。 [窗口配置](../../mac-app-tauri/src-tauri/tauri.conf.json) · [应用启动](../../mac-app-tauri/src-tauri/src/controller.rs)
+主窗口由 Tauri 配置创建，中继线程由 `AppController` 管理。窗口获得焦点时刷新 Fn 授权状态。 [窗口配置](../../mac-app-tauri/src-tauri/tauri.conf.json) · [应用启动](../../mac-app-tauri/src-tauri/src/controller.rs)
 
 | 方案 | 使用体验与实现成本 |
 | --- | --- |
@@ -10,6 +10,8 @@
 | 关闭时销毁窗口，打开时重建 | 可以释放 WebView 占用的资源。需要接管最后一个窗口关闭后的进程生命周期，重新加载界面并恢复用户正在操作的内容。 |
 | 启动为仅菜单栏应用 | 桌面上只显示菜单栏入口。首次配对、Fn 授权和日常从 Dock 切换应用都需要新的引导。 |
 
-采用隐藏现有窗口的方案。应用启动时显示主窗口，Dock 保留应用入口。在菜单栏点击麦克风图标，菜单首项显示当前状态，下面提供「显示主窗口」和「退出 Remote Voice」。关闭窗口后仍可通过菜单或 Dock 恢复同一个窗口，退出时结束连接并释放模拟 Fn。
+采用隐藏现有窗口的方案。应用启动时显示主窗口和 Dock 运行图标。在菜单栏点击麦克风图标，菜单首项显示当前状态，下面提供「显示主窗口」和「退出 Remote Voice」。关闭窗口后从菜单恢复同一个窗口，退出时结束连接并释放模拟 Fn。
 
 菜单状态取自控制器的连接状态、手机是否正在说话和音频输出错误。桥接期间优先显示音频输出异常，其次显示正在说话或手机已连接。更新由主线程读取最新状态后应用，音频统计变化无需刷新菜单。菜单栏入口初始化成功后才接管关闭窗口的动作。 [Tauri 系统托盘](https://v2.tauri.app/learn/system-tray/)
+
+窗口收起时切换到 AppKit 的 `Accessory` 应用激活策略，恢复窗口时先切回 `Regular`。固定使用 `Accessory` 会在正常打开窗口时也隐藏 Dock，影响启动和前台使用。锁定版本的 `set_dock_visibility` 经 Tao 调用系统接口，恢复后立即关闭时可能跳过隐藏请求。切换激活策略能让原有两个窗口入口直接同步 Dock 显示。 [Tauri AppHandle](https://docs.rs/tauri/latest/x86_64-apple-darwin/tauri/struct.AppHandle.html#method.set_activation_policy) · [AppKit Accessory](https://developer.apple.com/documentation/appkit/nsapplication/activationpolicy-swift.enum/accessory)
