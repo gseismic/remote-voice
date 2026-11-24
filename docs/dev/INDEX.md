@@ -322,3 +322,6 @@
 
 - **2026-11-25 01:36** | [PLAN-042-macos-menu-bar.md](PLAN-042-macos-menu-bar.md) → [PLAN-042-macos-menu-bar-OUTCOME.md](PLAN-042-macos-menu-bar-OUTCOME.md)
   Mac 菜单栏新增状态、窗口恢复及退出操作。真机复测关闭窗口后仍能收到手机 PTT 状态，测试音频到达 BlackHole。菜单可恢复窗口，退出后中继确认客户端下线。
+
+- **2026-11-25 01:48** | [PLAN-043-deploy-macos-menu-bar.md](PLAN-043-deploy-macos-menu-bar.md) → [PLAN-043-deploy-macos-menu-bar-OUTCOME.md](PLAN-043-deploy-macos-menu-bar-OUTCOME.md)
+  已在目标 Mac 安装菜单栏版本并备份原包。正式版复测关闭后仍在线，菜单可以恢复窗口。新版已向 macOS 请求 Fn 联动的辅助功能授权。
