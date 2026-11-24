@@ -289,3 +289,6 @@
 
 - **2026-11-24 11:54** | [PLAN-031-android-mac-joint-test.md](PLAN-031-android-mac-joint-test.md) → [PLAN-031-android-mac-joint-test-OUTCOME.md](PLAN-031-android-mac-joint-test-OUTCOME.md)
   摘要：完成 debug APK 重建、签名验证，以及目标 Mac 的注册、桥接和 BlackHole 收音验证。模拟手机发送 649 帧，BlackHole 输入峰值 `0.244140`，断开后回到零。已验证局域网登录与目录查询、APK 下载和配对码。Android USB 枚举仅有 MTP 接口，真机配对和 PTT 仍待验证。
+
+- **2026-11-24 12:05** | [PLAN-032-public-relay-alternate-port.md](PLAN-032-public-relay-alternate-port.md) → [PLAN-032-public-relay-alternate-port-OUTCOME.md](PLAN-032-public-relay-alternate-port-OUTCOME.md)
+  摘要：公网 `9432` 和 `8000–8009` 探测均超时。空闲 `8001` 的临时 v4 中继在云内完成 TLS 握手，公网探测的 SYN 未到云主机网卡，SSH 对照包可达。已停止临时实例并复核原中继运行，公网联测等待 UCloud 外网入站规则。
