@@ -8,6 +8,8 @@
     <string name="ptt_hint">按住 说话\nHOLD TO TALK</string>
     <string name="ptt_sub">HOLD TO TALK</string>
     <string name="status_default">未启动 · 点按连接</string>
+    <string name="status_unpaired">未配对 · 点按扫码</string>
+    <string name="ptt_pairing_required">请先扫描 Mac 的配对码</string>
     <string name="err_no_mic_perm">未授予麦克风权限，无法推流</string>
     <string name="service_started">连接中…</string>
     <string name="toast_stopped">已停止 · 点按状态胶囊恢复</string>

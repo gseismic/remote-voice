@@ -137,10 +137,14 @@ class MainActivity : Activity() {
                     pttBtn.isPressed = true
                     val svc = AudioStreamService.instance
                     if (svc == null) {
-                        if (AudioStreamService.Status.state != StatusState.ERROR) {
-                            maybeAutoStart()
+                        if (hasRelayPassword()) {
+                            if (AudioStreamService.Status.state != StatusState.ERROR) {
+                                maybeAutoStart()
+                            }
+                            Toast.makeText(this, "连接中，稍候再按住说话", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(this, R.string.ptt_pairing_required, Toast.LENGTH_SHORT).show()
                         }
-                        Toast.makeText(this, "连接中，稍候再按住说话", Toast.LENGTH_SHORT).show()
                     } else {
                         svc.setTalking(true)
                     }
@@ -163,13 +167,18 @@ class MainActivity : Activity() {
         return s.address()
     }
 
+    private fun hasRelayPassword(store: ServerStore = ServerStore(this)): Boolean =
+        !store.active()?.password.isNullOrBlank()
+
     private fun macName(deviceId: String): String =
         ServerStore(this).macCache().firstOrNull { it.deviceId == deviceId }?.name
             ?.ifBlank { deviceId.take(10) } ?: deviceId.take(10)
 
     private fun render() {
         val st = AudioStreamService.Status
-        val macs = ServerStore(this).macCache()
+        val store = ServerStore(this)
+        val macs = store.macCache()
+        val unpaired = AudioStreamService.instance == null && !hasRelayPassword(store)
         if (st.macsRevision != lastMacsRevision) {
             lastMacsRevision = st.macsRevision
             renderMacs()
@@ -185,6 +194,7 @@ class MainActivity : Activity() {
 
         // 状态胶囊：服务器连通标记（登录会话）为主行，副行显示当前 Mac 状态
         val (main, sub, color) = when {
+            unpaired -> Triple(getString(R.string.status_unpaired), serverDisplay(), COLOR_GRAY)
             st.state == StatusState.ERROR ->
                 Triple("连接失败 · 点按重试", serverDisplay(), COLOR_RED)
             disconnected -> Triple("连接已断开 · 点按重试", serverDisplay(), COLOR_AMBER)
@@ -218,11 +228,14 @@ class MainActivity : Activity() {
         led.background.mutate().setTint(color)
 
         // 中央态区
-        val showBig = disconnected || st.state == StatusState.STOPPED || st.state == StatusState.WAIT_PEER ||
+        val showBig = unpaired || disconnected || st.state == StatusState.STOPPED || st.state == StatusState.WAIT_PEER ||
             (st.serverOnline && st.activeMacId.isEmpty())
         bigState.visibility = if (showBig) View.VISIBLE else View.GONE
         if (showBig) {
-            if (waitingForMac || noMacOnline) {
+            if (unpaired) {
+                bigT1.text = "扫码连接 Mac"
+                bigT2.text = "打开 Mac 端 Remote Voice，在首页点「二维码」"
+            } else if (waitingForMac || noMacOnline) {
                 bigT1.text = getString(R.string.big_wait_t1)
                 bigT2.text = MAC_START_HINT
             } else if (st.activeMacId.isEmpty()) {
@@ -235,10 +248,11 @@ class MainActivity : Activity() {
         }
         spin.visibility =
             if (!st.serverOnline && !st.serverNeedsRetry && AudioStreamService.instance != null) View.VISIBLE else View.GONE
-        errPanel.visibility = if (st.state == StatusState.ERROR) View.VISIBLE else View.GONE
-        if (st.state == StatusState.ERROR) textErr.text = st.text
+        val showError = !unpaired && st.state == StatusState.ERROR
+        errPanel.visibility = if (showError) View.VISIBLE else View.GONE
+        if (showError) textErr.text = st.text
         // 证书更换态：重试按钮换成「重新信任并重连」（普通重试无法自愈，必须清记录）
-        val certPending = st.state == StatusState.ERROR && st.certChangePending
+        val certPending = showError && st.certChangePending
         btnRetrust.visibility = if (certPending) View.VISIBLE else View.GONE
         btnRetry.visibility = if (certPending) View.GONE else View.VISIBLE
 
@@ -259,7 +273,7 @@ class MainActivity : Activity() {
     private fun renderMacs() {
         macsRow.removeAllViews()
         val store = ServerStore(this)
-        val macs = store.macCache()
+        val macs = if (hasRelayPassword(store)) store.macCache() else emptyList()
         val st = AudioStreamService.Status
         val states = st.bridgeStates
         for (m in macs) {
@@ -338,7 +352,12 @@ class MainActivity : Activity() {
     private fun setActiveMac(deviceId: String) {
         prefs.edit().putBoolean(AudioStreamService.KEY_USER_STOPPED, false).apply()
         if (AudioStreamService.instance == null) {
-            ServerStore(this).selectMac(deviceId)
+            val store = ServerStore(this)
+            if (!hasRelayPassword(store)) {
+                openPairingScanner()
+                return
+            }
+            store.selectMac(deviceId)
             maybeAutoStart(force = true)
             return
         }
@@ -359,8 +378,12 @@ class MainActivity : Activity() {
 
     private fun toggleService() {
         val st = AudioStreamService.Status
-        if (st.certChangePending) return
         val running = AudioStreamService.instance != null
+        if (!running && !hasRelayPassword()) {
+            openPairingScanner()
+            return
+        }
+        if (st.certChangePending) return
         if (!running) {
             prefs.edit().putBoolean(AudioStreamService.KEY_USER_STOPPED, false).apply()
             maybeAutoStart(force = true)
@@ -430,11 +453,15 @@ class MainActivity : Activity() {
             }
             .setNeutralButton("扫码配对") { d, _ ->
                 d.dismiss()
-                @Suppress("DEPRECATION") // 零 androidx：用经典 startActivityForResult（设计 §4.1）
-                startActivityForResult(Intent(this, ScanActivity::class.java), REQ_SCAN)
+                openPairingScanner()
             }
             .setNegativeButton("取消", null)
             .show()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun openPairingScanner() {
+        startActivityForResult(Intent(this, ScanActivity::class.java), REQ_SCAN)
     }
 
     /** 扫码后保存连接资料与设备 ID，启动标准的目录与桥接流程。 */
@@ -497,7 +524,7 @@ class MainActivity : Activity() {
     private fun maybeAutoStart(force: Boolean = false) {
         if (AudioStreamService.instance != null) return
         if (prefs.getBoolean(AudioStreamService.KEY_USER_STOPPED, false)) return
-        if (ServerStore(this).active()?.password.isNullOrBlank()) return
+        if (!hasRelayPassword()) return
         if (!force && AudioStreamService.Status.state == StatusState.ERROR) return
         if (force) AudioStreamService.prepareRetry()
         requestPermissionsThenStart()

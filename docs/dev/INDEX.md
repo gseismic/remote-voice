@@ -307,3 +307,6 @@
 
 - **2026-11-24 15:58** | [PLAN-037-public-android-device-validation.md](PLAN-037-public-android-device-validation.md) → [PLAN-037-public-android-device-validation-OUTCOME.md](PLAN-037-public-android-device-validation-OUTCOME.md)
   摘要：修复 Android 旧版本配对解码 API 和可选相机声明。最终 APK 在 Android 35 模拟器通过公网点选与粘贴配对，已更新下载。真机 USB 传输与 Mac 当前签名的辅助功能授权仍待现场验收。
+
+- **2026-11-24 16:32** | [PLAN-038-android-unpaired-connection-entry.md](PLAN-038-android-unpaired-connection-entry.md) → [PLAN-038-android-unpaired-connection-entry-OUTCOME.md](PLAN-038-android-unpaired-connection-entry-OUTCOME.md)
+  摘要：真机确认只保存地址时点按无登录，修复为未配对状态直达扫码。光学扫码及 Android 12 解码回归通过。Redmi 完成公网配对、覆盖安装、手动与自动重连和传音。macOS 误选旧备份授权已定位，备份归档后等待正式安装包的授权。
