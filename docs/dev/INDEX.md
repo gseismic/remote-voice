@@ -286,3 +286,6 @@
 
 - **2026-09-19 22:32** | [PLAN-030-cert-recovery-local.md](PLAN-030-cert-recovery-local.md) → [PLAN-030-cert-recovery-local-OUTCOME.md](PLAN-030-cert-recovery-local-OUTCOME.md)
   摘要：完成本机证书恢复链路验收。执行 `scripts/build-mac.sh` 将包含弹层按钮绑定的当前源码安装到 `/Applications`；本机 server 固定使用 `server/data`，停止/重启前后证书指纹均为 `1f824482…`；临时恢复旧 pin 后实机验证「暂不连接」与「重新信任并连接」，后者完成清 pin、重连、TLS/TOFU、Mac 鉴权和 REGISTER。当前本机配置切换为 `127.0.0.1:9432` 并保存当前 pin，`.103` 不可达旧记录保留。验证：Go vet/race、Rust 26 测试、pnpm build、macOS release build/install、git diff --check 全部通过。
+
+- **2026-11-24 11:54** | [PLAN-031-android-mac-joint-test.md](PLAN-031-android-mac-joint-test.md) → [PLAN-031-android-mac-joint-test-OUTCOME.md](PLAN-031-android-mac-joint-test-OUTCOME.md)
+  摘要：完成 debug APK 重建、签名验证，以及目标 Mac 的注册、桥接和 BlackHole 收音验证。模拟手机发送 649 帧，BlackHole 输入峰值 `0.244140`，断开后回到零。已验证局域网登录与目录查询、APK 下载和配对码。Android USB 枚举仅有 MTP 接口，真机配对和 PTT 仍待验证。
