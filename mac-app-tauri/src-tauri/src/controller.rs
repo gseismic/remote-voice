@@ -174,7 +174,7 @@ impl AppController {
             .map_err(|error| CommandError::new("device-identity", error.to_string()))?;
         let tls_mode = config::tls_mode(&config.server);
         let fingerprint = match tls_mode {
-            config::TlsMode::Strict => String::new(), // 标准验证不使用指纹
+            config::TlsMode::Strict | config::TlsMode::Https => String::new(),
             _ => config::trusted_fingerprint(&config, &config.server),
         };
         let registration = Registration {
@@ -403,28 +403,29 @@ impl AppController {
         self.snapshot()
     }
 
-    /// 手机扫码配对载荷：rv://<host>[:<port>]?s=<服务器密码>&n=<设备名>。
+    /// 手机扫码配对载荷包含中继地址、密码和本机持久设备 ID。
     /// 需要密码原文，只在用户显式出示二维码时从 Keychain 读取。
     pub fn get_pairing_payload(&self) -> Result<String, CommandError> {
         let password = secrets::load_system(&self.config_dir).ok_or_else(|| {
             CommandError::new("password-missing", "请先在连接设置里设置服务器密码")
         })?;
         let state = self.snapshot()?;
-        let authority = state
-            .server
-            .trim()
-            .split('?')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if authority.is_empty() {
-            return Err(CommandError::new(
-                "server-missing",
-                "请先在连接设置里填写服务器地址",
-            ));
-        }
-        let mut payload = format!("rv://{authority}?s={}", urlencode(&password));
+        let authority = config::server_key(&state.server)
+            .map_err(|error| CommandError::new("invalid-server", error.to_string()))?;
+        let device = identity::load_or_create()
+            .map_err(|error| CommandError::new("device-identity", error.to_string()))?;
+        // HTTPS 配对码使用专用 URI，避免系统相机将密码作为浏览器 URL 发出。
+        let scheme = match config::tls_mode(&state.server) {
+            config::TlsMode::Https => "rvh://",
+            config::TlsMode::Strict => "rvs://",
+            config::TlsMode::Tofu => "rv://",
+            config::TlsMode::Auto => "",
+        };
+        let mut payload = format!(
+            "{scheme}{authority}?s={}&d={}",
+            urlencode(&password),
+            urlencode(&device.device_id),
+        );
         if !state.name.trim().is_empty() {
             payload.push_str("&n=");
             payload.push_str(&urlencode(state.name.trim()));

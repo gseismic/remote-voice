@@ -160,7 +160,8 @@ class AudioStreamService : Service() {
 
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         pttHeld = false
-        val server = ServerStore(this).active()
+        val store = ServerStore(this)
+        val server = store.active()
         if (server == null || server.password.isBlank()) {
             failAndStop("尚未配置服务器或密码，请在设置中添加")
             return
@@ -173,7 +174,7 @@ class AudioStreamService : Service() {
         Status.serverText = "连接中…"
 
         // 恢复上次控制目标
-        activeDeviceId = prefs.getString(KEY_BRIDGE_TARGET, "") ?: ""
+        activeDeviceId = store.target(server.id)
         Status.activeMacId = activeDeviceId
 
         val fingerprintFor = { h: String, p: Int ->
@@ -196,10 +197,11 @@ class AudioStreamService : Service() {
             override fun onMacs(macs: List<MacInfo>) {
                 mainHandler.post {
                     if (connectionGeneration != generation) return@post
-                    ServerStore(this@AudioStreamService).saveMacCache(macs)
+                    store.saveMacCache(macs, server.id)
                     Status.macsRevision++
                     // 控制目标如果已从目录消失（服务器端解除登记），回到未选状态
-                    if (activeDeviceId.isNotEmpty() && macs.none { it.deviceId == activeDeviceId }) {
+                    val hasBridge = synchronized(bridges) { bridges.containsKey(activeDeviceId) }
+                    if (!hasBridge && activeDeviceId.isNotEmpty() && macs.none { it.deviceId == activeDeviceId }) {
                         clearActiveTarget()
                     }
                 }
@@ -226,11 +228,10 @@ class AudioStreamService : Service() {
         val autoReconnect = prefs.getBoolean(KEY_AUTO_RECONNECT, true)
         login = RelayClient(
             server.host, server.port, secretHex, fingerprintFor, loginListener,
-            ConfigParser.TlsMode.AUTO, target = "", autoReconnect = autoReconnect,
+            server.mode, target = "", autoReconnect = autoReconnect,
         )
         loginClient = login
         loginThread = Thread({ login.runForever() }, "relay-login").apply { start() }
-        startListPolling(generation)
 
         // 2) 恢复上次的桥接目标（自动接回上次的 Mac）
         if (activeDeviceId.isNotEmpty()) {
@@ -264,19 +265,6 @@ class AudioStreamService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
-    // ---- 登录会话：目录轮询 ----
-
-    private fun startListPolling(generation: Long) {
-        val task = object : Runnable {
-            override fun run() {
-                if (connectionGeneration != generation) return
-                loginClient?.requestList()
-                mainHandler.postDelayed(this, LIST_POLL_MS)
-            }
-        }
-        mainHandler.post(task)
-    }
-
     // ---- 桥接管理（Activity 通过 Intent 触发，主线程执行）----
 
     /** 连接（建桥）一台 Mac；已存在则只切换为当前控制目标。 */
@@ -296,7 +284,6 @@ class AudioStreamService : Service() {
         connectBridge(deviceId, server, secretHashHex(server.password),
             { h, p -> TrustStore.load(prefs, TrustStore.serverKey(h, p)) },
             connectionGeneration)
-        prefs.edit().putString(KEY_BRIDGE_TARGET, deviceId).apply()
     }
 
     private fun connectBridge(
@@ -370,7 +357,7 @@ class AudioStreamService : Service() {
             .getBoolean(KEY_AUTO_RECONNECT, true)
         val relay = RelayClient(
             server.host, server.port, secretHex, fingerprintFor, listener,
-            ConfigParser.TlsMode.AUTO, target = deviceId, autoReconnect = autoReconnect,
+            server.mode, target = deviceId, autoReconnect = autoReconnect,
         )
         bridge = Bridge(relay, Thread({ relay.runForever() }, "bridge-$deviceId"))
         synchronized(bridges) { bridges[deviceId] = bridge }
@@ -388,8 +375,7 @@ class AudioStreamService : Service() {
         val oldActive = activeDeviceId
         activeDeviceId = deviceId
         Status.activeMacId = deviceId
-        getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putString(KEY_BRIDGE_TARGET, deviceId).apply()
+        ServerStore(this).selectMac(deviceId)
         if (pttHeld) {
             synchronized(bridges) { bridges[oldActive] }?.client
                 ?.sendTalk(false, bridgeSerial(oldActive))
@@ -409,6 +395,7 @@ class AudioStreamService : Service() {
     private fun clearActiveTarget() {
         stopCapture()
         activeDeviceId = ""
+        ServerStore(this).selectMac("")
         Status.activeMacId = ""
         Status.peerName = ""
         applyState("已连接服务器")
@@ -701,8 +688,8 @@ class AudioStreamService : Service() {
         const val EXTRA_DEVICE_ID = "device_id"
         const val KEY_USER_STOPPED = "user_stopped"
 
-        // 默认远程服务器（V3.2 部署机），prefs 未配置时回落使用
-        const val DEFAULT_SERVER = "118.193.40.160:9432"
+        // 首次手动配置时显示的公网中继，扫码可替换为 Mac 使用的地址。
+        const val DEFAULT_SERVER = "https://voice.gpt60.com"
 
         /** 证书更换（PLAN-025）的统一文案。 */
         const val CERT_CHANGED_TEXT =
@@ -711,9 +698,6 @@ class AudioStreamService : Service() {
         // 音频规格：48kHz/mono/s16le/20ms 帧（设计文档 §4.1，与服务器/接收器一致）
         const val SAMPLE_RATE = 48000
         const val FRAME_BYTES = 1920
-
-        /** 目录轮询间隔（设计：connection-simplify §2.3，轮询而非推送）。 */
-        private const val LIST_POLL_MS = 5000L
 
         /** 当前服务实例（MainActivity PTT 门控调用）；null=未在运行。 */
         @Volatile var instance: AudioStreamService? = null
@@ -761,6 +745,5 @@ class AudioStreamService : Service() {
         const val KEY_AUTO_RECONNECT = "auto_reconnect"
 
         /** 上次/当前控制目标（服务重启后自动接回）。 */
-        const val KEY_BRIDGE_TARGET = "bridge_target"
     }
 }

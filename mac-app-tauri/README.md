@@ -1,18 +1,14 @@
 # mac-app-tauri · Rust/Tauri Mac 客户端
 
-`mac-app-tauri/` 是 remote-voice **唯一受支持的 Mac 图形客户端**（PLAN-013 起；早期
-Python 客户端已归档至 [`backup/mac-app/`](../backup/mac-app/README.md)）。它实现 v3
-relay 协议，本地身份/秘密存储约定与归档的 Python 版兼容，可在两者间互换而不用重配。
+`mac-app-tauri/` 是 remote-voice 的 Mac 图形客户端，使用 v4 中继协议与 BlackHole 虚拟声卡。
 
 ## 首次使用
 
-1. 先启动 [`server/`](../server/README.md)，只需给客户端一个 `host:9432` 地址，服务端不再要求全局 `regkey`。
-2. 在 Mac 上安装 BlackHole：`brew install blackhole-2ch`。
-3. 打开 Remote Voice，在「连接设置」填写服务器地址和可选设备名，点击连接。
-4. 客户端首次连接时自动生成本机设备身份并保存；用户不需要输入 `regkey`、设备密钥或证书指纹。
-5. 把窗口顶部显示的临时配对秘密填入 Android 的「添加设备」，手机连接后音频会写入 BlackHole。
+1. 在 Mac 上安装 BlackHole，运行 `brew install blackhole-2ch`。
+2. 打开 Remote Voice，在「连接设置」填写 `https://voice.gpt60.com` 和服务器密码。公网中继使用已登记的 Mac 身份。新设备的登记方式见[部署说明](../deploy/voice.gpt60.com/README.md#登记-mac)。
+3. 连接后点击首页「二维码」。Android 扫码会自动连接这台 Mac，手机按住说话时音频写入 BlackHole。
 
-每台 Mac 都有独立的本机身份，所以同一个 relay 可以同时登记多台 Mac。每台 Mac 的临时/永久配对秘密分别路由到对应设备。
+每台 Mac 有独立的设备身份。使用同一中继的 Mac 共用一个服务器密码，二维码通过设备身份匹配目标。
 
 ## 安装与构建
 
@@ -41,9 +37,7 @@ pnpm run tauri build
 
 ## 信任与兼容
 
-服务端仍使用 TLS。首次连接时客户端内部按服务器地址建立 TOFU 信任，后续连接固定已记录的证书；正常用户不需要查看或填写指纹。设置页的盾牌按钮只用于证书更换等明确场景，清除后下一次连接会重新建立信任，并且会先要求确认。
-
-当前是开放自助入网：知道 relay 地址的人可以尝试登记新的 Mac。它适合自托管和小规模使用，不等同于面向互不信任用户的 SaaS 账号/邀请/配额系统；后者需要后续增加管理面。
+HTTPS 地址验证公有证书与主机名。原生 TLS 地址可以使用首次信任并固定证书的模式，证书更换需要在 App 内确认。
 
 ## 开发验证
 

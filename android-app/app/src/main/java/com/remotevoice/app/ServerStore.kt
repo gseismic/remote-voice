@@ -34,8 +34,8 @@ data class MacInfo(
 
 /**
  * 服务器存储（协议 v4）：
- * prefs[servers] = JSONArray [{id,host,port,password}]，prefs[active_server] = id。
- * 一个服务器一个密码（手机认证用）；Mac 列表来自服务器 LIST（缓存见 [MacCache]）。
+ * 每个中继分别保存地址、传输模式、密码、控制目标与目录缓存。
+ * prefs[active_server] 保存当前中继 ID。
  * 旧版（v3 per-Mac 秘密）数据在首次访问时一次性迁移：全局 server 地址 + 激活设备密码。
  */
 class ServerStore(context: Context) {
@@ -45,12 +45,25 @@ class ServerStore(context: Context) {
         val host: String,
         val port: Int,
         var password: String,
-    )
+        var mode: ConfigParser.TlsMode = ConfigParser.TlsMode.AUTO,
+    ) {
+        fun address(): String = ConfigParser.format(ConfigParser.Parsed(host, port, mode))
+    }
 
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     init {
         migrateLegacyIfNeeded()
+        val id = activeId()
+        if (id.isNotEmpty() && (prefs.contains(KEY_BRIDGE_TARGET) || prefs.contains(KEY_MAC_CACHE))) {
+            val editor = prefs.edit()
+            for (key in listOf(KEY_BRIDGE_TARGET, KEY_MAC_CACHE)) {
+                val legacy = prefs.getString(key, null) ?: continue
+                if (!prefs.contains("${key}_$id")) editor.putString("${key}_$id", legacy)
+                editor.remove(key)
+            }
+            editor.apply()
+        }
     }
 
     fun list(): List<Server> {
@@ -64,6 +77,8 @@ class ServerStore(context: Context) {
                     host = o.getString("host"),
                     port = o.getInt("port"),
                     password = o.optString("password", ""),
+                    mode = ConfigParser.TlsMode.entries.firstOrNull { it.name == o.optString("mode") }
+                        ?: ConfigParser.TlsMode.AUTO,
                 )
             )
         }
@@ -77,47 +92,64 @@ class ServerStore(context: Context) {
 
     fun activeId(): String = prefs.getString(KEY_ACTIVE_SERVER, "") ?: ""
 
-    /** 新增或按 host:port 去重更新；返回 id 并设为激活。 */
-    fun add(host: String, port: Int, password: String): String {
+    /** 新增或更新同一中继，HTTPS 和原生 TLS 在同地址上可独立保存。 */
+    fun add(server: ConfigParser.Parsed, password: String, deviceId: String? = null) {
         val servers = list().toMutableList()
-        val existing = servers.firstOrNull { it.host == host && it.port == port }
+        val https = server.mode == ConfigParser.TlsMode.HTTPS
+        val existing = servers.firstOrNull {
+            it.host.equals(server.host, ignoreCase = true) && it.port == server.port &&
+                (it.mode == ConfigParser.TlsMode.HTTPS) == https
+        }
         val id: String
         if (existing != null) {
             existing.password = password
+            existing.mode = server.mode
             id = existing.id
         } else {
             id = java.util.UUID.randomUUID().toString()
-            servers.add(Server(id, host, port, password))
+            servers.add(Server(id, server.host, server.port, password, server.mode))
         }
-        persist(servers)
-        prefs.edit().putString(KEY_ACTIVE_SERVER, id).apply()
-        return id
+        val editor = prefs.edit().putServers(servers).putString(KEY_ACTIVE_SERVER, id)
+        if (deviceId != null) editor.putString("${KEY_BRIDGE_TARGET}_$id", deviceId)
+        editor.apply()
     }
 
     fun remove(id: String) {
         val out = list().filterNot { it.id == id }
-        persist(out)
+        val editor = prefs.edit().putServers(out)
+            .remove("${KEY_BRIDGE_TARGET}_$id")
+            .remove("${KEY_MAC_CACHE}_$id")
         if (activeId() == id) {
-            prefs.edit().putString(KEY_ACTIVE_SERVER, out.firstOrNull()?.id ?: "").apply()
+            editor.putString(KEY_ACTIVE_SERVER, out.firstOrNull()?.id ?: "")
         }
+        editor.apply()
     }
 
     fun updatePassword(id: String, password: String) {
         val servers = list().toMutableList()
         servers.firstOrNull { it.id == id }?.password = password
-        persist(servers)
+        prefs.edit().putServers(servers).apply()
     }
 
     // ---- Mac 目录缓存（LIST 轮询结果，主界面离线也可见）----
 
-    fun saveMacCache(macs: List<MacInfo>) {
+    fun target(serverId: String): String = prefs.getString("${KEY_BRIDGE_TARGET}_$serverId", "").orEmpty()
+
+    fun selectMac(deviceId: String) {
+        val serverId = activeId()
+        if (serverId.isNotEmpty()) {
+            prefs.edit().putString("${KEY_BRIDGE_TARGET}_$serverId", deviceId).apply()
+        }
+    }
+
+    fun saveMacCache(macs: List<MacInfo>, serverId: String = activeId()) {
         val arr = JSONArray()
         macs.forEach { arr.put(it.toJson()) }
-        prefs.edit().putString(KEY_MAC_CACHE, arr.toString()).apply()
+        prefs.edit().putString("${KEY_MAC_CACHE}_$serverId", arr.toString()).apply()
     }
 
     fun macCache(): List<MacInfo> {
-        val arr = JSONArray(prefs.getString(KEY_MAC_CACHE, "[]") ?: "[]")
+        val arr = JSONArray(prefs.getString("${KEY_MAC_CACHE}_${activeId()}", "[]") ?: "[]")
         val out = ArrayList<MacInfo>(arr.length())
         for (i in 0 until arr.length()) {
             runCatching { out.add(MacInfo.fromJson(arr.getJSONObject(i))) }
@@ -125,7 +157,7 @@ class ServerStore(context: Context) {
         return out
     }
 
-    private fun persist(servers: List<Server>) {
+    private fun SharedPreferences.Editor.putServers(servers: List<Server>): SharedPreferences.Editor {
         val arr = JSONArray()
         servers.forEach { s ->
             arr.put(JSONObject().apply {
@@ -133,9 +165,10 @@ class ServerStore(context: Context) {
                 put("host", s.host)
                 put("port", s.port)
                 put("password", s.password)
+                put("mode", s.mode.name)
             })
         }
-        prefs.edit().putString(KEY_SERVERS, arr.toString()).apply()
+        return putString(KEY_SERVERS, arr.toString())
     }
 
     /** v3 → v4 一次性迁移：全局 server 地址 + 激活设备密码 → 服务器条目。 */
@@ -158,8 +191,8 @@ class ServerStore(context: Context) {
         val parsed = ConfigParser.parse(legacyServerRaw)
         if (parsed != null) {
             val id = java.util.UUID.randomUUID().toString()
-            persist(listOf(Server(id, parsed.host, parsed.port, password)))
-            prefs.edit().putString(KEY_ACTIVE_SERVER, id).apply()
+            prefs.edit().putServers(listOf(Server(id, parsed.host, parsed.port, password, parsed.mode)))
+                .putString(KEY_ACTIVE_SERVER, id).apply()
         }
     }
 
@@ -168,5 +201,6 @@ class ServerStore(context: Context) {
         private const val KEY_SERVERS = "servers"
         private const val KEY_ACTIVE_SERVER = "active_server"
         private const val KEY_MAC_CACHE = "mac_cache"
+        private const val KEY_BRIDGE_TARGET = "bridge_target"
     }
 }

@@ -153,27 +153,30 @@ pub enum TlsMode {
     Auto,
     Strict,
     Tofu,
+    Https,
+}
+
+fn split_scheme(raw: &str) -> (&str, TlsMode) {
+    let raw = raw.trim();
+    match raw.split_once("://") {
+        Some((scheme, rest)) if scheme.eq_ignore_ascii_case("https") => (rest, TlsMode::Https),
+        Some((scheme, rest)) if scheme.eq_ignore_ascii_case("rvs") => (rest, TlsMode::Strict),
+        Some((scheme, rest)) if scheme.eq_ignore_ascii_case("rv") => (rest, TlsMode::Tofu),
+        _ => (raw, TlsMode::Auto),
+    }
 }
 
 pub fn tls_mode(raw: &str) -> TlsMode {
-    let value = raw.trim().to_ascii_lowercase();
-    if value.starts_with("rvs://") {
-        TlsMode::Strict
-    } else if value.starts_with("rv://") {
-        TlsMode::Tofu
-    } else {
-        TlsMode::Auto
-    }
+    split_scheme(raw).1
 }
 
 pub fn parse_server(raw: &str) -> Result<(String, u16), ConfigError> {
-    let mut value = raw.trim();
-    if let Some(rest) = value.strip_prefix("rvs://") {
-        value = rest;
-    } else if let Some(rest) = value.strip_prefix("rv://") {
-        value = rest;
-    }
-    value = value.split('?').next().unwrap_or(value).trim();
+    let (value, mode) = split_scheme(raw);
+    let (value, default_port) = if mode == TlsMode::Https {
+        (value.strip_suffix('/').unwrap_or(value), 443)
+    } else {
+        (value.split('?').next().unwrap_or(value).trim(), DEFAULT_PORT)
+    };
     if value.is_empty() || value.chars().any(char::is_whitespace) {
         return Err(ConfigError::InvalidServer("地址为空或包含空格".to_string()));
     }
@@ -185,7 +188,7 @@ pub fn parse_server(raw: &str) -> Result<(String, u16), ConfigError> {
         let host = &rest[..end];
         let suffix = &rest[end + 1..];
         let port = if suffix.is_empty() {
-            DEFAULT_PORT
+            default_port
         } else if let Some(port) = suffix.strip_prefix(':') {
             parse_port(port)?
         } else {
@@ -201,13 +204,13 @@ pub fn parse_server(raw: &str) -> Result<(String, u16), ConfigError> {
             (host.to_string(), parse_port(port)?)
         } else if colon_count > 1 {
             // 未加括号的 IPv6 只接受默认端口，带端口时应使用 [addr]:port。
-            (value.to_string(), DEFAULT_PORT)
+            (value.to_string(), default_port)
         } else {
-            (value.to_string(), DEFAULT_PORT)
+            (value.to_string(), default_port)
         }
     };
 
-    if host.is_empty() || host.contains('/') || host.contains('?') {
+    if host.is_empty() || host.contains(['/', '?', '#', '@', '\\', '[', ']']) {
         return Err(ConfigError::InvalidServer("主机名格式错误".to_string()));
     }
     Ok((host, port))
@@ -319,12 +322,17 @@ mod tests {
     }
 
     #[test]
-    fn tls_mode_parses_three_address_forms() {
-        // 测试目的：裸地址=auto（默认用户形态）、rvs://=强制标准、rv://=TOFU 兼容
+    fn tls_mode_parses_address_forms() {
+        // 测试目的：HTTPS 保留严格模式和默认 443，同时兼容现有原生地址。
         assert_eq!(tls_mode("192.168.1.10:9432"), TlsMode::Auto);
         assert_eq!(tls_mode(" voice.example.com "), TlsMode::Auto);
         assert_eq!(tls_mode("RVS://voice.example.com:9432"), TlsMode::Strict);
         assert_eq!(tls_mode("rv://192.168.1.10:9432"), TlsMode::Tofu);
+        assert_eq!(tls_mode("HTTPS://voice.gpt60.com/"), TlsMode::Https);
+        assert_eq!(server_key("HTTPS://voice.gpt60.com/").unwrap(), "voice.gpt60.com:443");
+        assert_eq!(server_key("https://[::1]:8443").unwrap(), "[::1]:8443");
+        assert!(parse_server("https://voice.gpt60.com/a").is_err());
+        assert!(parse_server("https://voice.gpt60.com?s=a").is_err());
     }
 
     #[test]

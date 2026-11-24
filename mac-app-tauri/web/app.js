@@ -332,9 +332,9 @@ async function runAction(action, successMessage = "已完成") {
 
 /** 归一化配置里的服务器地址为 authority 部分（host[:port]）；不可解析返回空串。 */
 function pairingServerPart() {
-  let s = (state.server || "").trim();
-  if (s.toLowerCase().startsWith("rv://")) s = s.slice(5);
-  if (s.toLowerCase().startsWith("rvs://")) s = s.slice(6);
+  const server = (state.server || "").trim();
+  let s = server.replace(/^(?:https|rvs?):\/\//i, "");
+  if (/^https:\/\//i.test(server)) s = s.replace(/\/$/, "");
   s = s.split("?")[0].trim();
   // 与后端 parse_server 同规则的轻量校验：非空、无空白、无斜杠
   if (!s || /\s/.test(s) || s.includes("/")) return "";
@@ -358,18 +358,13 @@ async function fetchPairingPayload() {
 function renderPairingQr(uri) {
   // 中文设备名需要 UTF-8 字节模式（库默认单字节编码会出错）
   window.qrcode.stringToBytes = window.qrcode.stringToBytesFuncs["UTF-8"];
-  let qr = null;
-  for (let version = 1; version <= 10 && !qr; version++) {
-    try {
-      const candidate = window.qrcode(version, "M");
-      candidate.addData(uri, "Byte");
-      candidate.make();
-      qr = candidate;
-    } catch {
-      // 容量不足，试更大版本
-    }
+  const qr = window.qrcode(0, "M");
+  try {
+    qr.addData(uri, "Byte");
+    qr.make();
+  } catch {
+    return null;
   }
-  if (!qr) return null;
   const count = qr.getModuleCount();
   const cells = [];
   for (let y = 0; y < count; y++) {

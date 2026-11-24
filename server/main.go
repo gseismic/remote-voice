@@ -1,5 +1,4 @@
-// relay 中转服务器入口（协议 v3）。
-// 新 Mac 首次连接会自助登记设备身份；regkey 仅作为旧 v2 客户端的可选兼容参数。
+// relay 中转服务器入口（协议 v4）。
 package main
 
 import (
@@ -14,9 +13,11 @@ import (
 	"net"
 	"net/http"
 	_ "net/http/pprof"
+	"net/netip"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"remote-voice/server/internal/discovery"
 	"remote-voice/server/internal/selfcert"
@@ -27,6 +28,7 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
 
 	addr := flag.String("addr", ":9432", "TLS 监听地址")
+	httpAddr := flag.String("http-addr", "", "HTTPS 反向代理使用的回环 HTTP 地址，如 127.0.0.1:19432")
 	dataDir := flag.String("data", "./data", "证书、密钥与设备身份存放目录")
 	certFile := flag.String("cert", "", "可选：外部 TLS 证书 PEM（如 Let's Encrypt fullchain.pem）；提供后不再自签")
 	keyFile := flag.String("key", "", "可选：外部 TLS 私钥 PEM（如 Let's Encrypt privkey.pem）")
@@ -109,6 +111,27 @@ func main() {
 	})
 	if err != nil {
 		log.Fatalf("加载设备身份失败: %v", err)
+	}
+	if *httpAddr != "" {
+		endpoint, err := netip.ParseAddrPort(*httpAddr)
+		if err != nil || !endpoint.Addr().IsLoopback() {
+			log.Fatal("-http-addr 必须使用回环 IP 和端口")
+		}
+		httpLn, err := net.Listen("tcp", *httpAddr)
+		if err != nil {
+			log.Fatalf("监听 %s 失败: %v", *httpAddr, err)
+		}
+		httpServer := &http.Server{
+			Handler: srv.RelayHTTPHandler(), ReadHeaderTimeout: 5 * time.Second,
+			IdleTimeout: 15 * time.Second, MaxHeaderBytes: 8192,
+		}
+		defer httpServer.Close()
+		go func() {
+			log.Printf("HTTPS 代理入口监听 %s", httpLn.Addr())
+			if err := httpServer.Serve(httpLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Fatalf("HTTPS 代理入口退出: %v", err)
+			}
+		}()
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

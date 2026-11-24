@@ -232,7 +232,7 @@ func TestDeviceRegistryPersistsAndVerifies(t *testing.T) {
 		t.Fatalf("new registry: %v", err)
 	}
 	key := strings.Repeat("ab", 32)
-	ok, err := first.verifyOrEnroll("persisted-device", key)
+	ok, err := first.verifyOrEnroll("persisted-device", key, true)
 	if err != nil || !ok {
 		t.Fatalf("first enrollment failed: ok=%v err=%v", ok, err)
 	}
@@ -247,11 +247,11 @@ func TestDeviceRegistryPersistsAndVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload registry: %v", err)
 	}
-	ok, err = second.verifyOrEnroll("persisted-device", key)
+	ok, err = second.verifyOrEnroll("persisted-device", key, true)
 	if err != nil || !ok {
 		t.Fatalf("persisted credential should verify: ok=%v err=%v", ok, err)
 	}
-	ok, err = second.verifyOrEnroll("persisted-device", fmt.Sprintf("%064x", 10))
+	ok, err = second.verifyOrEnroll("persisted-device", fmt.Sprintf("%064x", 10), true)
 	if err != nil {
 		t.Fatalf("wrong credential check: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestDeviceRegistryPersistsAndVerifies(t *testing.T) {
 		t.Fatal("wrong credential must be rejected")
 	}
 	upperKey := strings.ToUpper(key)
-	ok, err = second.verifyOrEnroll("persisted-device", upperKey)
+	ok, err = second.verifyOrEnroll("persisted-device", upperKey, true)
 	if err != nil || !ok {
 		t.Fatalf("hex credential case should be normalized: ok=%v err=%v", ok, err)
 	}

@@ -2,6 +2,8 @@
 
 本文档面向第一次部署 server 的人，把 `../README.md` §1 中每条命令的作用讲清楚。
 
+公网域名通过标准 443 接入，Nginx 负责证书及续期。配置文件和登记步骤见 [voice.gpt60.com 部署](../deploy/voice.gpt60.com/README.md)。下面的原生 TLS 端口适用于本机部署、局域网测试和经 SSH 登记 Mac。
+
 ---
 
 ## ⚠️ 协议 v4 升级说明（2026-09-19，PLAN-026）

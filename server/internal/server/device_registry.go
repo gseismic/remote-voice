@@ -75,13 +75,16 @@ func newDeviceRegistry(path string) (*deviceRegistry, error) {
 
 // verifyOrEnroll 首次见到设备 ID 时登记凭据，已存在时校验凭据。
 // 返回值 true 表示认证通过；新记录只有在持久化成功后才写入内存。
-func (r *deviceRegistry) verifyOrEnroll(deviceID, deviceKey string) (bool, error) {
+func (r *deviceRegistry) verifyOrEnroll(deviceID, deviceKey string, allowEnrollment bool) (bool, error) {
 	if r.loadErr != nil {
 		return false, r.loadErr
 	}
 	digest := credentialDigest(deviceKey)
 	if old, ok := r.devices[deviceID]; ok {
 		return constantTimeEqual(old.CredentialHash, digest), nil
+	}
+	if !allowEnrollment {
+		return false, nil
 	}
 	record := deviceRecord{CredentialHash: digest, CreatedAt: time.Now().Unix()}
 	updated := make(map[string]deviceRecord, len(r.devices)+1)

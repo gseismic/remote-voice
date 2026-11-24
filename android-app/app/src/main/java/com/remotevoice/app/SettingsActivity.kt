@@ -37,7 +37,7 @@ class SettingsActivity : Activity() {
         // 空值时展示默认服务器，让用户看得见、可改
         val active = ServerStore(this).active()
         serverEdit.setText(
-            active?.let { "${it.host}:${it.port}" }
+            active?.address()
                 ?: prefs.getString("server", null)?.takeIf { it.isNotBlank() }
                 ?: AudioStreamService.DEFAULT_SERVER
         )
@@ -93,7 +93,7 @@ class SettingsActivity : Activity() {
         val store = ServerStore(this)
         val active = store.active()
         val effectivePassword = password.ifBlank { active?.password.orEmpty() }
-        store.add(parsed.host, parsed.port, effectivePassword)
+        store.add(parsed, effectivePassword)
         if (!prefs.getBoolean(AudioStreamService.KEY_USER_STOPPED, false)) {
             AudioStreamService.prepareRetry()
         }

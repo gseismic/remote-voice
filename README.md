@@ -4,11 +4,7 @@ Mac 麦克风硬件损坏的替代方案：**Android 手机采音 → 中继服�
 全链路自研、完全可控：TLS 加密，按住说话（PTT），手机按下不仅出声、还联动 Mac 端模拟 Fn
 触发系统语音输入。协议 v4 服务器密码 + Mac 目录：一个密码控制服务器上全部 Mac。
 
-**用户只需三样东西：服务器地址、密码、二维码。** Mac 端设置服务器密码并出示二维码；
-手机扫码（或手填）后即见服务器上的 Mac 列表（离线也可见），点连接即可控制，可同时
-连接多台、左右滑动切换。证书全自动：裸地址先标准验证、自签自动回落首连信任，
-服务器日后配置 Let's Encrypt 证书自动升级，永不出现证书换代死局错误；
-`rvs://` 显式前缀保留为强制标准验证的逃生门。
+**只在 Mac 设置一次服务器地址和密码。** Mac 连接 [`https://voice.gpt60.com`](https://voice.gpt60.com) 后出示二维码，手机扫码会自动连接这台 Mac，显示「已就绪」后即可按住说话。手动添加中继可查看目录、连接多台 Mac 并左右滑动切换。
 
 ## 构建（scripts/）
 
@@ -72,9 +68,7 @@ brew install pnpm                           # 或 corepack enable pnpm
 cd mac-app-tauri && pnpm install && pnpm run tauri build   # 开发调试用 pnpm run tauri dev
 ```
 
-启动后连接设置里填一次服务器地址并设置**服务器密码**（≥12 位），首次连接自动生成本机设备
-身份，不需要输入 regkey、指纹或任何 scheme 前缀。首页点「二维码」出示配对码——手机
-「＋ 添加 → 扫码配对」对准即可一步完成（或手动抄密码输入）。
+启动后在连接设置填写 `https://voice.gpt60.com` 并设置**服务器密码**（≥12 位）。公网中继使用已登记的 Mac 身份，新增 Mac 可参考[登记流程](deploy/voice.gpt60.com/README.md#登记-mac)。连接成功后在首页点「二维码」。
 会议软件/输入法把麦克风选成 BlackHole 2ch；手机按住说话时 Mac 自动模拟 Fn 触发语音输入。
 
 ### 3. Android
@@ -83,10 +77,7 @@ cd mac-app-tauri && pnpm install && pnpm run tauri build   # 开发调试用 pnp
 cd android-app && ./gradlew assembleDebug && adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
-主屏「＋ 添加」→ **扫码配对**（扫 Mac 端二维码，自动完成服务器+密码配置），或手动输入
-地址+密码 → 登录后显示服务器上的 **Mac 列表**（离线也可见）→ 点一台**连接** → **按住说话**
-（状态胶囊点按可停止/恢复）。可同时连接多台 Mac，**左右滑动切换**控制目标；长按已连接的
-chip 可断开。
+主屏「＋ 添加 → 扫码配对」，对准 Mac 上的二维码。看到「已就绪」后**按住说话**，松开即停止传输。手动输入地址和密码可从目录选择 Mac。已连接多台时可左右滑动切换，长按设备可断开。
 
 ## 开发验证
 
@@ -104,6 +95,6 @@ cd android-app && ./gradlew assembleDebug
 - 交接档案（项目背景/状态/演进）：[docs/HANDOFF.md](docs/HANDOFF.md)
 - 设计与计划：`docs/design/`（多 Mac 自助入网、扫码配对、TLS CA 模式等）、`docs/dev/`（计划/结果/评审，索引见 [docs/dev/INDEX.md](docs/dev/INDEX.md)）
 - 部署：server/[DEPLOY.md](server/DEPLOY.md)（服务器）、android-app/[BUILD.md](android-app/BUILD.md)（Android 构建环境）
-- 公网 HTTPS 部署三步（域名 A 记录 → certbot 签发 → systemd 挂 `-cert/-key`）：见 [docs/dev/PLAN-024-tls-ca-mode-OUTCOME.md](docs/dev/PLAN-024-tls-ca-mode-OUTCOME.md)「部署 runbook」
+- 公网域名、HTTPS、证书续期和 Mac 登记见 [voice.gpt60.com 部署](deploy/voice.gpt60.com/README.md)。
 
-当前开放自助入网适合自托管：知道 server 地址的人可以尝试登记新 Mac。若未来服务面向互不信任的多用户，需要增加账号、邀请、配额和撤销管理。
+公网 HTTPS 入口仅接受已登记的 Mac。原生 TLS 入口支持自助登记，生产配置将该入口绑定到服务器回环地址。

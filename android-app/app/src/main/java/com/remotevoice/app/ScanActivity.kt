@@ -50,8 +50,7 @@ class ScanActivity : Activity() {
     private var cameraHandler: Handler? = null
 
     private val reader = MultiFormatReader()
-    /** 解码任务在后台串行执行；繁忙时丢帧，避免全帧解码烧 CPU（设计 §4.2）。 */
-    @Volatile private var decoding = false
+    /** 相机线程按时间间隔解码，其余图像及时归还给 ImageReader。 */
     private var lastDecodeAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -157,7 +156,7 @@ class ScanActivity : Activity() {
                 override fun onError(device: CameraDevice, error: Int) {
                     device.close()
                     if (camera === device) camera = null
-                    scanStatus.text = "相机启动失败（错误码 $error）：可手动输入配对码"
+                    runOnUiThread { scanStatus.text = "相机启动失败（错误码 $error）：可手动输入配对码" }
                 }
             }, cameraHandler ?: newCameraHandler())
         } catch (e: SecurityException) {
@@ -189,18 +188,18 @@ class ScanActivity : Activity() {
                         builder.set(CaptureRequest.CONTROL_AF_MODE,
                             CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
                         s.setRepeatingRequest(builder.build(), null, cameraHandler)
-                        scanStatus.visibility = View.INVISIBLE
+                        runOnUiThread { scanStatus.visibility = View.INVISIBLE }
                     }
 
                     override fun onConfigureFailed(s: CameraCaptureSession) {
-                        scanStatus.text = "相机会话创建失败：可手动输入配对码"
+                        runOnUiThread { scanStatus.text = "相机会话创建失败：可手动输入配对码" }
                     }
                 },
                 cameraHandler ?: newCameraHandler(),
             )
         } catch (e: Exception) {
             Log.w(TAG, "createSession failed", e)
-            scanStatus.text = "相机启动异常：可手动输入配对码"
+            runOnUiThread { scanStatus.text = "相机启动异常：可手动输入配对码" }
         }
         this.sensorOrientation = sensorOrientation
     }
@@ -208,13 +207,13 @@ class ScanActivity : Activity() {
     private var sensorOrientation = 90
 
     private fun onImageAvailable() {
+        val image = imageReader?.acquireLatestImage() ?: return
         val now = System.currentTimeMillis()
-        if (decoding || now - lastDecodeAt < DECODE_INTERVAL_MS) {
+        if (now - lastDecodeAt < DECODE_INTERVAL_MS) {
+            image.close()
             return
         }
-        val image = imageReader?.acquireLatestImage() ?: return
         lastDecodeAt = now
-        decoding = true
         val luminance = try {
             buildLuminanceSource(image, sensorOrientation)
         } catch (e: Exception) {
@@ -223,26 +222,17 @@ class ScanActivity : Activity() {
         } finally {
             image.close()
         }
-        if (luminance == null) {
-            decoding = false
-            return
-        }
+        if (luminance == null) return
         // 解码放后台（此处已是 camera 线程），结果回主线程
-        try {
-            val bitmap = BinaryBitmap(HybridBinarizer(luminance))
-            val result = try {
-                reader.decodeWithState(bitmap)
-            } catch (_: Exception) {
-                null // 本帧无 QR，正常情况
-            } finally {
-                reader.reset()
-            }
-            result?.text?.let { text ->
-                runOnUiThread { submitPayload(text) }
-            }
+        val bitmap = BinaryBitmap(HybridBinarizer(luminance))
+        val result = try {
+            reader.decodeWithState(bitmap)
+        } catch (_: Exception) {
+            null // 本帧无 QR，正常情况
         } finally {
-            decoding = false
+            reader.reset()
         }
+        result?.text?.let { text -> runOnUiThread { submitPayload(text) } }
     }
 
     /** YUV 平面亮度提取（处理 rowStride）+ 按传感器方向旋转。 */
@@ -309,7 +299,7 @@ class ScanActivity : Activity() {
     private fun submitPayload(raw: String) {
         val payload = raw.trim()
         if (ConfigParser.parsePairing(payload) == null) {
-            Toast.makeText(this, "不是有效的配对码（应为 rv://host:端口?s=密码）", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "配对码无效，请扫描 Mac 上的配对二维码", Toast.LENGTH_LONG).show()
             return
         }
         setResult(RESULT_OK, Intent().putExtra(EXTRA_PAYLOAD, payload))

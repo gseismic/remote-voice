@@ -188,8 +188,12 @@ func (s *Server) handleConn(conn net.Conn) {
 		s.cfg.Logger.Printf("tls handshake ok peer=%s", peer)
 	}
 	setNoDelay(conn)
+	s.handleSession(conn, peer, true)
+}
 
-	sess := &session{srv: s, conn: conn, peer: peer}
+// 两个入口共用会话状态，只有原生入口可登记新 Mac。
+func (s *Server) handleSession(conn net.Conn, peer string, allowEnrollment bool) {
+	sess := &session{srv: s, conn: conn, peer: peer, allowEnrollment: allowEnrollment}
 	done := make(chan struct{})
 	defer close(done) // 终止 statsLoop，防 goroutine 泄漏
 
@@ -263,7 +267,7 @@ func (s *Server) authMacDevice(sess *session, req protocol.AuthRequest) bool {
 		s.mu.Unlock()
 		return false
 	}
-	ok, err := s.deviceStore.verifyOrEnroll(req.DeviceID, req.DeviceKey)
+	ok, err := s.deviceStore.verifyOrEnroll(req.DeviceID, req.DeviceKey, sess.allowEnrollment)
 	if err != nil {
 		s.mu.Unlock()
 		s.cfg.Logger.Printf("auth failed peer=%s role=mac (%s): %v", sess.peer, protocol.ReasonDeviceStoreUnavailable, err)

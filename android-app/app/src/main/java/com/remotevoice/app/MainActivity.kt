@@ -160,7 +160,7 @@ class MainActivity : Activity() {
 
     private fun serverDisplay(): String {
         val s = ServerStore(this).active() ?: return AudioStreamService.DEFAULT_SERVER
-        return "${s.host}:${s.port}"
+        return s.address()
     }
 
     private fun macName(deviceId: String): String =
@@ -206,8 +206,8 @@ class MainActivity : Activity() {
         bigState.visibility = if (showBig) View.VISIBLE else View.GONE
         if (showBig) {
             if (st.activeMacId.isEmpty()) {
-                bigT1.text = "选择一台 Mac"
-                bigT2.text = "在下方列表点「连接」，或扫 Mac 上的二维码"
+                bigT1.text = if (macs.isEmpty()) "扫码连接 Mac" else "选择一台 Mac"
+                bigT2.text = if (macs.isEmpty()) "点「＋ 添加 → 扫码配对」" else "点一台 Mac 连接，或扫描配对码"
             } else if (st.state == StatusState.WAIT_PEER) {
                 bigT1.text = getString(R.string.big_wait_t1)
                 bigT2.text = getString(R.string.big_wait_t2)
@@ -297,15 +297,6 @@ class MainActivity : Activity() {
             }
             macsRow.addView(chip)
         }
-        if (macs.isEmpty()) {
-            val empty = TextView(this).apply {
-                text = "暂无 Mac：先在 Mac 端设置服务器地址与密码，点「＋ 添加」录入"
-                textSize = 12f
-                setTextColor(COLOR_TX2)
-                setPadding(28, 14, 28, 14)
-            }
-            macsRow.addView(empty)
-        }
         val add = TextView(this).apply {
             text = "＋ 添加"
             textSize = 12.5f
@@ -314,24 +305,21 @@ class MainActivity : Activity() {
             setPadding(28, 14, 28, 14)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
-            )
+            ).apply { marginEnd = 16 }
         }
         add.setOnClickListener { showAddServerDialog() }
-        macsRow.addView(add)
+        macsRow.addView(add, 0)
     }
 
     // ---- 连接动作 ----
 
     private fun connectMac(deviceId: String) {
         prefs.edit().putBoolean(AudioStreamService.KEY_USER_STOPPED, false).apply()
-        prefs.edit().putString(AudioStreamService.KEY_BRIDGE_TARGET, deviceId).apply()
-        val intent = Intent(this, AudioStreamService::class.java)
-            .setAction(AudioStreamService.ACTION_SET_ACTIVE)
-            .putExtra(AudioStreamService.EXTRA_DEVICE_ID, deviceId)
+        ServerStore(this).selectMac(deviceId)
         if (AudioStreamService.instance != null) {
-            startService(intent)
+            setActiveMac(deviceId)
         } else {
-            startForegroundService(intent)
+            maybeAutoStart(force = true)
         }
         Toast.makeText(this, "连接 ${macName(deviceId)}…", Toast.LENGTH_SHORT).show()
     }
@@ -386,7 +374,7 @@ class MainActivity : Activity() {
 
     private fun showAddServerDialog() {
         val address = EditText(this).apply {
-            hint = "服务器地址（IP:端口 或 域名:端口）"
+            hint = "服务器地址（HTTPS 或 IP:端口）"
             setText(serverDisplay())
             setSingleLine(true)
         }
@@ -414,7 +402,7 @@ class MainActivity : Activity() {
                     Toast.makeText(this, "密码不能为空", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
-                ServerStore(this).add(parsed.host, parsed.port, pwd)
+                ServerStore(this).add(parsed, pwd)
                 onServerChanged()
             }
             .setNeutralButton("扫码配对") { d, _ ->
@@ -426,16 +414,18 @@ class MainActivity : Activity() {
             .show()
     }
 
-    /** 扫码配对落地（rv[s]://host:port?s=<服务器密码>&n=<Mac名>）。 */
+    /** 扫码后保存连接资料与设备 ID，启动标准的目录与桥接流程。 */
     private fun applyPairing(payload: String) {
         val pairing = ConfigParser.parsePairing(payload)
         if (pairing == null) {
             Toast.makeText(this, "配对码无效（缺密码或地址非法）", Toast.LENGTH_LONG).show()
             return
         }
-        val target = ConfigParser.format(ConfigParser.Parsed(pairing.host, pairing.port, pairing.mode))
-        ServerStore(this).add(pairing.host, pairing.port, pairing.secret)
-        Toast.makeText(this, "已添加服务器 $target", Toast.LENGTH_LONG).show()
+        ServerStore(this).add(pairing.server, pairing.secret, pairing.deviceId.orEmpty())
+        prefs.edit().putBoolean(AudioStreamService.KEY_USER_STOPPED, false).apply()
+        val target = if (pairing.deviceId != null && pairing.name.isNotBlank()) pairing.name
+            else ConfigParser.format(pairing.server)
+        Toast.makeText(this, "正在连接 $target", Toast.LENGTH_SHORT).show()
         onServerChanged()
     }
 

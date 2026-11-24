@@ -10,10 +10,10 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
-import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLSocket
@@ -74,11 +74,6 @@ class RelayClient(
         fun onMacs(macs: List<MacInfo>) {}
     }
 
-    /** 请求服务器 Mac 目录（v4 LIST 帧；需已完成认证）。 */
-    fun requestList() {
-        sendFrame(frameList, ByteArray(0))
-    }
-
     /** 服务器认证是否仍然有效（AUTH_OK 后为 true，连接断开即 false）。 */
     fun isAuthed(): Boolean = authed
 
@@ -100,6 +95,7 @@ class RelayClient(
     private val rolePhone = "phone"
 
     private val pingIntervalMs = 10_000L   // NAT 保活 + 活性探测（设计文档 §4.3）
+    private val listIntervalMs = 5_000L   // 登录会话的目录查询同时用于保活
     private val readTimeoutMs = 40_000     // 超时判定半开连接
     private val backoffMaxMs = 30_000L     // 重连退避封顶
 
@@ -113,8 +109,8 @@ class RelayClient(
     @Volatile private var socket: SSLSocket? = null
     /** AUTH_OK 已到达且连接未断（服务器连通判定的权威信号）。 */
     @Volatile private var authed = false
-    /** TCP 拨号期间也登记原始 socket，停止服务时可立即打断阻塞的 connect。 */
-    private var connectingSocket: Socket? = null
+    /** 从 TCP 拨号到 TLS 会话结束保留原始 socket，停止时用它打断网络线程。 */
+    private var transportSocket: Socket? = null
     private val outLock = Any()
     /**
      * TALK 帧写线程：sendTalk 会被 Activity 主线程（PTT 回调）和服务主线程
@@ -128,7 +124,7 @@ class RelayClient(
     private val trusted = HashMap<String, String>()
 
     init {
-        if (mode != ConfigParser.TlsMode.STRICT) {
+        if (mode == ConfigParser.TlsMode.AUTO || mode == ConfigParser.TlsMode.TOFU) {
             val known = fingerprintFor(host, port).trim().lowercase()
             if (known.isNotEmpty()) trusted[serverKey()] = known
         }
@@ -189,14 +185,19 @@ class RelayClient(
         running = false
         // 关闭 TALK 写线程；此后 sendTalk 提交会走 RejectedExecutionException 分支
         talkExecutor.shutdownNow()
-        closeQuietly()
+        // TLS close 可能发送 close_notify。主线程只关闭底层 TCP，TLS 由网络线程收尾。
+        val raw = synchronized(this) { transportSocket }
+        try {
+            raw?.close()
+        } catch (_: IOException) {
+        }
     }
 
     /** 由采音线程调用；仅在桥接就绪后真正发送。 */
     fun sendAudio(payload: ByteArray, expectedConnectionSerial: Long): Boolean {
         // 先固定 socket；否则检查通过后若恰好发生自动重连，sendFrame 可能拿到新 socket。
         val currentSocket = socket ?: return false
-        if (!peerOnline || connectionSerial != expectedConnectionSerial) return false
+        if (!running || !peerOnline || connectionSerial != expectedConnectionSerial) return false
         return try {
             sendFrameTo(currentSocket.getOutputStream(), frameAudio, payload)
         } catch (e: IOException) {
@@ -252,16 +253,20 @@ class RelayClient(
         }
         Log.i(TAG, "tls connected ($host, standard=$standardVerified)")
 
-        // AUTH 必须是首帧（服务器 10s 内等待）：v3 手机只带秘密哈希
+        val input = DataInputStream(sock.getInputStream().buffered())
+        val out = sock.getOutputStream()
+        if (mode == ConfigParser.TlsMode.HTTPS) {
+            sock.soTimeout = CONNECT_TIMEOUT_MS
+            upgradeHttps(input, out)
+        }
+
+        // AUTH 是升级完成后的首个数据帧，手机只带服务器密码哈希。
         sock.soTimeout = AUTH_TIMEOUT_MS
         val targetPart = if (target.isBlank()) "" else ",\"target\":\"${jsonEscape(target)}\""
         val authJson =
             "{\"role\":\"$rolePhone\",\"secret\":\"${jsonEscape(secretHex)}\",\"proto\":$protoVersion$targetPart}"
         sendFrame(frameAuth, authJson.toByteArray(Charsets.UTF_8))
         listener.onState("认证中…")
-
-        val input = DataInputStream(sock.getInputStream().buffered())
-        val out = sock.getOutputStream()
 
         var header = ByteArray(5)
         input.readFully(header)
@@ -289,15 +294,19 @@ class RelayClient(
         peerOnline = false
         sock.soTimeout = readTimeoutMs
 
-        // 心跳线程：周期 PING 保活
+        // 目录请求在认证后从网络线程发出，登录会话用 LIST 保活，桥接会话用 PING。
+        val pollingMacs = target.isEmpty()
+        val keepAliveFrame = if (pollingMacs) frameList else framePing
+        val keepAliveInterval = if (pollingMacs) listIntervalMs else pingIntervalMs
+        if (pollingMacs) sendFrameTo(out, frameList, ByteArray(0))
         val heartbeat = Thread {
             while (running && !sock.isClosed) {
                 try {
-                    Thread.sleep(pingIntervalMs)
+                    Thread.sleep(keepAliveInterval)
                 } catch (_: InterruptedException) {
                     return@Thread
                 }
-                sendFrameTo(out, framePing, ByteArray(0))
+                sendFrameTo(out, keepAliveFrame, ByteArray(0))
             }
         }.apply { isDaemon = true; name = "relay-heartbeat"; start() }
 
@@ -322,6 +331,41 @@ class RelayClient(
         }
     }
 
+    /** 完成 HTTP/1.1 中继升级，复用输入缓冲区继续读取数据帧。 */
+    private fun upgradeHttps(input: DataInputStream, out: OutputStream) {
+        val authority = "${ConfigParser.formatHost(host)}:$port"
+        val request = "GET /relay HTTP/1.1\r\nHost: $authority\r\n" +
+            "Connection: Upgrade\r\nUpgrade: $RELAY_UPGRADE\r\n\r\n"
+        out.write(request.toByteArray(Charsets.US_ASCII))
+        out.flush()
+
+        val headers = ByteArray(8192)
+        val deadline = System.nanoTime() + CONNECT_TIMEOUT_MS * 1_000_000L
+        var length = 0
+        while (length < headers.size) {
+            if (System.nanoTime() - deadline >= 0) throw SocketTimeoutException("HTTPS 中继握手超时")
+            headers[length++] = input.readByte()
+            if (length < 4 || headers[length - 4] != '\r'.code.toByte() ||
+                headers[length - 3] != '\n'.code.toByte() || headers[length - 2] != '\r'.code.toByte() ||
+                headers[length - 1] != '\n'.code.toByte()) continue
+
+            val lines = String(headers, 0, length, Charsets.ISO_8859_1).split("\r\n")
+            val status = lines.first().split(' ', limit = 3)
+            val switching = status.firstOrNull() == "HTTP/1.1" && status.getOrNull(1) == "101"
+            val connection = lines.drop(1).any { line ->
+                line.substringBefore(':').equals("Connection", ignoreCase = true) &&
+                    line.substringAfter(':', "").split(',').any { it.trim().equals("Upgrade", ignoreCase = true) }
+            }
+            val upgrade = lines.drop(1).any { line ->
+                line.substringBefore(':').equals("Upgrade", ignoreCase = true) &&
+                    line.substringAfter(':', "").trim().equals(RELAY_UPGRADE, ignoreCase = true)
+            }
+            if (!switching || !connection || !upgrade) throw IOException("服务器未接受中继协议升级")
+            return
+        }
+        throw IOException("HTTPS 中继响应头过长")
+    }
+
     /**
      * 建立 TLS 连接并判定是否通过了标准验证。
      * AUTO：先标准 CA+主机名验证，仅证书验证失败才重拨回落 TOFU（服务器换真证书自动升级）；
@@ -330,7 +374,7 @@ class RelayClient(
     private fun openTlsConnection(): Pair<SSLSocket, Boolean> {
         return when (mode) {
             ConfigParser.TlsMode.TOFU -> dialTls(strictTls = false) to false
-            ConfigParser.TlsMode.STRICT -> dialTls(strictTls = true) to true
+            ConfigParser.TlsMode.STRICT, ConfigParser.TlsMode.HTTPS -> dialTls(strictTls = true) to true
             ConfigParser.TlsMode.AUTO -> try {
                 dialTls(strictTls = true) to true
             } catch (changed: CertChangedException) {
@@ -344,7 +388,7 @@ class RelayClient(
     /** 拨号 + TLS 握手。strictTls=true 走系统 CA 信任；false 走 TOFU（指纹固定/信任任意）。 */
     private fun dialTls(strictTls: Boolean): SSLSocket {
         val ctx = if (strictTls) {
-            // 标准 TLS：系统 CA 信任 + 握手后主机名校验（设计 tls-ca-mode §4.3）
+            // 标准 TLS 使用系统 CA，主机名随握手验证。
             SSLContext.getInstance("TLS").apply { init(null, null, null) }
         } else {
             val serverKey = serverKey()
@@ -361,22 +405,22 @@ class RelayClient(
 
         val raw = Socket()
         var handedToTls = false
-        synchronized(this) { connectingSocket = raw }
         try {
+            synchronized(this) {
+                if (!running) throw IOException("客户端已停止")
+                transportSocket = raw
+            }
             raw.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
             if (!running) throw IOException("客户端已停止")
             val sock = ctx.socketFactory.createSocket(raw, host, port, true) as SSLSocket
             handedToTls = true
-            synchronized(this) {
-                connectingSocket = null
-                if (!running) {
-                    closeSslQuietly(sock)
-                    throw IOException("客户端已停止")
-                }
-                socket = sock
-            }
-            sock.soTimeout = readTimeoutMs
+            synchronized(this) { socket = sock }
+            if (!running) throw IOException("客户端已停止")
+            sock.soTimeout = CONNECT_TIMEOUT_MS
             sock.tcpNoDelay = true
+            if (strictTls) {
+                sock.sslParameters = sock.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
+            }
             try {
                 sock.startHandshake()
             } catch (e: SSLHandshakeException) {
@@ -386,20 +430,12 @@ class RelayClient(
                 }
                 throw e
             }
-            // 裸 SSLSocket 不做主机名校验，标准验证分支必须显式补上（设计 tls-ca-mode §7）
-            if (strictTls && !HttpsURLConnection.getDefaultHostnameVerifier()
-                    .verify(host, sock.session)
-            ) {
-                closeSslQuietly(sock)
-                // 主机名不符按证书验证失败对待：AUTO 模式据此回落 TOFU
-                throw SSLHandshakeException("服务器证书与主机名 $host 不匹配")
-            }
             return sock
         } finally {
-            synchronized(this) {
-                if (connectingSocket === raw) connectingSocket = null
-            }
             if (!handedToTls) {
+                synchronized(this) {
+                    if (transportSocket === raw) transportSocket = null
+                }
                 try {
                     raw.close()
                 } catch (_: IOException) {
@@ -422,6 +458,7 @@ class RelayClient(
     private fun isCertificateVerifyError(e: Throwable): Boolean {
         var t: Throwable? = e
         while (t != null) {
+            if (t is CertificateException) return true
             val m = (t.message ?: "").lowercase()
             if (m.contains("trust anchor") || m.contains("certpathvalidator") ||
                 m.contains("certificateException".lowercase()) || m.contains("certific") ||
@@ -538,8 +575,8 @@ class RelayClient(
         synchronized(this) {
             tls = socket
             socket = null
-            raw = connectingSocket
-            connectingSocket = null
+            raw = transportSocket
+            transportSocket = null
         }
         authed = false
         peerOnline = false
@@ -589,6 +626,7 @@ class RelayClient(
 
     private companion object {
         const val TAG = "RelayClient"
+        const val RELAY_UPGRADE = "remote-voice"
         const val CONNECT_TIMEOUT_MS = 10_000
         const val AUTH_TIMEOUT_MS = 10_000
     }

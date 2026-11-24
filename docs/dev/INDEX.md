@@ -292,3 +292,6 @@
 
 - **2026-11-24 12:05** | [PLAN-032-public-relay-alternate-port.md](PLAN-032-public-relay-alternate-port.md) → [PLAN-032-public-relay-alternate-port-OUTCOME.md](PLAN-032-public-relay-alternate-port-OUTCOME.md)
   摘要：公网 `9432` 和 `8000–8009` 探测均超时。空闲 `8001` 的临时 v4 中继在云内完成 TLS 握手，公网探测的 SYN 未到云主机网卡，SSH 对照包可达。已停止临时实例并复核原中继运行，公网联测等待 UCloud 外网入站规则。
+
+- **2026-11-24 12:56** | [PLAN-033-public-https-scan-to-connect.md](PLAN-033-public-https-scan-to-connect.md) → [PLAN-033-public-https-scan-to-connect-OUTCOME.md](PLAN-033-public-https-scan-to-connect-OUTCOME.md)
+  摘要：`voice.gpt60.com` 通过现有 Nginx 443 上线，Let's Encrypt 证书及续期验证通过。目标 Mac 已更新并注册公网中继，Android 配对码保存中继和目标 ID 后自动建桥。模拟器配对、连续目录轮询、停止连接与 PTT 通过，公网测试音到达 BlackHole。最新 APK 已更新到局域网下载入口，实体手机对屏扫码待验收。

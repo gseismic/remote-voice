@@ -1,7 +1,7 @@
 package com.remotevoice.app
 
 /**
- * 当前 v3 配置串解析器：接受 rv[s]://host[:port] 或裸 host[:port]。
+ * 解析 HTTPS 和原生 TLS 中继地址。
  * 裸地址 = Auto 模式（PLAN-025）：连接时先标准 CA+主机名验证，仅证书验证失败才回落 TOFU；
  * 服务器日后换真证书自动升级，用户全程无感。
  */
@@ -15,6 +15,8 @@ object ConfigParser {
         STRICT,
         /** rv://：只做 TOFU（旧配置兼容）。 */
         TOFU,
+        /** https:// 或配对码 rvh://：标准 TLS 验证和 HTTP/1.1 升级。 */
+        HTTPS,
     }
 
     data class Parsed(
@@ -25,60 +27,49 @@ object ConfigParser {
 
     /** 配对码解析结果（扫码配对，设计 docs/design/qr-pairing-20260919-overview.md §2）。 */
     data class Pairing(
-        val host: String,
-        val port: Int,
+        val server: Parsed,
         val secret: String,
         val name: String,
-        val mode: TlsMode = TlsMode.AUTO,
+        val deviceId: String?,
     )
 
     private const val DEFAULT_PORT = 9432
+    private const val HTTPS_PORT = 443
+    private val deviceIdPattern = Regex("[A-Za-z0-9_.:-]{8,128}")
 
-    fun parse(raw: String): Parsed? {
+    fun parse(raw: String): Parsed? = parseEndpoint(raw, pairing = false)
+
+    private fun parseEndpoint(raw: String, pairing: Boolean): Parsed? {
         var value = raw.trim()
-        val mode = when {
-            value.startsWith("rvs://", ignoreCase = true) -> {
-                value = value.substring(6); TlsMode.STRICT
-            }
-            value.startsWith("rv://", ignoreCase = true) -> {
-                value = value.substring(5); TlsMode.TOFU
-            }
-            else -> TlsMode.AUTO
+        val mode = when (value.substringBefore("://", missingDelimiterValue = "").lowercase()) {
+            "" -> TlsMode.AUTO
+            "rvs" -> TlsMode.STRICT
+            "rv" -> TlsMode.TOFU
+            "https" -> if (pairing) return null else TlsMode.HTTPS
+            "rvh" -> if (pairing) TlsMode.HTTPS else return null
+            else -> return null
         }
-        if (value.isEmpty() || value.any { it.isWhitespace() }) return null
+        if (mode != TlsMode.AUTO) value = value.substringAfter("://")
+        if (mode == TlsMode.HTTPS && !pairing) value = value.removeSuffix("/")
 
-        val queryIndex = value.indexOf('?')
-        val authority = if (queryIndex < 0) value else value.substring(0, queryIndex)
-        if (queryIndex >= 0) return null
-        val endpoint = parseAuthority(authority) ?: return null
+        val defaultPort = if (mode == TlsMode.HTTPS) HTTPS_PORT else DEFAULT_PORT
+        val endpoint = parseAuthority(value, defaultPort) ?: return null
         return Parsed(endpoint.first, endpoint.second, mode)
     }
 
-    /**
-     * 配对码解析：rv[s]://<host>[:<port>]?s=<密码>&n=<设备名>。
-     * `s` 必填；`n` 选填（URL 解码，UTF-8）；未知 query 参数忽略。
-     * 与 [parse] 分开：手填地址不允许带 query 的既有语义不变。
-     */
+    /** 配对码在地址后携带密码 s、可选设备 ID d 和名称 n。 */
     fun parsePairing(raw: String): Pairing? {
-        var value = raw.trim()
-        val mode = when {
-            value.startsWith("rvs://", ignoreCase = true) -> {
-                value = value.substring(6); TlsMode.STRICT
-            }
-            value.startsWith("rv://", ignoreCase = true) -> {
-                value = value.substring(5); TlsMode.TOFU
-            }
-            else -> TlsMode.AUTO
-        }
+        val value = raw.trim()
         if (value.isEmpty() || value.any { it.isWhitespace() }) return null
 
         val queryIndex = value.indexOf('?')
         if (queryIndex < 0) return null
-        val authority = value.substring(0, queryIndex)
+        val server = parseEndpoint(value.substring(0, queryIndex), pairing = true) ?: return null
         val query = value.substring(queryIndex + 1)
 
         var secret = ""
         var name = ""
+        var deviceId: String? = null
         for (pair in query.split('&')) {
             if (pair.isEmpty()) continue
             val eq = pair.indexOf('=')
@@ -93,28 +84,30 @@ object ConfigParser {
             when (key) {
                 "s" -> secret = decoded
                 "n" -> name = decoded
+                "d" -> deviceId = decoded.takeIf(deviceIdPattern::matches) ?: return null
                 else -> {} // 未知参数忽略（向前兼容）
             }
         }
         if (secret.isEmpty()) return null
 
-        val endpoint = parseAuthority(authority) ?: return null
-        return Pairing(endpoint.first, endpoint.second, secret, name, mode)
+        return Pairing(server, secret, name, deviceId)
     }
 
-    /**
-     * 将解析结果格式化为存储地址。TOFU 归一化为裸地址（AUTO 已涵盖 TOFU 行为：
-     * 先标准验证失败才回落），rvs:// 必须显式保留前缀，否则会退化为 AUTO。
-     */
+    /** 显示地址时保留其传输和信任策略，供设置回显与重连使用。 */
     fun format(parsed: Parsed): String {
-        val authority =
-            if (parsed.host.contains(':')) "[${parsed.host}]:${parsed.port}"
-            else "${parsed.host}:${parsed.port}"
-        return if (parsed.mode == TlsMode.STRICT) "rvs://$authority" else authority
+        val host = formatHost(parsed.host)
+        return when (parsed.mode) {
+            TlsMode.HTTPS -> if (parsed.port == HTTPS_PORT) "https://$host" else "https://$host:${parsed.port}"
+            TlsMode.STRICT -> "rvs://$host:${parsed.port}"
+            TlsMode.TOFU -> "rv://$host:${parsed.port}"
+            TlsMode.AUTO -> "$host:${parsed.port}"
+        }
     }
+
+    fun formatHost(host: String): String = if (host.contains(':')) "[$host]" else host
 
     /** 解析域名、IPv4、带括号的 IPv6，以及省略端口的地址。 */
-    private fun parseAuthority(authority: String): Pair<String, Int>? {
+    private fun parseAuthority(authority: String, defaultPort: Int): Pair<String, Int>? {
         if (authority.isEmpty()) return null
         val endpoint = if (authority.startsWith('[')) {
             val end = authority.indexOf(']')
@@ -122,26 +115,25 @@ object ConfigParser {
             val host = authority.substring(1, end)
             val suffix = authority.substring(end + 1)
             val port = when {
-                suffix.isEmpty() -> DEFAULT_PORT
+                suffix.isEmpty() -> defaultPort
                 suffix.startsWith(":") -> parsePort(suffix.substring(1)) ?: return null
                 else -> return null
             }
             host to port
         } else {
             when (authority.count { it == ':' }) {
-                0 -> authority to DEFAULT_PORT
+                0 -> authority to defaultPort
                 1 -> {
                     val split = authority.lastIndexOf(':')
                     val host = authority.substring(0, split)
                     val port = parsePort(authority.substring(split + 1)) ?: return null
                     host to port
                 }
-                else -> authority to DEFAULT_PORT // 未加括号的 IPv6：端口使用默认值
+                else -> authority to defaultPort // 未加括号的 IPv6 使用默认端口
             }
         }
         val host = endpoint.first
-        if (host.isEmpty() || host.any { it.isWhitespace() || it == '/' || it == '?' ||
-                    it == '[' || it == ']' }) return null
+        if (host.isEmpty() || host.any { it.isWhitespace() || it in "/?#@\\[]" }) return null
         return endpoint
     }
 

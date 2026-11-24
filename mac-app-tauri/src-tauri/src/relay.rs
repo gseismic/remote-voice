@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use thiserror::Error;
-use tokio::io::{split, AsyncRead, AsyncWrite};
+use tokio::io::{split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::time::{interval, sleep, timeout, Instant, MissedTickBehavior};
@@ -24,6 +24,49 @@ const PING_INTERVAL: Duration = Duration::from_secs(10);
 const MAX_BACKOFF: u64 = 30;
 /// 音频输出失败后的自愈重试间隔：瞬时 CoreAudio 错误不应导致整场会话静音
 const AUDIO_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+const RELAY_UPGRADE: &str = "remote-voice";
+
+/// 校验 HTTP/1.1 升级响应，保留缓冲区供后续 v4 数据帧读取。
+async fn upgrade_https<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut BufReader<S>,
+    authority: &str,
+) -> std::io::Result<()> {
+    let request = format!(
+        "GET /relay HTTP/1.1\r\nHost: {authority}\r\nConnection: Upgrade\r\nUpgrade: {RELAY_UPGRADE}\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).await?;
+    stream.flush().await?;
+
+    let mut headers = Vec::new();
+    while headers.len() < 8192 {
+        headers.push(stream.read_u8().await?);
+        if headers.ends_with(b"\r\n\r\n") {
+            let response = String::from_utf8_lossy(&headers);
+            let mut lines = response.split("\r\n");
+            let status = lines.next().unwrap_or_default();
+            let mut status_parts = status.split_ascii_whitespace();
+            let switching = status_parts.next() == Some("HTTP/1.1")
+                && status_parts.next() == Some("101");
+            let mut connection = false;
+            let mut upgrade = false;
+            for (name, value) in lines.filter_map(|line| line.split_once(':')) {
+                if name.eq_ignore_ascii_case("Connection") {
+                    connection |= value
+                        .split(',')
+                        .any(|token| token.trim().eq_ignore_ascii_case("Upgrade"));
+                } else if name.eq_ignore_ascii_case("Upgrade") {
+                    upgrade |= value.trim().eq_ignore_ascii_case(RELAY_UPGRADE);
+                }
+            }
+            return if switching && connection && upgrade {
+                Ok(())
+            } else {
+                Err(std::io::Error::other("服务器未接受中继协议升级"))
+            };
+        }
+    }
+    Err(std::io::Error::other("中继响应头过长"))
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct Registration {
@@ -237,7 +280,7 @@ impl RelayClient {
             device_id: options.device_id,
             device_key: options.device_key,
             initial_fingerprint: match options.tls_mode {
-                config::TlsMode::Strict => None, // 标准验证不使用任何指纹
+                config::TlsMode::Strict | config::TlsMode::Https => None,
                 _ => (!options.fingerprint.is_empty()).then_some(options.fingerprint),
             },
             tls_mode: options.tls_mode,
@@ -381,7 +424,7 @@ impl RelayClient {
             Unchecked(TlsStream<TcpStream>),
         }
         let dialed = match self.tls_mode {
-            config::TlsMode::Strict => Dialed::Verified(
+            config::TlsMode::Strict | config::TlsMode::Https => Dialed::Verified(
                 self.dial_and_handshake(&host, port, true, &server_name)
                     .await?,
             ),
@@ -441,7 +484,21 @@ impl RelayClient {
             }
         };
 
-        let (reader, mut writer) = split(tls);
+        let mut stream = BufReader::new(tls);
+        if self.tls_mode == config::TlsMode::Https {
+            let authority = config::server_key(&self.server).map_err(|error| RelayFailure::Fatal {
+                code: "invalid-server".to_string(),
+                message: error.to_string(),
+            })?;
+            tokio::select! {
+                result = timeout(CONNECT_TIMEOUT, upgrade_https(&mut stream, &authority)) => {
+                    result.map_err(|_| RelayFailure::Network("HTTPS 中继握手超时".to_string()))?
+                        .map_err(|error| RelayFailure::Network(format!("HTTPS 中继握手失败: {error}")))?;
+                }
+                _ = wait_until_stopped(Arc::clone(&self.stop)) => return Err(RelayFailure::Stopped),
+            }
+        }
+        let (reader, mut writer) = split(stream);
         let (frame_sender, mut frames) = mpsc::channel(256);
         let reader_task = tokio::spawn(read_frames(reader, frame_sender));
         let result = self
@@ -850,6 +907,31 @@ mod tests {
         let message = auth_reason(protocol::REASON_DEVICE_BUSY);
         assert!(message.contains("已经在线"));
         assert!(!message.contains("device_key"));
+    }
+
+    #[tokio::test]
+    async fn https_upgrade_requires_101_and_preserves_buffered_frame() {
+        // 测试目的：只在双方协商成功后进入 v4，升级响应后紧跟的数据不会被丢弃。
+        for (response, accepted) in [
+            ("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: remote-voice\r\n\r\n\x02", true),
+            ("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: other\r\n\r\n", false),
+            ("HTTP/1.1 200 OK\r\nConnection: Upgrade\r\nUpgrade: remote-voice\r\n\r\n", false),
+        ] {
+            let (client, mut proxy) = tokio::io::duplex(512);
+            let server = tokio::spawn(async move {
+                let mut request = [0; 100];
+                let count = proxy.read(&mut request).await.unwrap();
+                assert!(request[..count].starts_with(b"GET /relay HTTP/1.1\r\n"));
+                proxy.write_all(response.as_bytes()).await.unwrap();
+            });
+            let mut stream = BufReader::new(client);
+            let result = upgrade_https(&mut stream, "voice.gpt60.com:443").await;
+            assert_eq!(result.is_ok(), accepted);
+            if accepted {
+                assert_eq!(stream.read_u8().await.unwrap(), protocol::FRAME_AUTH_OK);
+            }
+            server.await.unwrap();
+        }
     }
 
     #[test]
