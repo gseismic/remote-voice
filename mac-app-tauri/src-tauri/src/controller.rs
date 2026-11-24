@@ -2,7 +2,7 @@ use crate::audio::{self, AudioSink, CpalSink, SinkStats};
 use crate::config::{self, AppConfig};
 use crate::history::{self, HistoryEntry};
 use crate::identity;
-use crate::keyinject::{install_fn_release_tap, InjectMode, KeyInjector};
+use crate::keyinject::{accessibility_trusted, install_fn_release_tap, InjectMode, KeyInjector};
 use crate::relay::{Registration, RelayClient, RelayClientOptions, RelayEvent};
 use crate::secrets;
 use crate::storage::SystemKeychain;
@@ -10,7 +10,7 @@ use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
 const MAX_EVENTS: usize = 50;
 
@@ -53,6 +53,7 @@ pub struct AppState {
     pub talking: bool,
     pub dictation_enabled: bool,
     pub dictation_mode: String,
+    pub fn_accessibility_granted: bool,
     pub audio_frames: u64,
     pub audio_bytes: u64,
     pub dropped_audio_frames: u64,
@@ -75,6 +76,7 @@ impl AppState {
             talking: false,
             dictation_enabled: config.dictation_enabled,
             dictation_mode: config.dictation_mode.clone(),
+            fn_accessibility_granted: accessibility_trusted(),
             audio_frames: 0,
             audio_bytes: 0,
             dropped_audio_frames: 0,
@@ -141,6 +143,11 @@ impl AppController {
             .lock()
             .map(|state| state.clone())
             .map_err(|_| CommandError::new("state-lock", "应用状态锁已损坏"))
+    }
+
+    fn refresh_fn_accessibility(&self) {
+        let trusted = accessibility_trusted();
+        self.update_state(|state| state.fn_accessibility_granted = trusted);
     }
 
     pub fn connect(self: &Arc<Self>) -> Result<(), CommandError> {
@@ -573,6 +580,7 @@ impl AppController {
                     }
                 });
                 if let Some(message) = injection_error {
+                    self.refresh_fn_accessibility();
                     // 权限类错误每次 PTT 都会触发，只提示一次避免刷屏
                     if !self
                         .inject_warned
@@ -867,6 +875,11 @@ pub fn run_tauri() {
                 let _ = setup_controller.connect();
             }
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if matches!(event, WindowEvent::Focused(true)) {
+                window.state::<Arc<AppController>>().refresh_fn_accessibility();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_state,

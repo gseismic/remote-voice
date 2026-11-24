@@ -298,3 +298,6 @@
 
 - **2026-11-24 13:20** | [PLAN-034-scan-lifecycle-and-fn-hold.md](PLAN-034-scan-lifecycle-and-fn-hold.md) → [PLAN-034-scan-lifecycle-and-fn-hold-OUTCOME.md](PLAN-034-scan-lifecycle-and-fn-hold-OUTCOME.md)
   摘要：复现扫描回调跨线程修改预览引发的闪退，统一相机生命周期并发布修复版 APK。32 轮进出与后台切换、权限和无相机场景通过。Mac 修正 Fn 修饰键按下与释放，已安装新版并启用默认按住，桌面按键验收等待辅助功能授权。
+
+- **2026-11-24 14:01** | [PLAN-035-startup-and-fn-permission-hints.md](PLAN-035-startup-and-fn-permission-hints.md) → [PLAN-035-startup-and-fn-permission-hints-OUTCOME.md](PLAN-035-startup-and-fn-permission-hints-OUTCOME.md)
+  摘要：README 开头记录启动和 Fn 授权步骤，两端显示离线或权限提示。目标 Mac 安装更新并确认授权通过。Android 修复 v4 目录解析，在目标 Mac 后上线或重启后自动接回，关闭自动重连时支持手动重试。模拟器通过联调，最新版 APK 已更新下载入口。

@@ -26,6 +26,18 @@ impl InjectMode {
 
 pub const MODE_DOUBLE: &str = "double";
 
+/// 读取发送按键所需的辅助功能权限，供 Mac 界面提示。
+pub fn accessibility_trusted() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        ffi::accessibility_trusted()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
 /// 线程安全注入器。hold 模式串行更新按键状态与事件，double 模式在线程中完成敲击。
 pub struct KeyInjector {
     #[cfg(any(target_os = "macos", test))]
@@ -279,13 +291,13 @@ impl KeyInjector {
     fn set_talking_impl(&self, on: bool, mode: InjectMode) -> Result<(), String> {
         match mode {
             InjectMode::Hold => self.set_hold(on, |down| {
-                if down && !ffi::accessibility_trusted() {
+                if down && !accessibility_trusted() {
                     return Err(Self::PERMISSION_HINT.to_string());
                 }
                 ffi::post_fn_key(down)
             }),
             InjectMode::Double => {
-                if !ffi::accessibility_trusted() {
+                if !accessibility_trusted() {
                     return Err(Self::PERMISSION_HINT.to_string());
                 }
                 // 双击模拟耗时约 300ms，放独立线程避免阻塞 relay 事件循环；

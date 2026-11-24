@@ -1,7 +1,10 @@
 package com.remotevoice.app
 
 import android.util.Log
+import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
+import org.json.JSONTokener
 import java.io.DataInputStream
 import java.io.IOException
 import java.io.OutputStream
@@ -19,15 +22,16 @@ import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.X509TrustManager
 
+internal const val MAC_START_HINT = "请在 Mac 上打开 Remote Voice，并确认已连接中继。"
+
 /**
- * relay 线路协议客户端（v3 配对秘密认证）。
+ * 中继线路协议客户端（v4 服务器密码认证）。
  *
  * 帧格式: [1B type][4B length BigEndian][payload]
  * 类型: AUTH=0x01 AUTH_OK=0x02 AUTH_ERR=0x03 AUDIO=0x04 PING=0x05 PONG=0x06 PEER_STATE=0x07
  *
- * v3 认证模型：手机只携带 规范化秘密的 SHA-256 hex（长度固定 64），
- * AUTH_OK 附目标 Mac 设备名（app 用于"首次连接自动命名"）。
- * 当前流程中任何 AUTH_ERR 均视为不可自动恢复（原因码转人性化文案交给 UI）。
+ * 手机携带服务器密码的 SHA-256 十六进制值，建桥时 AUTH_OK 附目标 Mac 设备名。
+ * 启用自动重连时，等待离线的目标 Mac 恢复后重新建桥。
  *
  * TLS 策略（PLAN-025）：AUTO 先标准 CA+主机名验证，仅证书验证失败回落 TOFU
  * （服务器换真证书自动升级）；STRICT 只标准验证；TOFU 只 TOFU。
@@ -55,7 +59,7 @@ class RelayClient(
         /** 对端上线：开始采音（实际发送受 PTT 门控）。 */
         fun onPeerOnline()
 
-        /** 对端掉线：暂停采音（连接保持）。 */
+        /** 对端掉线：暂停采音。 */
         fun onPeerOffline()
 
         /** 致命错误（认证被拒等）：不应重试。 */
@@ -88,6 +92,7 @@ class RelayClient(
     private val frameTalk = 0x0A
     private val frameList = 0x0B
     private val peerOnlineByte = 0x01
+    private val peerOfflineByte = 0x00
     private val talkOnByte: Byte = 0x01
 
     private val maxPayload = 65536
@@ -98,6 +103,10 @@ class RelayClient(
     private val listIntervalMs = 5_000L   // 登录会话的目录查询同时用于保活
     private val readTimeoutMs = 40_000     // 超时判定半开连接
     private val backoffMaxMs = 30_000L     // 重连退避封顶
+    private val macBackoffMaxMs = 5_000L  // 等待目标 Mac 时保持较短的恢复时间
+
+    private val retryOfflineTarget = autoReconnect && target.isNotEmpty()
+    private var waitingForMac = false    // 仅网络线程访问
 
     // 在构造后即进入可运行态，避免 stop() 先于网络线程启动时被 runForever() 覆盖。
     @Volatile private var running = true
@@ -141,7 +150,7 @@ class RelayClient(
         while (running) {
             connectionSerial++
             try {
-                listener.onState(if (attempts == 0) "连接中…" else "重连中(第${attempts}次)…")
+                reportConnecting(if (attempts == 0) "连接中…" else "重连中(第${attempts}次)…")
                 connectAndServe()
                 attempts = 0 // 正常退出（stop）时归零
             } catch (changed: CertChangedException) {
@@ -153,8 +162,13 @@ class RelayClient(
                 Log.w(TAG, "fatal: ${fatal.message}")
                 listener.onFatal(fatal.message ?: "协议错误")
                 running = false
+            } catch (_: TargetOfflineException) {
+                if (!running) break
+                waitingForMac = true
+                listener.onState("等待 Mac 上线…")
             } catch (e: Exception) {
                 if (!running) break
+                waitingForMac = false
                 Log.w(TAG, "connection lost", e)
                 val why = describeError(e)
                 listener.onState(if (attempts == 0) "连接失败: $why" else "重连失败($attempts): $why")
@@ -162,7 +176,10 @@ class RelayClient(
                 val wasPeerOnline = peerOnline
                 closeQuietly()
                 peerOnline = false
-                if (wasPeerOnline) listener.onPeerOffline()
+                if (wasPeerOnline) {
+                    attempts = 0
+                    listener.onPeerOffline()
+                }
             }
             if (!running) break
             if (!autoReconnect) {
@@ -170,8 +187,9 @@ class RelayClient(
                 break
             }
             attempts++
-            val delay = minOf(1000L shl minOf(attempts - 1, 5), backoffMaxMs)
-            listener.onState("断开，${delay / 1000}秒后重连(第$attempts 次)")
+            val maxDelay = if (waitingForMac) macBackoffMaxMs else backoffMaxMs
+            val delay = minOf(1000L shl minOf(attempts - 1, 5), maxDelay)
+            reportConnecting("断开，${delay / 1000}秒后重连(第$attempts 次)")
             try {
                 Thread.sleep(delay)
             } catch (_: InterruptedException) {
@@ -179,6 +197,10 @@ class RelayClient(
             }
         }
         listener.onState("已停止")
+    }
+
+    private fun reportConnecting(text: String) {
+        if (!waitingForMac) listener.onState(text)
     }
 
     fun stop() {
@@ -266,7 +288,7 @@ class RelayClient(
         val authJson =
             "{\"role\":\"$rolePhone\",\"secret\":\"${jsonEscape(secretHex)}\",\"proto\":$protoVersion$targetPart}"
         sendFrame(frameAuth, authJson.toByteArray(Charsets.UTF_8))
-        listener.onState("认证中…")
+        reportConnecting("认证中…")
 
         var header = ByteArray(5)
         input.readFully(header)
@@ -285,12 +307,16 @@ class RelayClient(
                 listener.onPeerName(peerName)
                 Log.i(TAG, "auth ok, peer=$peerName")
             }
-            frameAuthErr -> throw FatalProtocolError(reasonText(String(payload, Charsets.UTF_8)))
+            frameAuthErr -> {
+                val reason = String(payload, Charsets.UTF_8)
+                if (retryOfflineTarget && reason == "invalid-target") throw TargetOfflineException()
+                throw FatalProtocolError(reasonText(reason))
+            }
             else -> throw FatalProtocolError("认证应答异常 type=0x%02x".format(type))
         }
 
         authed = true
-        listener.onState(if (peerName.isBlank()) "已连接服务器" else "已连接 · $peerName")
+        reportConnecting(if (peerName.isBlank()) "已连接服务器" else "已连接 · $peerName")
         peerOnline = false
         sock.soTimeout = readTimeoutMs
 
@@ -401,7 +427,7 @@ class RelayClient(
             }
             SSLContext.getInstance("TLS").apply { init(null, arrayOf(tm), null) }
         }
-        listener.onState("连接 $host…")
+        reportConnecting("连接 $host…")
 
         val raw = Socket()
         var handedToTls = false
@@ -484,37 +510,38 @@ class RelayClient(
     private class CertChangedException :
         IOException(FingerprintTrustManager.CERT_CHANGED_MESSAGE)
 
+    private class TargetOfflineException : IOException()
+
     private fun handlePeerState(payload: ByteArray) {
         if (payload.isEmpty()) return
-        if (payload[0].toInt() == peerOnlineByte) {
-            peerOnline = true
-            // 桥接建立 ≠ 正在推流：未按住 PTT 前不出声，文案避免误导
-            listener.onState(if (peerName.isBlank()) "已就绪" else "已就绪 · $peerName")
-            listener.onPeerOnline()
-        } else {
-            peerOnline = false
-            listener.onState(if (peerName.isBlank()) "已连接服务器，等待 Mac 上线…" else "已连接 · $peerName")
-            listener.onPeerOffline()
+        when (payload[0].toInt()) {
+            peerOnlineByte -> {
+                waitingForMac = false
+                peerOnline = true
+                // 桥接建立 ≠ 正在推流：未按住 PTT 前不出声，文案避免误导
+                listener.onState(if (peerName.isBlank()) "已就绪" else "已就绪 · $peerName")
+                listener.onPeerOnline()
+            }
+            peerOfflineByte -> {
+                // 中继已解除旧桥接。Mac 再上线时，需要用新连接认证并建桥。
+                if (retryOfflineTarget) throw TargetOfflineException()
+                peerOnline = false
+                listener.onState("等待 Mac 上线…")
+                listener.onPeerOffline()
+            }
         }
     }
 
-    /** 目录应答（v4 LIST）解析：[{device_id,name,online,busy}]。 */
+    /** 目录应答（v4 LIST）包含 macs 数组，同时兼容旧的裸数组载荷。 */
     private fun handleList(payload: ByteArray) {
-        val macs = ArrayList<MacInfo>()
-        try {
-            val arr = org.json.JSONArray(String(payload, Charsets.UTF_8))
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                macs.add(
-                    MacInfo(
-                        deviceId = o.getString("device_id"),
-                        name = o.optString("name", ""),
-                        online = o.optBoolean("online", false),
-                        busy = o.optBoolean("busy", false),
-                    )
-                )
+        val macs = try {
+            val arr = when (val value = JSONTokener(String(payload, Charsets.UTF_8)).nextValue()) {
+                is JSONObject -> value.getJSONArray("macs")
+                is JSONArray -> value
+                else -> return
             }
-        } catch (_: Exception) {
+            List(arr.length()) { MacInfo.fromJson(arr.getJSONObject(it)) }
+        } catch (_: JSONException) {
             return
         }
         listener.onMacs(macs)
@@ -523,7 +550,7 @@ class RelayClient(
     /** AUTH_ERR 原因码 → 人性化文案（v4）。 */
     private fun reasonText(reason: String): String = when (reason) {
         "invalid-secret" -> "服务器密码错误（也可能服务器尚未设置密码）"
-        "invalid-target" -> "目标 Mac 不在线"
+        "invalid-target" -> "目标 Mac 离线。$MAC_START_HINT"
         "peer-busy" -> "目标 Mac 正在其他会话中，稍后再试"
         "rate-limited" -> "尝试过于频繁，已被临时锁定（1 分钟后再试）"
         else -> "认证被拒（$reason）"

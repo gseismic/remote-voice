@@ -37,6 +37,7 @@ const fallbackState = {
   talking: false,
   dictation_enabled: true,
   dictation_mode: "hold",
+  fn_accessibility_granted: true,
   peer_name: "",
   audio_frames: 0,
   audio_bytes: 0,
@@ -211,12 +212,14 @@ function renderRelayLine(status) {
 function renderAudioMeter(status) {
   const meter = $("meter");
   const live = status === "bridged" && !state.audio_error;
+  const fnReady = state.dictation_enabled && state.fn_accessibility_granted;
+  $("fn-accessibility-hint").hidden = !state.dictation_enabled || state.fn_accessibility_granted;
   meter.classList.toggle("off", !live || !state.talking);
   let meterHtml;
   if (state.audio_error) {
     meterHtml = "音频输出异常（详见下方提示）";
   } else if (status === "bridged" && state.talking) {
-    meterHtml = state.dictation_enabled
+    meterHtml = fnReady
       ? "对端说话中 · <b>模拟 Fn</b> · <b>0 丢帧</b>"
       : "对端说话中 · <b>0 丢帧</b>";
   } else if (status === "bridged") {
@@ -231,7 +234,7 @@ function renderAudioMeter(status) {
     $("audiost").innerHTML = meterHtml;
   }
   // 手动解除兜底：模拟 Fn 期间可见（断线悬空时点按或按一次物理 Fn 均可放下）
-  $("release-fn").hidden = !(state.talking && state.dictation_enabled);
+  $("release-fn").hidden = !(state.talking && fnReady);
 }
 
 function render(next) {

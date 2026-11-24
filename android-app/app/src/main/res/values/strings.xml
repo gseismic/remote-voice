@@ -14,7 +14,6 @@
     <string name="big_idle_t1">准备就绪</string>
     <string name="big_idle_t2">点状态胶囊连接服务器\n密码配对决定接哪台 Mac</string>
     <string name="big_wait_t1">已连中继</string>
-    <string name="big_wait_t2">等待 Mac 上线…\n在 Mac 端确认配对密码</string>
     <string name="text_err_title">连接失败</string>
     <string name="btn_retry">重试</string>
     <string name="label_settings">设置</string>

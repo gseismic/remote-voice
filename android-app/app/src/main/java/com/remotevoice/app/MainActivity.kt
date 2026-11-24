@@ -177,11 +177,19 @@ class MainActivity : Activity() {
         val name = st.peerName.ifBlank {
             macName(st.activeMacId)
         }
+        val waitingForMac = st.state == StatusState.WAIT_PEER && st.activeMacId.isNotEmpty()
+        val noMacOnline = st.serverOnline && st.macDirectoryLoaded && st.activeMacId.isEmpty() &&
+            macs.none { it.online }
 
         // 状态胶囊：服务器连通标记（登录会话）为主行，副行显示当前 Mac 状态
         val (main, sub, color) = when {
             st.state == StatusState.ERROR ->
                 Triple("连接失败 · 点按重试", serverDisplay(), COLOR_RED)
+            waitingForMac -> Triple(
+                if (autoReconnectEnabled()) "等待 Mac 上线 · 自动重连" else "等待 Mac 上线 · 点按重试",
+                serverDisplay(), COLOR_AMBER,
+            )
+            noMacOnline -> Triple("没有 Mac 在线", serverDisplay(), COLOR_AMBER)
             st.serverOnline -> when (st.state) {
                 StatusState.STREAMING ->
                     if (st.talking) Triple("按住传输 · $name", "服务器正常 · ${serverDisplay()}", COLOR_GREEN)
@@ -205,12 +213,12 @@ class MainActivity : Activity() {
             (st.serverOnline && st.activeMacId.isEmpty())
         bigState.visibility = if (showBig) View.VISIBLE else View.GONE
         if (showBig) {
-            if (st.activeMacId.isEmpty()) {
+            if (waitingForMac || noMacOnline) {
+                bigT1.text = getString(R.string.big_wait_t1)
+                bigT2.text = MAC_START_HINT
+            } else if (st.activeMacId.isEmpty()) {
                 bigT1.text = if (macs.isEmpty()) "扫码连接 Mac" else "选择一台 Mac"
                 bigT2.text = if (macs.isEmpty()) "点「＋ 添加 → 扫码配对」" else "点一台 Mac 连接，或扫描配对码"
-            } else if (st.state == StatusState.WAIT_PEER) {
-                bigT1.text = getString(R.string.big_wait_t1)
-                bigT2.text = getString(R.string.big_wait_t2)
             } else {
                 bigT1.text = getString(R.string.big_idle_t1)
                 bigT2.text = getString(R.string.big_idle_t2)
@@ -286,7 +294,7 @@ class MainActivity : Activity() {
                     isConnected -> setActiveMac(m.deviceId)
                     m.online -> connectMac(m.deviceId)
                     m.busy -> Toast.makeText(this, "该 Mac 正被其他会话使用", Toast.LENGTH_SHORT).show()
-                    else -> Toast.makeText(this, "该 Mac 离线", Toast.LENGTH_SHORT).show()
+                    else -> Toast.makeText(this, MAC_START_HINT, Toast.LENGTH_LONG).show()
                 }
             }
             if (isConnected) {
@@ -346,10 +354,12 @@ class MainActivity : Activity() {
             prefs.edit().putBoolean(AudioStreamService.KEY_USER_STOPPED, false).apply()
             maybeAutoStart(force = true)
             Toast.makeText(this, R.string.service_started, Toast.LENGTH_SHORT).show()
-        } else if (AudioStreamService.Status.state == StatusState.ERROR &&
-            !AudioStreamService.Status.certChangePending
+        } else if (
+            (AudioStreamService.Status.state == StatusState.ERROR && !AudioStreamService.Status.certChangePending) ||
+            (AudioStreamService.Status.state == StatusState.WAIT_PEER &&
+                AudioStreamService.Status.activeMacId.isNotEmpty() && !autoReconnectEnabled())
         ) {
-            // 错误状态下，点按的语义是用户明确重试，而不是再次停止。
+            // 关闭自动重连后，点按可在 Mac 恢复时重新建桥。
             restartService()
         } else if (AudioStreamService.Status.state != StatusState.ERROR) {
             startService(
@@ -360,6 +370,9 @@ class MainActivity : Activity() {
             Toast.makeText(this, R.string.toast_stopped, Toast.LENGTH_SHORT).show()
         }
     }
+
+    private fun autoReconnectEnabled(): Boolean =
+        prefs.getBoolean(AudioStreamService.KEY_AUTO_RECONNECT, true)
 
     private fun restartService() {
         prefs.edit().putBoolean(AudioStreamService.KEY_USER_STOPPED, false).apply()

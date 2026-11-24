@@ -94,6 +94,7 @@ class SettingsActivity : Activity() {
         val active = store.active()
         val effectivePassword = password.ifBlank { active?.password.orEmpty() }
         store.add(parsed, effectivePassword)
+        prefs.edit().putBoolean(AudioStreamService.KEY_AUTO_RECONNECT, autoReconnectSwitch.isChecked).apply()
         if (!prefs.getBoolean(AudioStreamService.KEY_USER_STOPPED, false)) {
             AudioStreamService.prepareRetry()
         }

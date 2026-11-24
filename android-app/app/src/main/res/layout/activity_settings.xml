@@ -164,7 +164,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
-                        android:text="网络闪断后自动恢复连接；关闭后需要手动点按重连"
+                        android:text="网络恢复或 Mac 上线后自动连接，关闭后点按重试"
                         android:textColor="@color/rv_tx2"
                         android:textSize="10sp" />
                 </LinearLayout>

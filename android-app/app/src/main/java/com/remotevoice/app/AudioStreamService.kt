@@ -82,6 +82,9 @@ class AudioStreamService : Service() {
         @Volatile var serverOnline: Boolean = false
         @Volatile var serverText: String = "未启动"
 
+        /** 当前登录会话收到 LIST 后才可根据目录判断 Mac 是否在线。 */
+        @Volatile var macDirectoryLoaded: Boolean = false
+
         /** 当前控制目标的 device_id（主界面页指示器）。 */
         @Volatile var activeMacId: String = ""
 
@@ -172,6 +175,7 @@ class AudioStreamService : Service() {
         Status.state = StatusState.CONNECTING
         Status.text = "连接服务器…"
         Status.serverText = "连接中…"
+        Status.macDirectoryLoaded = false
 
         // 恢复上次控制目标
         activeDeviceId = store.target(server.id)
@@ -189,6 +193,7 @@ class AudioStreamService : Service() {
                     if (connectionGeneration != generation) return@post
                     Status.serverText = text
                     Status.serverOnline = login?.isAuthed() == true
+                    if (!Status.serverOnline) Status.macDirectoryLoaded = false
                 }
             }
 
@@ -198,6 +203,7 @@ class AudioStreamService : Service() {
                 mainHandler.post {
                     if (connectionGeneration != generation) return@post
                     store.saveMacCache(macs, server.id)
+                    Status.macDirectoryLoaded = true
                     Status.macsRevision++
                     // 控制目标如果已从目录消失（服务器端解除登记），回到未选状态
                     val hasBridge = synchronized(bridges) { bridges.containsKey(activeDeviceId) }
@@ -261,6 +267,7 @@ class AudioStreamService : Service() {
         waitForThread(oldLogin, 1000)
         Status.connectedMacs = emptyList()
         Status.serverOnline = false
+        Status.macDirectoryLoaded = false
         Status.peerName = ""
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
