@@ -310,3 +310,6 @@
 
 - **2026-11-24 16:32** | [PLAN-038-android-unpaired-connection-entry.md](PLAN-038-android-unpaired-connection-entry.md) → [PLAN-038-android-unpaired-connection-entry-OUTCOME.md](PLAN-038-android-unpaired-connection-entry-OUTCOME.md)
   摘要：真机确认只保存地址时点按无登录，修复为未配对状态直达扫码。光学扫码及 Android 12 解码回归通过。Redmi 完成公网配对、覆盖安装、手动与自动重连和传音。macOS 误选旧备份授权已定位，备份归档后等待正式安装包的授权。
+
+- **2026-11-24 16:53** | [PLAN-039-macos-fn-minimal-test.md](PLAN-039-macos-fn-minimal-test.md) → [PLAN-039-macos-fn-minimal-test-OUTCOME.md](PLAN-039-macos-fn-minimal-test-OUTCOME.md)
+  摘要：`labs/fn/` 保存可独立运行的 Fn 发送器、接收器和说明。目标 Mac 前台窗口收到完整事件对，间隔 2.002 秒。Redmi 音频到达 BlackHole，正式应用 Fn 仍待当前安装包的辅助功能授权。

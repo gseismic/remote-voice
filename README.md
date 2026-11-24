@@ -87,6 +87,8 @@ cd android-app && ./gradlew assembleDebug && adb install app/build/outputs/apk/d
 
 ## 开发验证
 
+在 Mac 上独立验证 Fn 发送、接收和正式应用联动，见 [Fn 最小测试](labs/fn/README.md)。
+
 ```bash
 scripts/build.sh all            # 三端构建（按当前 OS 自动取舍）
 
