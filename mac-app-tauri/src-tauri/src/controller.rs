@@ -328,9 +328,9 @@ impl AppController {
             state.auto_reconnect = auto_reconnect;
             state.dictation_enabled = dictation_enabled;
             state.dictation_mode = dictation_mode.clone();
+            // 配置和 TALK 在同一状态锁内生效，旧模式的回调不能在释放后再按下 Fn。
+            self.injector.release();
         });
-        // 配置切换（关闭功能/换模式）时强制释放，避免旧模式下的 Fn 悬空
-        self.injector.release();
         self.inject_warned
             .store(false, std::sync::atomic::Ordering::Relaxed);
         if active {
@@ -484,8 +484,10 @@ impl AppController {
     /// 手动放下 Fn（界面按钮 / 物理 Fn 抬起之外的确定性兜底）。
     /// 解除后保持释放，直到手机新一轮按下（TALK true）才恢复模拟。
     pub fn manual_release(&self) {
-        self.injector.release();
-        self.update_state(|state| state.talking = false);
+        self.update_state(|state| {
+            self.injector.release();
+            state.talking = false;
+        });
         self.add_event("info", "已手动放下 Fn；手机再次按下说话时会自动恢复");
     }
 
@@ -560,18 +562,17 @@ impl AppController {
                 })
             }
             RelayEvent::PeerTalking { on } => {
-                self.update_state(|state| state.talking = on);
-                let (enabled, mode) = match self.state.lock() {
-                    Ok(state) => (
-                        state.dictation_enabled,
-                        InjectMode::parse(&state.dictation_mode),
-                    ),
-                    Err(_) => return,
-                };
-                if !enabled {
-                    return;
-                }
-                if let Err(message) = self.injector.set_talking(on, mode) {
+                let mut injection_error = None;
+                self.update_state(|state| {
+                    let changed = state.talking != on;
+                    state.talking = on;
+                    let mode = InjectMode::parse(&state.dictation_mode);
+                    // 重桥后会同步当前状态，双击模式只处理真正的按下或松开。
+                    if state.dictation_enabled && (changed || mode == InjectMode::Hold) {
+                        injection_error = self.injector.set_talking(on, mode).err();
+                    }
+                });
+                if let Some(message) = injection_error {
                     // 权限类错误每次 PTT 都会触发，只提示一次避免刷屏
                     if !self
                         .inject_warned
@@ -612,10 +613,12 @@ impl AppController {
             RelayEvent::AudioReady => self.update_state(|state| state.audio_error.clear()),
             RelayEvent::Fatal { code, message } => {
                 self.update_state(|state| {
+                    self.injector.release();
                     state.status = "fatal".to_string();
                     state.detail = message.clone();
                     state.fatal_code = code.clone();
                     state.peer_name.clear();
+                    state.talking = false;
                 });
                 // 证书更换是可恢复操作而非故障：不进错误事件流，前端有专用恢复入口
                 if code != "cert-changed" {

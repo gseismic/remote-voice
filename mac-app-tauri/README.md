@@ -10,6 +10,8 @@
 
 每台 Mac 有独立的设备身份。使用同一中继的 Mac 共用一个服务器密码，二维码通过设备身份匹配目标。
 
+手机按住说话时，Mac 默认按下 Fn，松开时释放。Mac 的「连接设置」可以关闭 Fn 联动或选择双击模式。使用 Fn 联动时，在 macOS 的「隐私与安全性 → 辅助功能」中允许 Remote Voice。
+
 ## 安装与构建
 
 前置：安装 pnpm（任选其一）：`corepack enable pnpm` 或 `npm install -g pnpm`。

@@ -160,14 +160,14 @@
         </label>
         <div class="settings-fields dictation-fields">
           <label class="toggle-field modal-toggle">
-            <input id="dictation-enabled" type="checkbox" />
+            <input id="dictation-enabled" type="checkbox" checked />
             <span class="toggle-track" aria-hidden="true"></span>
-            <span>手机说话时模拟 Fn（触发语音输入）</span>
+            <span>手机按住说话时联动 Fn</span>
           </label>
           <label class="field modal-span">
-            <span>模拟方式</span>
+            <span>Fn 联动方式</span>
             <select id="dictation-mode">
-              <option value="hold" selected>按住 Fn（松开结束）</option>
+              <option value="hold" selected>同步按住与松开（默认）</option>
               <option value="double">双击 Fn（兜底模式）</option>
             </select>
           </label>

@@ -16,6 +16,8 @@ import android.media.ImageReader
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -26,10 +28,10 @@ import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import com.google.zxing.BinaryBitmap
-import com.google.zxing.DecodeHintType
-import com.google.zxing.MultiFormatReader
 import com.google.zxing.PlanarYUVLuminanceSource
+import com.google.zxing.ReaderException
 import com.google.zxing.common.HybridBinarizer
+import com.google.zxing.qrcode.QRCodeReader
 
 /**
  * 扫码配对页（设计 docs/design/qr-pairing-20260919-overview.md §4.2）：
@@ -43,15 +45,24 @@ class ScanActivity : Activity() {
     private lateinit var scanStatus: TextView
     private lateinit var editPayload: EditText
 
-    private var camera: CameraDevice? = null
-    private var session: CameraCaptureSession? = null
-    private var imageReader: ImageReader? = null
-    private var cameraThread: HandlerThread? = null
-    private var cameraHandler: Handler? = null
+    /** 每次打开独占自己的相机、会话和帧。生命周期在主线程，解码器仅由工作线程使用。 */
+    private class CameraPreview(
+        val surface: Surface,
+        val orientation: Int,
+        val continuousFocus: Boolean,
+    ) {
+        val frames: ImageReader = ImageReader.newInstance(PREVIEW_W, PREVIEW_H, ImageFormat.YUV_420_888, 3)
+        val worker = HandlerThread("scan-decode").apply { start() }
+        val decodeHandler = Handler(worker.looper)
+        val decoder = QRCodeReader()
+        var lastDecodeAt = -DECODE_INTERVAL_MS
+        var device: CameraDevice? = null
+        var session: CameraCaptureSession? = null
+    }
 
-    private val reader = MultiFormatReader()
-    /** 相机线程按时间间隔解码，其余图像及时归还给 ImageReader。 */
-    private var lastDecodeAt = 0L
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var resumed = false
+    private var currentPreview: CameraPreview? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -65,22 +76,29 @@ class ScanActivity : Activity() {
         }
         findViewById<Button>(R.id.btn_scan_cancel).setOnClickListener { finish() }
 
-        reader.setHints(mapOf(DecodeHintType.POSSIBLE_FORMATS to listOf(com.google.zxing.BarcodeFormat.QR_CODE)))
-
+        preview.holder.setFixedSize(PREVIEW_W, PREVIEW_H)
         preview.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) {}
+            override fun surfaceCreated(holder: SurfaceHolder) = openCamera(holder)
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
-            override fun surfaceDestroyed(holder: SurfaceHolder) {
-                closeCamera()
-            }
+            override fun surfaceDestroyed(holder: SurfaceHolder) = closeCamera()
         })
 
-        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            startPreviewWhenReady()
-        } else {
-            scanStatus.text = "需要相机权限才能扫码"
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            showCameraStatus("需要相机权限才能扫码")
             requestPermissions(arrayOf(Manifest.permission.CAMERA), REQ_CAMERA)
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        resumed = true
+        openCamera(preview.holder)
+    }
+
+    override fun onPause() {
+        resumed = false
+        closeCamera()
+        super.onPause()
     }
 
     override fun onRequestPermissionsResult(
@@ -91,148 +109,151 @@ class ScanActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQ_CAMERA) return
         if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-            startPreviewWhenReady()
+            openCamera(preview.holder)
         } else {
-            scanStatus.text = "没有相机权限：可手动输入配对码"
+            showCameraStatus("没有相机权限：可手动输入配对码")
             Toast.makeText(this, R.string.err_no_camera_perm, Toast.LENGTH_LONG).show()
         }
     }
 
-    /** 预览面就绪后启动相机；重复调用安全。 */
-    private fun startPreviewWhenReady() {
-        if (camera != null) return
-        preview.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) {
-                openCamera(holder)
-            }
-
-            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
-            override fun surfaceDestroyed(holder: SurfaceHolder) {
-                closeCamera()
-            }
-        })
-        if (preview.holder.getSurface() != null && preview.holder.getSurface().isValid) {
-            openCamera(preview.holder)
-        }
+    private fun showCameraStatus(message: String) {
+        scanStatus.text = message
+        scanStatus.visibility = View.VISIBLE
     }
 
-    private fun pickCamera(): Pair<String, Int>? {
-        val manager = getSystemService(CameraManager::class.java)
-        for ((id, chars) in manager.cameraIdList.map { it to manager.getCameraCharacteristics(it) }) {
-            if (chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) {
-                val orientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
-                return id to orientation
-            }
-        }
-        val first = manager.cameraIdList.firstOrNull() ?: return null
-        return first to (manager.getCameraCharacteristics(first)
-            .get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90)
+    private fun pickCamera(manager: CameraManager): Pair<String, CameraCharacteristics>? {
+        val cameras = manager.cameraIdList.map { it to manager.getCameraCharacteristics(it) }
+        return cameras.firstOrNull { (_, characteristics) ->
+            characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+        } ?: cameras.firstOrNull()
     }
 
     @SuppressLint("MissingPermission")
     private fun openCamera(holder: SurfaceHolder) {
+        if (!resumed || isFinishing || currentPreview != null || !holder.surface.isValid) return
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return
-        val (cameraId, sensorOrientation) = pickCamera() ?: run {
-            scanStatus.text = "找不到可用相机：可手动输入配对码"
-            return
-        }
-        val manager = getSystemService(CameraManager::class.java)
-        // 解码源固定 640×480：帧小、CPU 解码开销可控（设计 §4.2）
-        imageReader = ImageReader.newInstance(640, 480, ImageFormat.YUV_420_888, 3).apply {
-            setOnImageAvailableListener({ onImageAvailable() }, cameraHandler ?: newCameraHandler())
-        }
+        showCameraStatus("正在启动相机…")
         try {
-            manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
-                override fun onOpened(device: CameraDevice) {
-                    camera = device
-                    createSession(device, holder, sensorOrientation)
-                }
-
-                override fun onDisconnected(device: CameraDevice) {
-                    device.close()
-                    if (camera === device) camera = null
-                }
-
-                override fun onError(device: CameraDevice, error: Int) {
-                    device.close()
-                    if (camera === device) camera = null
-                    runOnUiThread { scanStatus.text = "相机启动失败（错误码 $error）：可手动输入配对码" }
-                }
-            }, cameraHandler ?: newCameraHandler())
-        } catch (e: SecurityException) {
-            scanStatus.text = "没有相机权限：可手动输入配对码"
-        }
-    }
-
-    private fun newCameraHandler(): Handler {
-        if (cameraThread == null) {
-            cameraThread = HandlerThread("scan-camera").apply { start() }
-            cameraHandler = Handler(cameraThread!!.looper)
-        }
-        return cameraHandler!!
-    }
-
-    private fun createSession(device: CameraDevice, holder: SurfaceHolder, sensorOrientation: Int) {
-        val readerSurface = imageReader!!.surface
-        holder.setFixedSize(PREVIEW_W, PREVIEW_H)
-        try {
-            device.createCaptureSession(
-                listOf(holder.surface, readerSurface),
-                object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(s: CameraCaptureSession) {
-                        if (camera !== device) return
-                        session = s
-                        val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-                        builder.addTarget(holder.surface)
-                        builder.addTarget(readerSurface)
-                        builder.set(CaptureRequest.CONTROL_AF_MODE,
-                            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-                        s.setRepeatingRequest(builder.build(), null, cameraHandler)
-                        runOnUiThread { scanStatus.visibility = View.INVISIBLE }
-                    }
-
-                    override fun onConfigureFailed(s: CameraCaptureSession) {
-                        runOnUiThread { scanStatus.text = "相机会话创建失败：可手动输入配对码" }
-                    }
-                },
-                cameraHandler ?: newCameraHandler(),
+            val manager = getSystemService(CameraManager::class.java)
+            val (cameraId, characteristics) = pickCamera(manager) ?: run {
+                showCameraStatus("找不到可用相机：可手动输入配对码")
+                return
+            }
+            val opening = CameraPreview(
+                holder.surface,
+                characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90,
+                characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)
+                    ?.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO) == true,
             )
+            currentPreview = opening
+            opening.frames.setOnImageAvailableListener({ decodeFrame(opening) }, opening.decodeHandler)
+            manager.openCamera(cameraId, cameraCallback(opening), mainHandler)
+        } catch (e: SecurityException) {
+            closeCamera()
+            showCameraStatus("没有相机权限：可手动输入配对码")
         } catch (e: Exception) {
-            Log.w(TAG, "createSession failed", e)
-            runOnUiThread { scanStatus.text = "相机启动异常：可手动输入配对码" }
+            Log.w(TAG, "打开相机失败", e)
+            closeCamera()
+            showCameraStatus("无法打开相机：可手动输入配对码")
         }
-        this.sensorOrientation = sensorOrientation
     }
 
-    private var sensorOrientation = 90
+    private fun cameraCallback(opening: CameraPreview) = object : CameraDevice.StateCallback() {
+        override fun onOpened(device: CameraDevice) {
+            if (currentPreview !== opening) {
+                device.close()
+                return
+            }
+            opening.device = device
+            createSession(opening, device)
+        }
 
-    private fun onImageAvailable() {
-        val image = imageReader?.acquireLatestImage() ?: return
-        val now = System.currentTimeMillis()
-        if (now - lastDecodeAt < DECODE_INTERVAL_MS) {
-            image.close()
+        override fun onDisconnected(device: CameraDevice) {
+            closeUnavailableCamera(device, "相机已断开：可手动输入配对码")
+        }
+
+        override fun onError(device: CameraDevice, error: Int) {
+            closeUnavailableCamera(device, "相机启动失败（错误码 $error）：可手动输入配对码")
+        }
+
+        private fun closeUnavailableCamera(device: CameraDevice, message: String) {
+            if (currentPreview === opening) {
+                opening.device = device
+                failCamera(opening, message)
+            } else {
+                device.close()
+            }
+        }
+    }
+
+    private fun createSession(opening: CameraPreview, device: CameraDevice) {
+        try {
+            check(opening.surface.isValid)
+            val frames = opening.frames.surface
+            device.createCaptureSession(listOf(opening.surface, frames), object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(session: CameraCaptureSession) {
+                    if (currentPreview !== opening) {
+                        session.close()
+                        return
+                    }
+                    opening.session = session
+                    try {
+                        val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                        builder.addTarget(opening.surface)
+                        builder.addTarget(frames)
+                        if (opening.continuousFocus) {
+                            builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                        }
+                        session.setRepeatingRequest(builder.build(), null, null)
+                        scanStatus.visibility = View.INVISIBLE
+                    } catch (e: Exception) {
+                        Log.w(TAG, "启动相机预览失败", e)
+                        failCamera(opening, "无法预览相机：可手动输入配对码")
+                    }
+                }
+
+                override fun onConfigureFailed(session: CameraCaptureSession) {
+                    session.close()
+                    failCamera(opening, "相机会话创建失败：可手动输入配对码")
+                }
+            }, mainHandler)
+        } catch (e: Exception) {
+            Log.w(TAG, "创建相机会话失败", e)
+            failCamera(opening, "相机启动异常：可手动输入配对码")
+        }
+    }
+
+    private fun failCamera(opening: CameraPreview, message: String) {
+        if (currentPreview !== opening) return
+        closeCamera()
+        showCameraStatus(message)
+    }
+
+    private fun decodeFrame(opening: CameraPreview) {
+        val image = try {
+            opening.frames.acquireLatestImage()
+        } catch (_: IllegalStateException) {
+            return // 关闭后的迟到图像回调
+        } ?: return
+        val luminance = image.use {
+            val now = SystemClock.elapsedRealtime()
+            if (now - opening.lastDecodeAt < DECODE_INTERVAL_MS) return
+            opening.lastDecodeAt = now
+            try {
+                buildLuminanceSource(image, opening.orientation)
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "读取相机图像失败", e)
+                return
+            }
+        }
+        val payload = try {
+            opening.decoder.decode(BinaryBitmap(HybridBinarizer(luminance))).text
+        } catch (_: ReaderException) {
             return
         }
-        lastDecodeAt = now
-        val luminance = try {
-            buildLuminanceSource(image, sensorOrientation)
-        } catch (e: Exception) {
-            Log.w(TAG, "build luminance failed", e)
-            null
-        } finally {
-            image.close()
+        mainHandler.post {
+            if (currentPreview === opening) submitPayload(payload)
         }
-        if (luminance == null) return
-        // 解码放后台（此处已是 camera 线程），结果回主线程
-        val bitmap = BinaryBitmap(HybridBinarizer(luminance))
-        val result = try {
-            reader.decodeWithState(bitmap)
-        } catch (_: Exception) {
-            null // 本帧无 QR，正常情况
-        } finally {
-            reader.reset()
-        }
-        result?.text?.let { text -> runOnUiThread { submitPayload(text) } }
     }
 
     /** YUV 平面亮度提取（处理 rowStride）+ 按传感器方向旋转。 */
@@ -269,7 +290,7 @@ class ScanActivity : Activity() {
             }
             180 -> data = rotate180(data, width, height)
         }
-        // 竖屏锁定下预览为竖构图，送 zxing 前统一再转 90° 使长边为高（其坐标以 width<height 假设最佳）
+        // 将按传感器方向旋转后的亮度平面交给 ZXing。
         return PlanarYUVLuminanceSource(data, w, h, 0, 0, w, h, false)
     }
 
@@ -297,6 +318,7 @@ class ScanActivity : Activity() {
 
     /** 校验并回传配对码给调用方（添加/连接落地在 MainActivity，设计 §4.3）。 */
     private fun submitPayload(raw: String) {
+        if (isFinishing) return
         val payload = raw.trim()
         if (ConfigParser.parsePairing(payload) == null) {
             Toast.makeText(this, "配对码无效，请扫描 Mac 上的配对二维码", Toast.LENGTH_LONG).show()
@@ -307,21 +329,14 @@ class ScanActivity : Activity() {
     }
 
     private fun closeCamera() {
-        try {
-            session?.close()
-        } catch (_: Exception) {
-        }
-        try {
-            camera?.close()
-        } catch (_: Exception) {
-        }
-        session = null
-        camera = null
-        imageReader?.close()
-        imageReader = null
-        cameraThread?.quitSafely()
-        cameraThread = null
-        cameraHandler = null
+        val closing = currentPreview ?: return
+        currentPreview = null
+        runCatching { closing.session?.close() }.onFailure { Log.w(TAG, "关闭相机会话失败", it) }
+        runCatching { closing.device?.close() }.onFailure { Log.w(TAG, "关闭相机失败", it) }
+        closing.frames.setOnImageAvailableListener(null, null)
+        // 图像读写与释放排在同一线程，保证解码期间 ImageReader 仍然有效。
+        closing.decodeHandler.post { closing.frames.close() }
+        closing.worker.quitSafely()
     }
 
     override fun onDestroy() {

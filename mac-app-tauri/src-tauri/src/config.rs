@@ -312,6 +312,20 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn dictation_defaults_to_hold_and_keeps_explicit_settings() {
+        // 旧配置缺少联动字段时默认按住，用户主动关闭或选择双击的设置仍生效。
+        let defaulted: AppConfig = serde_json::from_str(r#"{"server":"localhost:9432"}"#).unwrap();
+        assert!(defaulted.dictation_enabled);
+        assert_eq!(defaulted.dictation_mode, "hold");
+
+        let saved: AppConfig =
+            serde_json::from_str(r#"{"dictation_enabled":false,"dictation_mode":"double"}"#)
+                .unwrap();
+        assert!(!saved.dictation_enabled);
+        assert_eq!(saved.dictation_mode, "double");
+    }
+
+    #[test]
     fn server_keys_normalize_default_and_ipv6_ports() {
         assert_eq!(server_key("Relay.Example").unwrap(), "relay.example:9432");
         assert_eq!(server_key("[::1]:9440").unwrap(), "[::1]:9440");

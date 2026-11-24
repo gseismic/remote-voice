@@ -295,3 +295,6 @@
 
 - **2026-11-24 12:56** | [PLAN-033-public-https-scan-to-connect.md](PLAN-033-public-https-scan-to-connect.md) → [PLAN-033-public-https-scan-to-connect-OUTCOME.md](PLAN-033-public-https-scan-to-connect-OUTCOME.md)
   摘要：`voice.gpt60.com` 通过现有 Nginx 443 上线，Let's Encrypt 证书及续期验证通过。目标 Mac 已更新并注册公网中继，Android 配对码保存中继和目标 ID 后自动建桥。模拟器配对、连续目录轮询、停止连接与 PTT 通过，公网测试音到达 BlackHole。最新 APK 已更新到局域网下载入口，实体手机对屏扫码待验收。
+
+- **2026-11-24 13:20** | [PLAN-034-scan-lifecycle-and-fn-hold.md](PLAN-034-scan-lifecycle-and-fn-hold.md) → [PLAN-034-scan-lifecycle-and-fn-hold-OUTCOME.md](PLAN-034-scan-lifecycle-and-fn-hold-OUTCOME.md)
+  摘要：复现扫描回调跨线程修改预览引发的闪退，统一相机生命周期并发布修复版 APK。32 轮进出与后台切换、权限和无相机场景通过。Mac 修正 Fn 修饰键按下与释放，已安装新版并启用默认按住，桌面按键验收等待辅助功能授权。
