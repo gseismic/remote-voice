@@ -17,10 +17,14 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
-import java.util.concurrent.ConcurrentHashMap
 
 /** UI 状态枚举：Activity 据此着色并控制按钮可用性。 */
-enum class StatusState { STOPPED, CONNECTING, WAIT_PEER, STREAMING, ERROR }
+enum class StatusState {
+    STOPPED, CONNECTING, WAIT_PEER, STREAMING, DISCONNECTED, ERROR;
+
+    fun needsRetry(autoReconnect: Boolean): Boolean =
+        this == DISCONNECTED || this == ERROR || (this == WAIT_PEER && !autoReconnect)
+}
 
 /**
  * 前台采音服务（协议 v4）：持有 1 条登录连接（服务器状态 + LIST 轮询目录）
@@ -34,11 +38,15 @@ class AudioStreamService : Service() {
     private class Bridge(
         val client: RelayClient,
         val thread: Thread,
-        @Volatile var online: Boolean = false,
-        @Volatile var peerName: String = "",
+        var state: StatusState = StatusState.CONNECTING,
+        var text: String = "连接 Mac…",
+        var peerName: String = "",
     )
 
-    /** 登录连接（target=""）：服务器连通性标记 + 目录轮询；null=服务未运行。 */
+    /** 登录和桥接使用同一份服务器配置。换服务器时由完整重启切换。 */
+    private var sessionServer: ServerStore.Server? = null
+
+    /** 登录连接（target=""）：服务器连通性标记 + 目录轮询。 */
     private var loginClient: RelayClient? = null
     private var loginThread: Thread? = null
 
@@ -80,6 +88,7 @@ class AudioStreamService : Service() {
 
         /** 服务器（登录会话）连通性：主界面服务器标记数据源。 */
         @Volatile var serverOnline: Boolean = false
+        @Volatile var serverNeedsRetry: Boolean = false
         @Volatile var serverText: String = "未启动"
 
         /** 当前登录会话收到 LIST 后才可根据目录判断 Mac 是否在线。 */
@@ -88,10 +97,12 @@ class AudioStreamService : Service() {
         /** 当前控制目标的 device_id（主界面页指示器）。 */
         @Volatile var activeMacId: String = ""
 
-        /** 已建桥 Mac 集合快照（主界面滑动切换的数据源）。 */
-        @Volatile var connectedMacs: List<String> = emptyList()
+        /** 每台已选择 Mac 的状态。滑动只切换已就绪的桥接。 */
+        @Volatile var bridgeStates: Map<String, StatusState> = emptyMap()
+        val connectedMacs: List<String>
+            get() = bridgeStates.filterValues { it == StatusState.STREAMING }.keys.toList()
 
-        /** 目录版本号：LIST 刷新时递增，主界面据此重建列表。 */
+        /** Mac 条目或桥接状态变化时递增，主界面据此更新列表。 */
         @Volatile var macsRevision: Long = 0
     }
 
@@ -115,12 +126,10 @@ class AudioStreamService : Service() {
                 stopStreaming()
                 startStreaming(startId)
             }
+            ACTION_RETRY -> retryConnections()
             ACTION_SET_ACTIVE -> {
                 val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID).orEmpty()
-                if (deviceId.isNotEmpty()) {
-                    val exists = synchronized(bridges) { bridges.containsKey(deviceId) }
-                    if (exists) setActiveTarget(deviceId) else connectBridge(deviceId)
-                }
+                if (deviceId.isNotEmpty()) connectBridge(deviceId)
             }
             ACTION_DISCONNECT_MAC -> {
                 val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID).orEmpty()
@@ -148,11 +157,11 @@ class AudioStreamService : Service() {
     // ---- 生命周期 ----
 
     private fun startStreaming(startId: Int = activeStartId) {
-        if (loginThread?.isAlive == true) return
+        if (sessionServer != null) return
         preserveError = false
         Status.certChangePending = false
         activeStartId = startId
-        val generation = ++connectionGeneration
+        connectionGeneration++
         // 前台服务必须尽早发布通知；即使配置或音频初始化失败，也要让系统知道启动已处理。
         try {
             startForegroundWith("启动中…")
@@ -161,7 +170,6 @@ class AudioStreamService : Service() {
             return
         }
 
-        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         pttHeld = false
         val store = ServerStore(this)
         val server = store.active()
@@ -169,94 +177,99 @@ class AudioStreamService : Service() {
             failAndStop("尚未配置服务器或密码，请在设置中添加")
             return
         }
-        val secretHex = secretHashHex(server.password)
+        sessionServer = server
         Status.framesSent = 0
         Status.talking = false
-        Status.state = StatusState.CONNECTING
-        Status.text = "连接服务器…"
-        Status.serverText = "连接中…"
-        Status.macDirectoryLoaded = false
+        applyState(StatusState.CONNECTING, "连接服务器…")
 
         // 恢复上次控制目标
         activeDeviceId = store.target(server.id)
         Status.activeMacId = activeDeviceId
 
-        val fingerprintFor = { h: String, p: Int ->
-            TrustStore.load(prefs, TrustStore.serverKey(h, p))
-        }
+        startLogin(server)
+        if (activeDeviceId.isNotEmpty()) connectBridge(activeDeviceId)
+    }
 
-        // 1) 登录连接：服务器状态 + LIST 目录轮询
+    private fun startLogin(server: ServerStore.Server) {
+        loginClient?.stop()
+        loginThread?.interrupt()
+        Status.serverOnline = false
+        Status.serverNeedsRetry = false
+        Status.serverText = "连接中…"
+        Status.macDirectoryLoaded = false
+
+        val store = ServerStore(this)
+        val generation = connectionGeneration
         lateinit var login: RelayClient
         val loginListener = object : RelayClient.Listener {
-            override fun onState(text: String) {
+            private fun postIfCurrent(action: () -> Unit) {
                 mainHandler.post {
-                    if (connectionGeneration != generation) return@post
+                    if (!preserveError && connectionGeneration == generation && loginClient === login) action()
+                }
+            }
+
+            override fun onState(state: RelayClient.State, text: String) {
+                postIfCurrent {
                     Status.serverText = text
-                    Status.serverOnline = login?.isAuthed() == true
+                    Status.serverOnline = state == RelayClient.State.AUTHENTICATED
+                    Status.serverNeedsRetry = state == RelayClient.State.DISCONNECTED
                     if (!Status.serverOnline) Status.macDirectoryLoaded = false
+                    if (activeDeviceId.isEmpty()) updateUnselectedState()
                 }
             }
 
             override fun onPeerName(name: String) {}
 
             override fun onMacs(macs: List<MacInfo>) {
-                mainHandler.post {
-                    if (connectionGeneration != generation) return@post
-                    store.saveMacCache(macs, server.id)
-                    Status.macDirectoryLoaded = true
-                    Status.macsRevision++
-                    // 控制目标如果已从目录消失（服务器端解除登记），回到未选状态
-                    val hasBridge = synchronized(bridges) { bridges.containsKey(activeDeviceId) }
-                    if (!hasBridge && activeDeviceId.isNotEmpty() && macs.none { it.deviceId == activeDeviceId }) {
-                        clearActiveTarget()
+                postIfCurrent {
+                    val directory = macs.sortedBy { it.deviceId }
+                    if (store.macCache(server.id) != directory) {
+                        store.saveMacCache(directory, server.id)
+                        Status.macsRevision++
                     }
+                    Status.macDirectoryLoaded = true
+                    removeMissingWaitingBridges(directory)
                 }
             }
 
-            override fun onPeerOnline() {}
-            override fun onPeerOffline() {}
-
             override fun onFatal(message: String) {
-                mainHandler.post {
-                    if (connectionGeneration != generation) return@post
-                    failAndStop(message)
-                }
+                postIfCurrent { failAndStop(message) }
             }
 
             override fun onCertChanged() {
-                mainHandler.post {
-                    if (connectionGeneration != generation) return@post
+                postIfCurrent {
                     Status.certChangePending = true
                     failAndStop(CERT_CHANGED_TEXT)
                 }
             }
         }
-        val autoReconnect = prefs.getBoolean(KEY_AUTO_RECONNECT, true)
-        login = RelayClient(
-            server.host, server.port, secretHex, fingerprintFor, loginListener,
-            server.mode, target = "", autoReconnect = autoReconnect,
-        )
+        login = newRelayClient(server, "", loginListener)
         loginClient = login
         loginThread = Thread({ login.runForever() }, "relay-login").apply { start() }
+    }
 
-        // 2) 恢复上次的桥接目标（自动接回上次的 Mac）
-        if (activeDeviceId.isNotEmpty()) {
-            connectBridge(activeDeviceId, server, secretHex, fingerprintFor, generation)
+    private fun retryConnections() {
+        val server = sessionServer
+        if (preserveError || server == null) {
+            stopStreaming()
+            startStreaming()
+            return
         }
+        if (Status.serverNeedsRetry) startLogin(server)
+        val bridge = activeBridge()
+        if (bridge != null && bridge.state.needsRetry(autoReconnectEnabled())) connectBridge(activeDeviceId)
     }
 
     private fun stopStreaming() {
         // 先使已经排队的旧回调失效，再关闭底层连接和采音资源。
         connectionGeneration++
         mainHandler.removeCallbacksAndMessages(null)
-        val oldCaptureThread = captureThread
-        captureGeneration++
-        oldCaptureThread?.interrupt()
-        releaseAudioRecord()
-        waitForThread(oldCaptureThread, 1000)
-        if (captureThread === oldCaptureThread) captureThread = null
+        stopCapture()
         synchronized(bridges) {
-            bridges.values.forEach { it.client.stop() }
+            bridges.values.forEach {
+                it.client.stop()
+                it.thread.interrupt()
+            }
             bridges.clear()
         }
         loginClient?.stop()
@@ -265,8 +278,10 @@ class AudioStreamService : Service() {
         loginThread = null
         oldLogin?.interrupt()
         waitForThread(oldLogin, 1000)
-        Status.connectedMacs = emptyList()
+        sessionServer = null
+        publishBridgeStates()
         Status.serverOnline = false
+        Status.serverNeedsRetry = false
         Status.macDirectoryLoaded = false
         Status.peerName = ""
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -274,38 +289,23 @@ class AudioStreamService : Service() {
 
     // ---- 桥接管理（Activity 通过 Intent 触发，主线程执行）----
 
-    /** 连接（建桥）一台 Mac；已存在则只切换为当前控制目标。 */
+    /** 连接或重试一台 Mac。已有可用或正在自动恢复的桥接时只切换目标。 */
     private fun connectBridge(deviceId: String) {
-        synchronized(bridges) {
-            if (bridges.containsKey(deviceId)) {
+        val server = sessionServer ?: return
+        val existing = synchronized(bridges) { bridges[deviceId] }
+        if (existing != null) {
+            if (!existing.state.needsRetry(autoReconnectEnabled())) {
                 setActiveTarget(deviceId)
                 return
             }
+            removeBridge(deviceId)
         }
-        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val server = ServerStore(this).active()
-        if (server == null || server.password.isBlank()) {
-            failAndStop("尚未配置服务器或密码，请在设置中添加")
-            return
-        }
-        connectBridge(deviceId, server, secretHashHex(server.password),
-            { h, p -> TrustStore.load(prefs, TrustStore.serverKey(h, p)) },
-            connectionGeneration)
-    }
-
-    private fun connectBridge(
-        deviceId: String,
-        server: ServerStore.Server,
-        secretHex: String,
-        fingerprintFor: (String, Int) -> String,
-        generation: Long,
-    ) {
-        if (connectionGeneration != generation) return
+        val generation = connectionGeneration
         lateinit var bridge: Bridge
         val listener = object : RelayClient.Listener {
             private fun isCurrent(): Boolean =
-                synchronized(bridges) { bridges[deviceId] } === bridge &&
-                    connectionGeneration == generation
+                !preserveError && connectionGeneration == generation &&
+                    synchronized(bridges) { bridges[deviceId] } === bridge
 
             private fun postIfCurrent(action: () -> Unit) {
                 mainHandler.post {
@@ -313,9 +313,15 @@ class AudioStreamService : Service() {
                 }
             }
 
-            override fun onState(text: String) {
+            override fun onState(state: RelayClient.State, text: String) {
                 postIfCurrent {
-                    if (deviceId == activeDeviceId) applyState(text)
+                    val status = when (state) {
+                        RelayClient.State.CONNECTING, RelayClient.State.AUTHENTICATED -> StatusState.CONNECTING
+                        RelayClient.State.WAIT_PEER -> StatusState.WAIT_PEER
+                        RelayClient.State.READY -> StatusState.STREAMING
+                        RelayClient.State.DISCONNECTED -> StatusState.DISCONNECTED
+                    }
+                    updateBridgeState(deviceId, bridge, status, text)
                 }
             }
 
@@ -323,30 +329,13 @@ class AudioStreamService : Service() {
                 postIfCurrent {
                     bridge.peerName = name
                     if (deviceId == activeDeviceId) Status.peerName = name
-                    patchMacCache(deviceId) { it.copy(name = name) }
-                }
-            }
-
-            override fun onPeerOnline() {
-                postIfCurrent {
-                    bridge.online = true
-                    refreshConnectedList()
-                    if (deviceId == activeDeviceId) startCapture()
-                }
-            }
-
-            override fun onPeerOffline() {
-                postIfCurrent {
-                    bridge.online = false
-                    refreshConnectedList()
-                    if (deviceId == activeDeviceId) stopCapture()
+                    patchMacCache(server.id, deviceId) { it.copy(name = name) }
                 }
             }
 
             override fun onFatal(message: String) {
                 postIfCurrent {
-                    removeBridge(deviceId)
-                    if (deviceId == activeDeviceId) failAndStop(message)
+                    updateBridgeState(deviceId, bridge, StatusState.ERROR, message)
                 }
             }
 
@@ -357,79 +346,116 @@ class AudioStreamService : Service() {
                     failAndStop(CERT_CHANGED_TEXT)
                 }
             }
-
-            override fun onMacs(macs: List<MacInfo>) {}
         }
-        val autoReconnect = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getBoolean(KEY_AUTO_RECONNECT, true)
-        val relay = RelayClient(
-            server.host, server.port, secretHex, fingerprintFor, listener,
-            server.mode, target = deviceId, autoReconnect = autoReconnect,
-        )
+        val relay = newRelayClient(server, deviceId, listener)
         bridge = Bridge(relay, Thread({ relay.runForever() }, "bridge-$deviceId"))
         synchronized(bridges) { bridges[deviceId] = bridge }
-        bridge.thread.start()
-        refreshConnectedList()
+        publishBridgeStates()
         setActiveTarget(deviceId)
+        bridge.thread.start()
     }
+
+    private fun newRelayClient(server: ServerStore.Server, target: String, listener: RelayClient.Listener): RelayClient {
+        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        return RelayClient(
+            server.host, server.port, secretHashHex(server.password),
+            { host, port -> TrustStore.load(prefs, TrustStore.serverKey(host, port)) }, listener,
+            server.mode, target, autoReconnectEnabled(),
+        )
+    }
+
+    private fun autoReconnectEnabled(): Boolean =
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_AUTO_RECONNECT, true)
 
     /** 切换当前控制目标：旧目标发 TALK-off，新目标同步当前 PTT 状态。 */
     private fun setActiveTarget(deviceId: String) {
-        if (deviceId == activeDeviceId) {
-            Status.activeMacId = activeDeviceId
-            return
-        }
-        val oldActive = activeDeviceId
-        activeDeviceId = deviceId
-        Status.activeMacId = deviceId
-        ServerStore(this).selectMac(deviceId)
-        if (pttHeld) {
-            synchronized(bridges) { bridges[oldActive] }?.client
-                ?.sendTalk(false, bridgeSerial(oldActive))
-        }
-        Status.peerName = synchronized(bridges) { bridges[deviceId] }?.peerName ?: ""
-        val online = synchronized(bridges) { bridges[deviceId] }?.online == true
-        if (online) {
-            applyState("已就绪")
-            startCapture()
-        } else {
-            applyState("连接中…")
+        val bridge = synchronized(bridges) { bridges[deviceId] } ?: return
+        if (deviceId != activeDeviceId) {
+            if (pttHeld) activeBridge()?.client?.sendTalk(false, bridgeSerial(activeDeviceId))
             stopCapture()
+            saveActiveTarget(deviceId)
+            activeDeviceId = deviceId
+            Status.activeMacId = deviceId
+            Status.macsRevision++
+        }
+        publishActiveBridge(bridge)
+    }
+
+    private fun updateBridgeState(deviceId: String, bridge: Bridge, state: StatusState, text: String) {
+        val changed = bridge.state != state
+        bridge.state = state
+        bridge.text = text
+        if (changed) publishBridgeStates()
+        if (deviceId == activeDeviceId) publishActiveBridge(bridge)
+    }
+
+    private fun publishActiveBridge(bridge: Bridge) {
+        Status.peerName = bridge.peerName
+        applyState(bridge.state, bridge.text)
+        if (bridge.state == StatusState.STREAMING) startCapture()
+        else if (captureThread != null) stopCapture()
+    }
+
+    /** 目录包含已登记的离线设备。等待中的 ID 从最新目录消失才撤销选择。 */
+    private fun removeMissingWaitingBridges(macs: List<MacInfo>) {
+        val registeredIds = macs.mapTo(HashSet()) { it.deviceId }
+        val missing = synchronized(bridges) {
+            bridges.filter { (id, bridge) -> bridge.state == StatusState.WAIT_PEER && id !in registeredIds }.keys
+        }
+        missing.forEach(::removeBridge)
+        if (activeDeviceId.isNotEmpty() && activeDeviceId !in registeredIds && activeBridge() == null) {
+            selectRemainingMac()
         }
     }
 
     /** 目录中目标消失时回到未选状态（LIST 回调路径）。 */
     private fun clearActiveTarget() {
         stopCapture()
+        saveActiveTarget("")
         activeDeviceId = ""
-        ServerStore(this).selectMac("")
         Status.activeMacId = ""
         Status.peerName = ""
-        applyState("已连接服务器")
+        Status.macsRevision++
+        updateUnselectedState()
+    }
+
+    /** 扫码可能已保存新目标，服务旧会话只更新自己选中的记录。 */
+    private fun saveActiveTarget(deviceId: String) {
+        val server = sessionServer ?: return
+        val store = ServerStore(this)
+        if (store.target(server.id) == activeDeviceId) store.selectMac(deviceId, server.id)
+    }
+
+    private fun updateUnselectedState() {
+        val state = when {
+            Status.serverOnline -> StatusState.WAIT_PEER
+            Status.serverNeedsRetry -> StatusState.DISCONNECTED
+            else -> StatusState.CONNECTING
+        }
+        applyState(state, Status.serverText)
     }
 
     private fun disconnectMac(deviceId: String) {
         val wasActive = deviceId == activeDeviceId
         removeBridge(deviceId)
-        if (wasActive) {
-            val next = synchronized(bridges) { bridges.keys.firstOrNull() } ?: ""
-            if (next.isNotEmpty()) {
-                setActiveTarget(next)
-            } else {
-                clearActiveTarget()
-            }
-        }
+        if (wasActive) selectRemainingMac()
+    }
+
+    private fun selectRemainingMac() {
+        val next = Status.connectedMacs.firstOrNull()
+        if (next != null) setActiveTarget(next) else clearActiveTarget()
     }
 
     private fun removeBridge(deviceId: String) {
         val bridge = synchronized(bridges) { bridges.remove(deviceId) } ?: return
         bridge.client.stop()
         bridge.thread.interrupt()
-        refreshConnectedList()
+        publishBridgeStates()
     }
 
-    private fun refreshConnectedList() {
-        Status.connectedMacs = synchronized(bridges) { bridges.keys.toList() }
+    private fun publishBridgeStates() {
+        Status.bridgeStates = synchronized(bridges) { bridges.mapValues { it.value.state } }
+        Status.macsRevision++
     }
 
     private fun bridgeSerial(deviceId: String): Long =
@@ -458,20 +484,11 @@ class AudioStreamService : Service() {
 
     // ---- 状态渲染 ----
 
-    private fun applyState(text: String) {
-        // relay 线程在 fatal 回调后还会发送一次“已停止”，不能覆盖真正的错误原因。
-        if (preserveError && text == "已停止") return
-        // 状态归一：RelayClient 的文案 → UI 状态枚举（Activity 据此着色/禁用按钮）
-        // 桥接建立=已就绪（STREAMING 态），但只在按住 PTT 后才真正发送
-        Status.state = when {
-            text == "已就绪" || text.startsWith("已就绪 ·") -> StatusState.STREAMING
-            text.contains("等待") -> StatusState.WAIT_PEER
-            text == "已停止" -> StatusState.STOPPED
-            else -> StatusState.CONNECTING
-        }
+    private fun applyState(state: StatusState, text: String) {
+        Status.state = state
         // 传输计时起点：进入 STREAMING 时不计时（桥接≠说话），按住 PTT 时由
         // setTalking 打点；离开传输态一律清零（主界面 mm:ss 计时=按住时长）
-        if (Status.state != StatusState.STREAMING) {
+        if (state != StatusState.STREAMING) {
             Status.startedAt = 0L
         }
         Status.text = text
@@ -486,9 +503,9 @@ class AudioStreamService : Service() {
         }
     }
 
-    private fun patchMacCache(deviceId: String, patch: (MacInfo) -> MacInfo) {
+    private fun patchMacCache(serverId: String, deviceId: String, patch: (MacInfo) -> MacInfo) {
         val store = ServerStore(this)
-        store.saveMacCache(store.macCache().map { if (it.deviceId == deviceId) patch(it) else it })
+        store.saveMacCache(store.macCache(serverId).map { if (it.deviceId == deviceId) patch(it) else it }, serverId)
         Status.macsRevision++
     }
 
@@ -594,9 +611,11 @@ class AudioStreamService : Service() {
         captureBridge: Bridge,
         record: AudioRecord,
     ) {
-        if (connectionGeneration == generation && captureGeneration == captureId &&
-            activeBridge() === captureBridge && audioRecord === record) {
-            failAndStop(message)
+        mainHandler.post {
+            if (connectionGeneration == generation && captureGeneration == captureId &&
+                activeBridge() === captureBridge && audioRecord === record) {
+                failAndStop(message)
+            }
         }
     }
 
@@ -690,6 +709,7 @@ class AudioStreamService : Service() {
         // 供外部组件（MainActivity）使用的动作与规格常量
         const val ACTION_STOP = "com.remotevoice.app.STOP"
         const val ACTION_RESTART = "com.remotevoice.app.RESTART"
+        const val ACTION_RETRY = "com.remotevoice.app.RETRY"
         const val ACTION_SET_ACTIVE = "com.remotevoice.app.SET_ACTIVE"
         const val ACTION_DISCONNECT_MAC = "com.remotevoice.app.DISCONNECT_MAC"
         const val EXTRA_DEVICE_ID = "device_id"

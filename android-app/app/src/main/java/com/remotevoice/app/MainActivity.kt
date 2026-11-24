@@ -108,13 +108,13 @@ class MainActivity : Activity() {
                 if (kotlin.math.abs(dx) < 80 || kotlin.math.abs(velocityX) < 600) return false
                 if (kotlin.math.abs(velocityY) > kotlin.math.abs(velocityX)) return false
                 val connected = AudioStreamService.Status.connectedMacs
-                if (connected.size < 2) return false
                 val current = AudioStreamService.Status.activeMacId
-                val index = connected.indexOf(current).coerceAtLeast(0)
-                val next = if (dx < 0) {
-                    connected[(index + 1) % connected.size]
-                } else {
-                    connected[(index - 1 + connected.size) % connected.size]
+                val index = connected.indexOf(current)
+                if (connected.isEmpty() || (connected.size == 1 && index >= 0)) return false
+                val next = when {
+                    index < 0 -> if (dx < 0) connected.first() else connected.last()
+                    dx < 0 -> connected[(index + 1) % connected.size]
+                    else -> connected[(index - 1 + connected.size) % connected.size]
                 }
                 setActiveMac(next)
                 Toast.makeText(this@MainActivity, "已切换到 ${macName(next)}", Toast.LENGTH_SHORT).show()
@@ -178,6 +178,8 @@ class MainActivity : Activity() {
             macName(st.activeMacId)
         }
         val waitingForMac = st.state == StatusState.WAIT_PEER && st.activeMacId.isNotEmpty()
+        val disconnected = st.state == StatusState.DISCONNECTED ||
+            (st.serverNeedsRetry && st.state != StatusState.STREAMING)
         val noMacOnline = st.serverOnline && st.macDirectoryLoaded && st.activeMacId.isEmpty() &&
             macs.none { it.online }
 
@@ -185,15 +187,22 @@ class MainActivity : Activity() {
         val (main, sub, color) = when {
             st.state == StatusState.ERROR ->
                 Triple("连接失败 · 点按重试", serverDisplay(), COLOR_RED)
+            disconnected -> Triple("连接已断开 · 点按重试", serverDisplay(), COLOR_AMBER)
             waitingForMac -> Triple(
                 if (autoReconnectEnabled()) "等待 Mac 上线 · 自动重连" else "等待 Mac 上线 · 点按重试",
                 serverDisplay(), COLOR_AMBER,
             )
+            st.state == StatusState.STREAMING -> {
+                val title = if (st.talking) "按住传输 · $name" else "已就绪 · $name"
+                val subtitle = when {
+                    st.serverNeedsRetry -> "目录连接已断开 · 点按重试"
+                    st.talking -> "服务器：${serverDisplay()}"
+                    else -> "按住下方按钮开始说话"
+                }
+                Triple(title, subtitle, COLOR_GREEN)
+            }
             noMacOnline -> Triple("没有 Mac 在线", serverDisplay(), COLOR_AMBER)
             st.serverOnline -> when (st.state) {
-                StatusState.STREAMING ->
-                    if (st.talking) Triple("按住传输 · $name", "服务器正常 · ${serverDisplay()}", COLOR_GREEN)
-                    else Triple("已就绪 · $name", "按住下方按钮开始说话", COLOR_GREEN)
                 StatusState.WAIT_PEER ->
                     Triple("已连服务器 · 未选 Mac", "在下方列表点一台 Mac 连接", COLOR_AMBER)
                 else ->
@@ -209,7 +218,7 @@ class MainActivity : Activity() {
         led.background.mutate().setTint(color)
 
         // 中央态区
-        val showBig = st.state == StatusState.STOPPED || st.state == StatusState.WAIT_PEER ||
+        val showBig = disconnected || st.state == StatusState.STOPPED || st.state == StatusState.WAIT_PEER ||
             (st.serverOnline && st.activeMacId.isEmpty())
         bigState.visibility = if (showBig) View.VISIBLE else View.GONE
         if (showBig) {
@@ -225,7 +234,7 @@ class MainActivity : Activity() {
             }
         }
         spin.visibility =
-            if (!st.serverOnline && AudioStreamService.instance != null) View.VISIBLE else View.GONE
+            if (!st.serverOnline && !st.serverNeedsRetry && AudioStreamService.instance != null) View.VISIBLE else View.GONE
         errPanel.visibility = if (st.state == StatusState.ERROR) View.VISIBLE else View.GONE
         if (st.state == StatusState.ERROR) textErr.text = st.text
         // 证书更换态：重试按钮换成「重新信任并重连」（普通重试无法自愈，必须清记录）
@@ -251,11 +260,11 @@ class MainActivity : Activity() {
         macsRow.removeAllViews()
         val store = ServerStore(this)
         val macs = store.macCache()
-        val connected = AudioStreamService.Status.connectedMacs
-        val activeId = AudioStreamService.Status.activeMacId
+        val st = AudioStreamService.Status
+        val states = st.bridgeStates
         for (m in macs) {
-            val isConnected = connected.contains(m.deviceId)
-            val isActive = isConnected && m.deviceId == activeId
+            val isConnected = states[m.deviceId] == StatusState.STREAMING
+            val isActive = isConnected && m.deviceId == st.activeMacId
             val marker = when {
                 isActive -> "◉ "
                 isConnected -> "● "
@@ -292,12 +301,12 @@ class MainActivity : Activity() {
             chip.setOnClickListener {
                 when {
                     isConnected -> setActiveMac(m.deviceId)
-                    m.online -> connectMac(m.deviceId)
                     m.busy -> Toast.makeText(this, "该 Mac 正被其他会话使用", Toast.LENGTH_SHORT).show()
+                    m.online -> connectMac(m.deviceId)
                     else -> Toast.makeText(this, MAC_START_HINT, Toast.LENGTH_LONG).show()
                 }
             }
-            if (isConnected) {
+            if (states.containsKey(m.deviceId)) {
                 chip.setOnLongClickListener {
                     disconnectMac(m.deviceId)
                     true
@@ -322,17 +331,17 @@ class MainActivity : Activity() {
     // ---- 连接动作 ----
 
     private fun connectMac(deviceId: String) {
-        prefs.edit().putBoolean(AudioStreamService.KEY_USER_STOPPED, false).apply()
-        ServerStore(this).selectMac(deviceId)
-        if (AudioStreamService.instance != null) {
-            setActiveMac(deviceId)
-        } else {
-            maybeAutoStart(force = true)
-        }
+        setActiveMac(deviceId)
         Toast.makeText(this, "连接 ${macName(deviceId)}…", Toast.LENGTH_SHORT).show()
     }
 
     private fun setActiveMac(deviceId: String) {
+        prefs.edit().putBoolean(AudioStreamService.KEY_USER_STOPPED, false).apply()
+        if (AudioStreamService.instance == null) {
+            ServerStore(this).selectMac(deviceId)
+            maybeAutoStart(force = true)
+            return
+        }
         startService(
             Intent(this, AudioStreamService::class.java)
                 .setAction(AudioStreamService.ACTION_SET_ACTIVE)
@@ -349,19 +358,20 @@ class MainActivity : Activity() {
     }
 
     private fun toggleService() {
+        val st = AudioStreamService.Status
+        if (st.certChangePending) return
         val running = AudioStreamService.instance != null
         if (!running) {
             prefs.edit().putBoolean(AudioStreamService.KEY_USER_STOPPED, false).apply()
             maybeAutoStart(force = true)
             Toast.makeText(this, R.string.service_started, Toast.LENGTH_SHORT).show()
         } else if (
-            (AudioStreamService.Status.state == StatusState.ERROR && !AudioStreamService.Status.certChangePending) ||
-            (AudioStreamService.Status.state == StatusState.WAIT_PEER &&
-                AudioStreamService.Status.activeMacId.isNotEmpty() && !autoReconnectEnabled())
+            st.serverNeedsRetry || st.state == StatusState.ERROR ||
+            (st.activeMacId.isNotEmpty() && st.state.needsRetry(autoReconnectEnabled()))
         ) {
-            // 关闭自动重连后，点按可在 Mac 恢复时重新建桥。
-            restartService()
-        } else if (AudioStreamService.Status.state != StatusState.ERROR) {
+            prefs.edit().putBoolean(AudioStreamService.KEY_USER_STOPPED, false).apply()
+            startService(Intent(this, AudioStreamService::class.java).setAction(AudioStreamService.ACTION_RETRY))
+        } else {
             startService(
                 Intent(this, AudioStreamService::class.java)
                     .setAction(AudioStreamService.ACTION_STOP)

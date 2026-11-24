@@ -301,3 +301,6 @@
 
 - **2026-11-24 14:01** | [PLAN-035-startup-and-fn-permission-hints.md](PLAN-035-startup-and-fn-permission-hints.md) → [PLAN-035-startup-and-fn-permission-hints-OUTCOME.md](PLAN-035-startup-and-fn-permission-hints-OUTCOME.md)
   摘要：README 开头记录启动和 Fn 授权步骤，两端显示离线或权限提示。目标 Mac 安装更新并确认授权通过。Android 修复 v4 目录解析，在目标 Mac 后上线或重启后自动接回，关闭自动重连时支持手动重试。模拟器通过联调，最新版 APK 已更新下载入口。
+
+- **2026-11-24 14:55** | [PLAN-036-android-bridge-recovery.md](PLAN-036-android-bridge-recovery.md) → [PLAN-036-android-bridge-recovery-OUTCOME.md](PLAN-036-android-bridge-recovery-OUTCOME.md)
+  摘要：Android 根据新目录清除失效目标，过滤忙碌设备并隔离单桥接失败。关闭自动重连后的网络和 Mac 断开均可一次点按重试，其他桥接保留。模拟器与 Go 中继验证四条修复及晚启动和 PTT 回归，APK 已更新下载入口。

@@ -49,20 +49,16 @@ class RelayClient(
     /** 断线自动重连开关（false 时网络错误即停，等用户手动重试）。 */
     private val autoReconnect: Boolean = true,
 ) {
+    enum class State { CONNECTING, AUTHENTICATED, WAIT_PEER, READY, DISCONNECTED }
+
     interface Listener {
-        /** 状态文本变化（已本地化，可直接展示）。 */
-        fun onState(text: String)
+        /** 连接状态及可显示的说明。 */
+        fun onState(state: State, text: String)
 
         /** 对端名字（AUTH_OK 回传），用于设备条目自动命名。 */
         fun onPeerName(name: String)
 
-        /** 对端上线：开始采音（实际发送受 PTT 门控）。 */
-        fun onPeerOnline()
-
-        /** 对端掉线：暂停采音。 */
-        fun onPeerOffline()
-
-        /** 致命错误（认证被拒等）：不应重试。 */
+        /** 本次连接被拒绝，等待用户处理或手动重试。 */
         fun onFatal(message: String)
 
         /**
@@ -77,9 +73,6 @@ class RelayClient(
         /** 目录应答（v4 LIST）：登录/桥接会话均可查询。 */
         fun onMacs(macs: List<MacInfo>) {}
     }
-
-    /** 服务器认证是否仍然有效（AUTH_OK 后为 true，连接断开即 false）。 */
-    fun isAuthed(): Boolean = authed
 
     // ---- 协议常量（必须与 server/internal/protocol 保持一致；v3）----
     private val frameAuth = 0x01
@@ -105,7 +98,6 @@ class RelayClient(
     private val backoffMaxMs = 30_000L     // 重连退避封顶
     private val macBackoffMaxMs = 5_000L  // 等待目标 Mac 时保持较短的恢复时间
 
-    private val retryOfflineTarget = autoReconnect && target.isNotEmpty()
     private var waitingForMac = false    // 仅网络线程访问
 
     // 在构造后即进入可运行态，避免 stop() 先于网络线程启动时被 runForever() 覆盖。
@@ -116,8 +108,6 @@ class RelayClient(
     @Volatile var peerName: String = ""
         private set
     @Volatile private var socket: SSLSocket? = null
-    /** AUTH_OK 已到达且连接未断（服务器连通判定的权威信号）。 */
-    @Volatile private var authed = false
     /** 从 TCP 拨号到 TLS 会话结束保留原始 socket，停止时用它打断网络线程。 */
     private var transportSocket: Socket? = null
     private val outLock = Any()
@@ -149,43 +139,41 @@ class RelayClient(
         var attempts = 0
         while (running) {
             connectionSerial++
-            try {
+            val failure = try {
                 reportConnecting(if (attempts == 0) "连接中…" else "重连中(第${attempts}次)…")
-                connectAndServe()
-                attempts = 0 // 正常退出（stop）时归零
-            } catch (changed: CertChangedException) {
-                // 证书换代不是死局：停下等用户在界面上选择「重新信任」（PLAN-025）
-                Log.w(TAG, "cert changed: ${changed.message}")
-                listener.onCertChanged()
-                running = false
-            } catch (fatal: FatalProtocolError) {
-                Log.w(TAG, "fatal: ${fatal.message}")
-                listener.onFatal(fatal.message ?: "协议错误")
-                running = false
-            } catch (_: TargetOfflineException) {
-                if (!running) break
-                waitingForMac = true
-                listener.onState("等待 Mac 上线…")
+                connectOne()
+                null
             } catch (e: Exception) {
-                if (!running) break
-                waitingForMac = false
-                Log.w(TAG, "connection lost", e)
-                val why = describeError(e)
-                listener.onState(if (attempts == 0) "连接失败: $why" else "重连失败($attempts): $why")
+                e
             } finally {
-                val wasPeerOnline = peerOnline
+                if (peerOnline) attempts = 0
                 closeQuietly()
-                peerOnline = false
-                if (wasPeerOnline) {
-                    attempts = 0
-                    listener.onPeerOffline()
+            }
+            if (!running || failure == null) break
+            when (failure) {
+                is CertChangedException -> {
+                    Log.w(TAG, "cert changed: ${failure.message}")
+                    listener.onCertChanged()
+                    break
+                }
+                is FatalProtocolError -> {
+                    Log.w(TAG, "fatal: ${failure.message}")
+                    listener.onFatal(failure.message ?: "协议错误")
+                    break
+                }
+                is TargetOfflineException -> {
+                    waitingForMac = true
+                    listener.onState(State.WAIT_PEER, "等待 Mac 上线…")
+                }
+                else -> {
+                    waitingForMac = false
+                    Log.w(TAG, "connection lost", failure)
+                    val why = describeError(failure)
+                    val text = if (attempts == 0) "连接失败：$why" else "重连失败($attempts)：$why"
+                    listener.onState(if (autoReconnect) State.CONNECTING else State.DISCONNECTED, text)
                 }
             }
-            if (!running) break
-            if (!autoReconnect) {
-                listener.onState("已断开")
-                break
-            }
+            if (!running || !autoReconnect) break
             attempts++
             val maxDelay = if (waitingForMac) macBackoffMaxMs else backoffMaxMs
             val delay = minOf(1000L shl minOf(attempts - 1, 5), maxDelay)
@@ -196,11 +184,11 @@ class RelayClient(
                 break
             }
         }
-        listener.onState("已停止")
+        stop()
     }
 
     private fun reportConnecting(text: String) {
-        if (!waitingForMac) listener.onState(text)
+        if (!waitingForMac) listener.onState(State.CONNECTING, text)
     }
 
     fun stop() {
@@ -259,10 +247,6 @@ class RelayClient(
         }
     }
 
-    private fun connectAndServe() {
-        connectOne()
-    }
-
     private fun connectOne() {
         val (sock, standardVerified) = openTlsConnection()
         if (!standardVerified && (trusted[serverKey()] ?: "").isEmpty()) {
@@ -309,14 +293,15 @@ class RelayClient(
             }
             frameAuthErr -> {
                 val reason = String(payload, Charsets.UTF_8)
-                if (retryOfflineTarget && reason == "invalid-target") throw TargetOfflineException()
+                if (target.isNotEmpty() && reason == "invalid-target") throw TargetOfflineException()
                 throw FatalProtocolError(reasonText(reason))
             }
             else -> throw FatalProtocolError("认证应答异常 type=0x%02x".format(type))
         }
 
-        authed = true
-        reportConnecting(if (peerName.isBlank()) "已连接服务器" else "已连接 · $peerName")
+        if (!waitingForMac) {
+            listener.onState(State.AUTHENTICATED, if (peerName.isBlank()) "已连接服务器" else "已连接 · $peerName")
+        }
         peerOnline = false
         sock.soTimeout = readTimeoutMs
 
@@ -513,21 +498,17 @@ class RelayClient(
     private class TargetOfflineException : IOException()
 
     private fun handlePeerState(payload: ByteArray) {
-        if (payload.isEmpty()) return
+        if (target.isEmpty() || payload.isEmpty()) return
         when (payload[0].toInt()) {
             peerOnlineByte -> {
                 waitingForMac = false
                 peerOnline = true
                 // 桥接建立 ≠ 正在推流：未按住 PTT 前不出声，文案避免误导
-                listener.onState(if (peerName.isBlank()) "已就绪" else "已就绪 · $peerName")
-                listener.onPeerOnline()
+                listener.onState(State.READY, if (peerName.isBlank()) "已就绪" else "已就绪 · $peerName")
             }
             peerOfflineByte -> {
                 // 中继已解除旧桥接。Mac 再上线时，需要用新连接认证并建桥。
-                if (retryOfflineTarget) throw TargetOfflineException()
-                peerOnline = false
-                listener.onState("等待 Mac 上线…")
-                listener.onPeerOffline()
+                throw TargetOfflineException()
             }
         }
     }
@@ -605,7 +586,6 @@ class RelayClient(
             raw = transportSocket
             transportSocket = null
         }
-        authed = false
         peerOnline = false
         try {
             tls?.close()

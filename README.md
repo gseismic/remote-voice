@@ -8,7 +8,7 @@ Mac 麦克风硬件损坏的替代方案：**Android 手机采音 → 中继服�
 
 ## 使用前
 
-1. 在 Mac 打开 `/Applications/Remote Voice.app`，确认状态为「等待手机」并保持应用运行。已配对的 Android 会在 Mac 上线后自动连接。若关闭了 Android 设置里的「断线自动重连」，请在 Mac 上线后点按状态栏重试。
+1. 在 Mac 打开 `/Applications/Remote Voice.app`，确认状态为「等待手机」并保持应用运行。已配对的 Android 会在 Mac 上线后自动连接。若关闭了 Android 设置里的「断线自动重连」，请在 Mac 或网络恢复后点按状态栏重试。
 2. Fn 联动默认开启。手机按住说话时 Mac 按下 Fn，松开时释放。先在 macOS「系统设置 → 隐私与安全性 → 辅助功能」允许 **Remote Voice**。macOS 12 在「系统偏好设置 → 安全性与隐私 → 隐私 → 辅助功能」。更新 App 后，已勾选但 Fn 仍未生效时，用「－」移除旧条目，再用「＋」添加并勾选 `/Applications/Remote Voice.app`。
 3. 在 Android 看到「已就绪」后按住说话。需要调整 Fn 联动方式时，打开 Mac 的「连接设置」。使用虚拟麦克风的应用应将输入选为 BlackHole 2ch。
 

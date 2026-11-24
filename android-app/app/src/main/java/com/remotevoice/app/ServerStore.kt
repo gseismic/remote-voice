@@ -135,8 +135,7 @@ class ServerStore(context: Context) {
 
     fun target(serverId: String): String = prefs.getString("${KEY_BRIDGE_TARGET}_$serverId", "").orEmpty()
 
-    fun selectMac(deviceId: String) {
-        val serverId = activeId()
+    fun selectMac(deviceId: String, serverId: String = activeId()) {
         if (serverId.isNotEmpty()) {
             prefs.edit().putString("${KEY_BRIDGE_TARGET}_$serverId", deviceId).apply()
         }
@@ -148,8 +147,8 @@ class ServerStore(context: Context) {
         prefs.edit().putString("${KEY_MAC_CACHE}_$serverId", arr.toString()).apply()
     }
 
-    fun macCache(): List<MacInfo> {
-        val arr = JSONArray(prefs.getString("${KEY_MAC_CACHE}_${activeId()}", "[]") ?: "[]")
+    fun macCache(serverId: String = activeId()): List<MacInfo> {
+        val arr = JSONArray(prefs.getString("${KEY_MAC_CACHE}_$serverId", "[]") ?: "[]")
         val out = ArrayList<MacInfo>(arr.length())
         for (i in 0 until arr.length()) {
             runCatching { out.add(MacInfo.fromJson(arr.getJSONObject(i))) }
