@@ -20,10 +20,12 @@ import android.util.Log
 
 /** UI 状态枚举：Activity 据此着色并控制按钮可用性。 */
 enum class StatusState {
-    STOPPED, CONNECTING, WAIT_PEER, STREAMING, DISCONNECTED, ERROR;
+    STOPPED, CONNECTING, WAIT_PEER, WAIT_BUSY, STREAMING, DISCONNECTED, ERROR;
+
+    val waitingForTarget: Boolean get() = this == WAIT_PEER || this == WAIT_BUSY
 
     fun needsRetry(autoReconnect: Boolean): Boolean =
-        this == DISCONNECTED || this == ERROR || (this == WAIT_PEER && !autoReconnect)
+        this == DISCONNECTED || this == ERROR || (waitingForTarget && !autoReconnect)
 }
 
 /**
@@ -318,6 +320,7 @@ class AudioStreamService : Service() {
                     val status = when (state) {
                         RelayClient.State.CONNECTING, RelayClient.State.AUTHENTICATED -> StatusState.CONNECTING
                         RelayClient.State.WAIT_PEER -> StatusState.WAIT_PEER
+                        RelayClient.State.WAIT_BUSY -> StatusState.WAIT_BUSY
                         RelayClient.State.READY -> StatusState.STREAMING
                         RelayClient.State.DISCONNECTED -> StatusState.DISCONNECTED
                     }
@@ -400,7 +403,7 @@ class AudioStreamService : Service() {
     private fun removeMissingWaitingBridges(macs: List<MacInfo>) {
         val registeredIds = macs.mapTo(HashSet()) { it.deviceId }
         val missing = synchronized(bridges) {
-            bridges.filter { (id, bridge) -> bridge.state == StatusState.WAIT_PEER && id !in registeredIds }.keys
+            bridges.filter { (id, bridge) -> bridge.state.waitingForTarget && id !in registeredIds }.keys
         }
         missing.forEach(::removeBridge)
         if (activeDeviceId.isNotEmpty() && activeDeviceId !in registeredIds && activeBridge() == null) {

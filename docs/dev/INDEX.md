@@ -316,3 +316,6 @@
 
 - **2026-11-24 19:37** | [PLAN-040-macos-fn-accessibility-request.md](PLAN-040-macos-fn-accessibility-request.md) → [PLAN-040-macos-fn-accessibility-request-OUTCOME.md](PLAN-040-macos-fn-accessibility-request-OUTCOME.md)
   摘要：Mac 首页新增请求授权和定位当前安装包的入口。目标 Mac 安装新版并保存匹配签名的授权。Redmi 实测触发正式版 Fn 按下和松开，间隔 3.398 秒。
+
+- **2026-11-24 19:43** | [PLAN-041-android-busy-reconnect.md](PLAN-041-android-busy-reconnect.md) → [PLAN-041-android-busy-reconnect-OUTCOME.md](PLAN-041-android-busy-reconnect-OUTCOME.md)
+  摘要：Android 将暂时占用视为等待状态，旧桥释放后自动或单次手动恢复，其他桥接可继续传音。最新 APK 已安装到 Redmi 并更新下载。公网复测 Mac 重启自动接回、Fn 按下与松开、BlackHole 电平和真机扫码往返均通过。

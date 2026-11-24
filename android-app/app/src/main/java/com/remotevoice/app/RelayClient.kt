@@ -31,7 +31,7 @@ internal const val MAC_START_HINT = "请在 Mac 上打开 Remote Voice，并确�
  * 类型: AUTH=0x01 AUTH_OK=0x02 AUTH_ERR=0x03 AUDIO=0x04 PING=0x05 PONG=0x06 PEER_STATE=0x07
  *
  * 手机携带服务器密码的 SHA-256 十六进制值，建桥时 AUTH_OK 附目标 Mac 设备名。
- * 启用自动重连时，等待离线的目标 Mac 恢复后重新建桥。
+ * 启用自动重连时，等待目标 Mac 上线或结束占用后重新建桥。
  *
  * TLS 策略（PLAN-025）：AUTO 先标准 CA+主机名验证，仅证书验证失败回落 TOFU
  * （服务器换真证书自动升级）；STRICT 只标准验证；TOFU 只 TOFU。
@@ -49,7 +49,7 @@ class RelayClient(
     /** 断线自动重连开关（false 时网络错误即停，等用户手动重试）。 */
     private val autoReconnect: Boolean = true,
 ) {
-    enum class State { CONNECTING, AUTHENTICATED, WAIT_PEER, READY, DISCONNECTED }
+    enum class State { CONNECTING, AUTHENTICATED, WAIT_PEER, WAIT_BUSY, READY, DISCONNECTED }
 
     interface Listener {
         /** 连接状态及可显示的说明。 */
@@ -98,7 +98,7 @@ class RelayClient(
     private val backoffMaxMs = 30_000L     // 重连退避封顶
     private val macBackoffMaxMs = 5_000L  // 等待目标 Mac 时保持较短的恢复时间
 
-    private var waitingForMac = false    // 仅网络线程访问
+    private var waitingForMac: State? = null    // 仅网络线程访问
 
     // 在构造后即进入可运行态，避免 stop() 先于网络线程启动时被 runForever() 覆盖。
     @Volatile private var running = true
@@ -161,12 +161,12 @@ class RelayClient(
                     listener.onFatal(failure.message ?: "协议错误")
                     break
                 }
-                is TargetOfflineException -> {
-                    waitingForMac = true
-                    listener.onState(State.WAIT_PEER, "等待 Mac 上线…")
+                is TargetUnavailableException -> {
+                    waitingForMac = failure.state
+                    listener.onState(failure.state, failure.detail)
                 }
                 else -> {
-                    waitingForMac = false
+                    waitingForMac = null
                     Log.w(TAG, "connection lost", failure)
                     val why = describeError(failure)
                     val text = if (attempts == 0) "连接失败：$why" else "重连失败($attempts)：$why"
@@ -175,7 +175,7 @@ class RelayClient(
             }
             if (!running || !autoReconnect) break
             attempts++
-            val maxDelay = if (waitingForMac) macBackoffMaxMs else backoffMaxMs
+            val maxDelay = if (waitingForMac == State.WAIT_PEER) macBackoffMaxMs else backoffMaxMs
             val delay = minOf(1000L shl minOf(attempts - 1, 5), maxDelay)
             reportConnecting("断开，${delay / 1000}秒后重连(第$attempts 次)")
             try {
@@ -188,7 +188,7 @@ class RelayClient(
     }
 
     private fun reportConnecting(text: String) {
-        if (!waitingForMac) listener.onState(State.CONNECTING, text)
+        if (waitingForMac == null) listener.onState(State.CONNECTING, text)
     }
 
     fun stop() {
@@ -293,13 +293,18 @@ class RelayClient(
             }
             frameAuthErr -> {
                 val reason = String(payload, Charsets.UTF_8)
-                if (target.isNotEmpty() && reason == "invalid-target") throw TargetOfflineException()
+                if (target.isNotEmpty()) {
+                    when (reason) {
+                        "invalid-target" -> throw targetOffline()
+                        "peer-busy" -> throw TargetUnavailableException(State.WAIT_BUSY, reasonText(reason))
+                    }
+                }
                 throw FatalProtocolError(reasonText(reason))
             }
             else -> throw FatalProtocolError("认证应答异常 type=0x%02x".format(type))
         }
 
-        if (!waitingForMac) {
+        if (waitingForMac == null) {
             listener.onState(State.AUTHENTICATED, if (peerName.isBlank()) "已连接服务器" else "已连接 · $peerName")
         }
         peerOnline = false
@@ -495,20 +500,22 @@ class RelayClient(
     private class CertChangedException :
         IOException(FingerprintTrustManager.CERT_CHANGED_MESSAGE)
 
-    private class TargetOfflineException : IOException()
+    private class TargetUnavailableException(val state: State, val detail: String) : IOException(detail)
+
+    private fun targetOffline() = TargetUnavailableException(State.WAIT_PEER, "等待 Mac 上线…")
 
     private fun handlePeerState(payload: ByteArray) {
         if (target.isEmpty() || payload.isEmpty()) return
         when (payload[0].toInt()) {
             peerOnlineByte -> {
-                waitingForMac = false
+                waitingForMac = null
                 peerOnline = true
                 // 桥接建立 ≠ 正在推流：未按住 PTT 前不出声，文案避免误导
                 listener.onState(State.READY, if (peerName.isBlank()) "已就绪" else "已就绪 · $peerName")
             }
             peerOfflineByte -> {
                 // 中继已解除旧桥接。Mac 再上线时，需要用新连接认证并建桥。
-                throw TargetOfflineException()
+                throw targetOffline()
             }
         }
     }

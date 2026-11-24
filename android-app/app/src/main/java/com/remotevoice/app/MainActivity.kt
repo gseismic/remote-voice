@@ -187,6 +187,8 @@ class MainActivity : Activity() {
             macName(st.activeMacId)
         }
         val waitingForMac = st.state == StatusState.WAIT_PEER && st.activeMacId.isNotEmpty()
+        val waitingForBusyMac = st.state == StatusState.WAIT_BUSY
+        val autoReconnect = autoReconnectEnabled()
         val disconnected = st.state == StatusState.DISCONNECTED ||
             (st.serverNeedsRetry && st.state != StatusState.STREAMING)
         val noMacOnline = st.serverOnline && st.macDirectoryLoaded && st.activeMacId.isEmpty() &&
@@ -198,8 +200,12 @@ class MainActivity : Activity() {
             st.state == StatusState.ERROR ->
                 Triple("连接失败 · 点按重试", serverDisplay(), COLOR_RED)
             disconnected -> Triple("连接已断开 · 点按重试", serverDisplay(), COLOR_AMBER)
+            waitingForBusyMac -> Triple(
+                if (autoReconnect) "等待 Mac 空闲 · 自动重连" else "等待 Mac 空闲 · 点按重试",
+                serverDisplay(), COLOR_AMBER,
+            )
             waitingForMac -> Triple(
-                if (autoReconnectEnabled()) "等待 Mac 上线 · 自动重连" else "等待 Mac 上线 · 点按重试",
+                if (autoReconnect) "等待 Mac 上线 · 自动重连" else "等待 Mac 上线 · 点按重试",
                 serverDisplay(), COLOR_AMBER,
             )
             st.state == StatusState.STREAMING -> {
@@ -228,13 +234,16 @@ class MainActivity : Activity() {
         led.background.mutate().setTint(color)
 
         // 中央态区
-        val showBig = unpaired || disconnected || st.state == StatusState.STOPPED || st.state == StatusState.WAIT_PEER ||
+        val showBig = unpaired || disconnected || st.state == StatusState.STOPPED || st.state.waitingForTarget ||
             (st.serverOnline && st.activeMacId.isEmpty())
         bigState.visibility = if (showBig) View.VISIBLE else View.GONE
         if (showBig) {
             if (unpaired) {
                 bigT1.text = "扫码连接 Mac"
                 bigT2.text = "打开 Mac 端 Remote Voice，在首页点「二维码」"
+            } else if (waitingForBusyMac) {
+                bigT1.text = "等待 $name 空闲"
+                bigT2.text = if (autoReconnect) "原会话结束后会自动连接" else "原会话结束后点按状态栏重试"
             } else if (waitingForMac || noMacOnline) {
                 bigT1.text = getString(R.string.big_wait_t1)
                 bigT2.text = MAC_START_HINT
