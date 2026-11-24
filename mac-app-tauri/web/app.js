@@ -543,6 +543,10 @@ function bindEvents() {
   $("save-settings").addEventListener("click", saveSettings);
   $("release-fn").addEventListener("click", () =>
     runAction(() => call("release_fn"), "已放下 Fn"));
+  $("request-fn-accessibility").addEventListener("click", () =>
+    runAction(() => call("request_fn_accessibility"), null));
+  $("open-fn-accessibility").addEventListener("click", () =>
+    runAction(() => call("open_fn_accessibility"), null));
   $("clear-trust").addEventListener("click", () => {
     if (!window.confirm("清除当前服务器信任后，下一次连接会重新接受服务器证书。继续吗？")) {
       return;

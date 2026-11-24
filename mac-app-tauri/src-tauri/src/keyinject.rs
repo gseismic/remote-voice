@@ -38,6 +38,12 @@ pub fn accessibility_trusted() -> bool {
     }
 }
 
+/// 从当前应用向 macOS 发起辅助功能授权请求。
+pub fn request_accessibility() {
+    #[cfg(target_os = "macos")]
+    ffi::request_accessibility();
+}
+
 /// 线程安全注入器。hold 模式串行更新按键状态与事件，double 模式在线程中完成敲击。
 pub struct KeyInjector {
     #[cfg(any(target_os = "macos", test))]
@@ -94,6 +100,10 @@ impl KeyInjector {
 
 #[cfg(target_os = "macos")]
 mod ffi {
+    use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+    use core_foundation::string::{CFString, CFStringRef};
     use std::os::raw::c_void;
 
     /// kVK_Function（Fn/Globe 键的虚拟键码）
@@ -116,6 +126,7 @@ mod ffi {
 
     pub type TapCallback = extern "C" fn(*mut c_void, u32, *mut c_void, *mut c_void) -> *mut c_void;
 
+    #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
         fn CGEventCreateKeyboardEvent(
             source: *mut c_void,
@@ -147,12 +158,23 @@ mod ffi {
         fn CFRunLoopGetCurrent() -> *mut c_void;
         fn CFRunLoopRun();
         fn CFRelease(cf: *mut c_void);
-        fn AXIsProcessTrusted() -> bool;
+        fn AXIsProcessTrusted() -> u8;
+        fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> u8;
+        static kAXTrustedCheckOptionPrompt: CFStringRef;
         static kCFRunLoopCommonModes: *mut c_void;
     }
 
     pub fn accessibility_trusted() -> bool {
-        unsafe { AXIsProcessTrusted() }
+        unsafe { AXIsProcessTrusted() != 0 }
+    }
+
+    pub fn request_accessibility() {
+        unsafe {
+            let key = CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt);
+            let options = CFDictionary::from_CFType_pairs(&[(key, CFBoolean::true_value())]);
+            // 系统异步处理授权，界面在获得焦点后重新检查。
+            AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef());
+        }
     }
 
     pub fn post_fn_key(key_down: bool) -> Result<(), String> {
@@ -184,7 +206,7 @@ mod ffi {
     }
 
     /// 监听物理 Fn 键抬起事件；tap 在专用线程的 CFRunLoop 上运行。
-    /// 返回 Err 表示 tap 创建失败（多为辅助功能权限未授予）。
+    /// 返回 Err 表示实体 Fn 监听不可用。
     pub fn spawn_fn_keyup_listener(
         injector: std::sync::Arc<crate::keyinject::KeyInjector>,
     ) -> Result<(), String> {
@@ -204,10 +226,7 @@ mod ffi {
                 drop(std::sync::Arc::from_raw(
                     user_info as *const crate::keyinject::KeyInjector,
                 ));
-                return Err(
-                    "无法监听物理 Fn 键（需要辅助功能权限）：手动解除请用界面的「放下 Fn」按钮"
-                        .to_string(),
-                );
+                return Err("无法监听实体 Fn 松开，仍可使用界面上的「放下 Fn」按钮".to_string());
             }
             let source = CFMachPortCreateRunLoopSource(std::ptr::null_mut(), tap, 0);
             if source.is_null() {
@@ -285,8 +304,7 @@ mod ffi {
 
 #[cfg(target_os = "macos")]
 impl KeyInjector {
-    const PERMISSION_HINT: &str =
-        "模拟 Fn 需要辅助功能权限：系统设置 → 隐私与安全性 → 辅助功能，勾选本应用后重试";
+    const PERMISSION_HINT: &str = "模拟 Fn 需要 macOS 辅助功能权限，请在首页点「请求授权」";
 
     fn set_talking_impl(&self, on: bool, mode: InjectMode) -> Result<(), String> {
         match mode {

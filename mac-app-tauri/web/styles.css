@@ -191,6 +191,8 @@ input:focus, select:focus { border-color: rgba(242, 182, 77, 0.75); }
 .toggle-field input:checked + .toggle-track { background: rgba(242, 182, 77, 0.75); }
 .toggle-field input:checked + .toggle-track::after { transform: translateX(12px); background: #171a17; }
 .audio-alert { margin: 13px 0 0; padding: 9px 10px; border-left: 2px solid var(--coral); color: var(--coral); background: rgba(245, 143, 120, 0.08); font-size: 11px; line-height: 1.45; }
+#fn-accessibility-hint p { margin: 0; }
+.fn-permission-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 
 /* 装饰电平表 + 音频状态行（真振幅数据源为开放问题，当前为装饰动画） */
 .meter { height: 34px; margin-top: 14px; display: flex; align-items: flex-end; gap: 3px; }

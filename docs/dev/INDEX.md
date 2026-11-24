@@ -313,3 +313,6 @@
 
 - **2026-11-24 16:53** | [PLAN-039-macos-fn-minimal-test.md](PLAN-039-macos-fn-minimal-test.md) → [PLAN-039-macos-fn-minimal-test-OUTCOME.md](PLAN-039-macos-fn-minimal-test-OUTCOME.md)
   摘要：`labs/fn/` 保存可独立运行的 Fn 发送器、接收器和说明。目标 Mac 前台窗口收到完整事件对，间隔 2.002 秒。Redmi 音频到达 BlackHole，正式应用 Fn 仍待当前安装包的辅助功能授权。
+
+- **2026-11-24 19:37** | [PLAN-040-macos-fn-accessibility-request.md](PLAN-040-macos-fn-accessibility-request.md) → [PLAN-040-macos-fn-accessibility-request-OUTCOME.md](PLAN-040-macos-fn-accessibility-request-OUTCOME.md)
+  摘要：Mac 首页新增请求授权和定位当前安装包的入口。目标 Mac 安装新版并保存匹配签名的授权。Redmi 实测触发正式版 Fn 按下和松开，间隔 3.398 秒。

@@ -2,7 +2,9 @@ use crate::audio::{self, AudioSink, CpalSink, SinkStats};
 use crate::config::{self, AppConfig};
 use crate::history::{self, HistoryEntry};
 use crate::identity;
-use crate::keyinject::{accessibility_trusted, install_fn_release_tap, InjectMode, KeyInjector};
+use crate::keyinject::{
+    accessibility_trusted, install_fn_release_tap, request_accessibility, InjectMode, KeyInjector,
+};
 use crate::relay::{Registration, RelayClient, RelayClientOptions, RelayEvent};
 use crate::secrets;
 use crate::storage::SystemKeychain;
@@ -841,6 +843,46 @@ pub fn release_fn(state: State<'_, Arc<AppController>>) -> Result<AppState, Comm
 }
 
 #[tauri::command]
+pub fn request_fn_accessibility(
+    state: State<'_, Arc<AppController>>,
+) -> Result<AppState, CommandError> {
+    request_accessibility();
+    state.refresh_fn_accessibility();
+    state.snapshot()
+}
+
+#[tauri::command]
+pub fn open_fn_accessibility(
+    state: State<'_, Arc<AppController>>,
+) -> Result<AppState, CommandError> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::{ffi::OsStr, process::Command};
+
+        // 以当前进程路径为准，Finder 可直接定位这个安装包。
+        if let Ok(executable) = std::env::current_exe() {
+            if let Some(bundle) = executable
+                .ancestors()
+                .find(|path| path.extension() == Some(OsStr::new("app")))
+            {
+                let _ = Command::new("/usr/bin/open").arg("-R").arg(bundle).status();
+            }
+        }
+        let settings = Command::new("/usr/bin/open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .status();
+        if !settings.is_ok_and(|status| status.success()) {
+            return Err(CommandError::new(
+                "fn-accessibility-settings",
+                "无法打开系统设置，请手动在「隐私与安全性」中打开「辅助功能」",
+            ));
+        }
+    }
+    state.refresh_fn_accessibility();
+    state.snapshot()
+}
+
+#[tauri::command]
 pub fn clear_history(state: State<'_, Arc<AppController>>) -> Result<AppState, CommandError> {
     state.clear_history()
 }
@@ -892,7 +934,9 @@ pub fn run_tauri() {
             list_audio_devices,
             clear_history,
             clear_server_trust,
-            release_fn
+            release_fn,
+            request_fn_accessibility,
+            open_fn_accessibility
         ])
         .run(tauri::generate_context!());
     if let Err(error) = run {
