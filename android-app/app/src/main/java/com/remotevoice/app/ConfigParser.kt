@@ -77,7 +77,7 @@ object ConfigParser {
             // 值按 + 为空格的表单规则还原，再 URL 解码；解码失败视为无效配对码
             val rawValue = if (eq < 0) "" else pair.substring(eq + 1)
             val decoded = try {
-                java.net.URLDecoder.decode(rawValue.replace("+", "%20"), Charsets.UTF_8)
+                java.net.URLDecoder.decode(rawValue.replace("+", "%20"), Charsets.UTF_8.name())
             } catch (_: IllegalArgumentException) {
                 return null
             }

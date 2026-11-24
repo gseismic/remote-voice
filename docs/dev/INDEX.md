@@ -304,3 +304,6 @@
 
 - **2026-11-24 14:55** | [PLAN-036-android-bridge-recovery.md](PLAN-036-android-bridge-recovery.md) → [PLAN-036-android-bridge-recovery-OUTCOME.md](PLAN-036-android-bridge-recovery-OUTCOME.md)
   摘要：Android 根据新目录清除失效目标，过滤忙碌设备并隔离单桥接失败。关闭自动重连后的网络和 Mac 断开均可一次点按重试，其他桥接保留。模拟器与 Go 中继验证四条修复及晚启动和 PTT 回归，APK 已更新下载入口。
+
+- **2026-11-24 15:58** | [PLAN-037-public-android-device-validation.md](PLAN-037-public-android-device-validation.md) → [PLAN-037-public-android-device-validation-OUTCOME.md](PLAN-037-public-android-device-validation-OUTCOME.md)
+  摘要：修复 Android 旧版本配对解码 API 和可选相机声明。最终 APK 在 Android 35 模拟器通过公网点选与粘贴配对，已更新下载。真机 USB 传输与 Mac 当前签名的辅助功能授权仍待现场验收。
